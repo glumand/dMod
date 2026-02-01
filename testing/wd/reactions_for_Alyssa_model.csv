@@ -1,6 +1,0 @@
-"Description","Rate","Stim","R","A","pA"
-"","0",1,,,
-"stim act R","k_act_R_bas + k_act_R * Stim",,1,,
-"deact R","k_deact_R * R",,-1,,
-"phos A","k1 * A * R / (Km + A)",,,-1,1
-"dephos pA","k2 * pA / (Km2 + pA)",,,1,-1

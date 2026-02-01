@@ -164,7 +164,7 @@ Pexpl <- function(trafo, parameters=NULL, attach.input = FALSE, condition = NULL
   jac.symb <- attr(PEval, "jacobian.symb")
   
   # Get individually fixed inner pararmeters
-  fixedIndiv <- rownames(jac.symb)[which(apply(jac.symb, 1, function(r) all(r == "0")))]
+  fixedInner <- rownames(jac.symb)[which(apply(jac.symb, 1, function(r) all(r == "0")))]
   
   # ---------------------------------------------------------------------------
   # Define returned parameter transformation function
@@ -172,13 +172,12 @@ Pexpl <- function(trafo, parameters=NULL, attach.input = FALSE, condition = NULL
   p2p <- function(pars, fixed = NULL, deriv = TRUE) {
     
     pars <- c(
-      as.parvec(pars[setdiff(names(pars), c(names(fixed), fixedIndiv))]),
-      if (length(fixedIndiv)) as.parvec(pars[fixedIndiv], deriv = FALSE),
+      as.parvec(pars[setdiff(names(pars), names(fixed))]),
       if (!is.null(fixed))   as.parvec(fixed, deriv = FALSE)
     )
-    fixedNames <- unique(c(names(fixed), fixedIndiv))
     # Evaluate inner parameters
     pinnerVal <- fun(NULL, pars, attach.input = attach.input)[1,]
+    nonFixedInner <- setdiff(names(pinnerVal), fixedInner)
     
     if (any(is.nan(pinnerVal))) {
       stop(
@@ -193,12 +192,18 @@ Pexpl <- function(trafo, parameters=NULL, attach.input = FALSE, condition = NULL
     # ----------------- Apply chain rules -----------------
     myderiv <- NULL
     if (deriv && !is.null(jac)) {
-      Jac <- jac(NULL, pars, fixedNames)[1,,]
-      Jac <- Jac[setdiff(rownames(Jac), fixedNames), , drop = FALSE]
-      dP  <- attr(pars, "deriv")
-      myderiv <- if (is.null(dP)) Jac else Jac %*% dP[colnames(Jac), , drop = FALSE]
+      Jac <- aperm(jac(NULL, pars, names(fixed)), c(2, 3, 1))[nonFixedInner, , , drop = FALSE]
+      dim(Jac) <- dim(Jac)[1:2]
+      dP <- attr(pars, "deriv")
+      if (!is.null(dP)) {
+        myderiv <- Jac %*% dP[colnames(Jac), , drop = FALSE]
+        dimnames(myderiv) <- list(nonFixedInner, colnames(dP))
+      } else {
+        myderiv <- Jac
+        dimnames(myderiv) <- list(nonFixedInner, names(pars))
+      }
+      
     }
-    
     
     # -------------------------------------------------------------------------
     # Assemble result and return
@@ -211,7 +216,7 @@ Pexpl <- function(trafo, parameters=NULL, attach.input = FALSE, condition = NULL
                             deriv  = if (deriv)  NULL else FALSE))
     }
     
-    attr(pinner, "fixedNames") <- fixedNames
+    attr(pinner, "fixedInner") <- fixedInner
     pinner
   }
   

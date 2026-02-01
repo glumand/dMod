@@ -48,4 +48,4 @@ times <- seq(0,10,len = 100)
 prd <- x*p
 debugonce(x)
 out <- prd(times, pars)
-getDerivs(out)
+getDerivs(out) %>% plot()

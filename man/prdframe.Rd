@@ -4,16 +4,16 @@
 \alias{prdframe}
 \title{Prediction frame}
 \usage{
-prdframe(prediction = NULL, deriv = NULL, deriv2 = NULL, parameters = NULL)
+prdframe(prediction = NULL, deriv = NULL, parameters = NULL)
 }
 \arguments{
 \item{prediction}{Numeric matrix of model predictions.}
 
 \item{deriv}{3D numeric array of first-order sensitivities with respect to outer parameters.}
 
-\item{deriv2}{4D numeric array of second-order sensitivities with respect to outer parameters.}
-
 \item{parameters}{Named numeric vector of the inner parameters used for the prediction.}
+
+\item{deriv2}{4D numeric array of second-order sensitivities with respect to outer parameters.}
 }
 \value{
 An object of class \code{"prdframe"} (inheriting from \code{"matrix"}) with attached arrays of

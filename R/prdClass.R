@@ -337,18 +337,13 @@ plot.prdframe <- function(x, data = NULL, ..., scales = "free", facet = c("wrap"
 print.prdframe <- function(x, ...) {
   
   derivs <- ifelse(!is.null(attr(x, "deriv")), yes = "yes", no = "no")
-  derivs2 <- ifelse(!is.null(attr(x, "deriv2")), yes = "yes", no = "no")
-  sensitivities <- ifelse(!is.null(attr(x, "sensitivities")), yes = "yes", no = "no")
-  sensitivities2 <- ifelse(!is.null(attr(x, "sensitivities2")), yes = "yes", no = "no")
   
   attr(x, "deriv") <- NULL
-  attr(x, "sensitivities") <- NULL
   attr(x, "parameters") <- NULL
   
   print(unclass(x))
   cat("\n")
   cat("The prediction contains derivatives: ", derivs, "\n", sep = "")
-  cat("The prediction contains second order derivatives: ", derivs2, "\n", sep = "")
   
 }
 
