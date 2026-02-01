@@ -88,17 +88,8 @@ P <- function(trafo = NULL, parameters=NULL, condition = NULL, attach.input = FA
 #' expressions. Each element of `trafo` defines one component of
 #' \eqn{p_{\text{inner}}}.
 #'
-#' Derivatives are obtained by **symbolic differentiation**:
-#'
-#' - The **Jacobian**
-#'   \deqn{J_{ij} = \dfrac{\partial p_{\text{inner},i}}{\partial p_{\text{outer},j}}}
-#'   is computed from the transformation expressions.
-#'
-#' - If `deriv2 = TRUE`, the **Hessian tensor**
-#'   \deqn{H_{ijk} = \dfrac{\partial^2 p_{\text{inner},i}}{\partial p_{\text{outer},j}\,\partial p_{\text{outer},k}}}
-#'   is also precomputed symbolically.
-#'
-#' These derivatives are attached as attributes `"deriv"` and `"deriv2"`
+#' The **Jacobian** is obtained by **symbolic differentiation**.
+#' It is attached as attribute `"deriv"`
 #' to the resulting function output and automatically composed when
 #' transformations are combined via the [parfn] interface.
 #'
@@ -124,11 +115,11 @@ P <- function(trafo = NULL, parameters=NULL, condition = NULL, attach.input = FA
 #'
 #' @importFrom CppODE funCpp
 #' @export
-Pexpl <- function(trafo, parameters=NULL, attach.input = FALSE, condition = NULL, compile = FALSE, modelname = NULL, verbose = FALSE) {
+Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NULL, 
+                  compile = FALSE, modelname = NULL, verbose = FALSE) {
   
-  # ---------------------------------------------------------------------------
+  
   # Determine parameter sets
-  # ---------------------------------------------------------------------------
   if (is.null(parameters)) {
     parameters <- getSymbols(trafo)
   } else {
@@ -142,9 +133,7 @@ Pexpl <- function(trafo, parameters=NULL, attach.input = FALSE, condition = NULL
   if (is.null(modelname)) modelname <- "expl_parfn"
   if (!is.null(condition)) modelname <- paste(modelname, sanitizeConditions(condition), sep = "_")
   
-  # ---------------------------------------------------------------------------
   # Build compiled (or fallback R) evaluator for transformation
-  # ---------------------------------------------------------------------------
   PEval <- suppressWarnings(
     CppODE::funCpp(
       unclass(trafo),
@@ -163,20 +152,25 @@ Pexpl <- function(trafo, parameters=NULL, attach.input = FALSE, condition = NULL
   jac <- PEval$jac
   jac.symb <- attr(PEval, "jacobian.symb")
   
-  # Get individually fixed inner pararmeters
+  # Get individually fixed inner parameters (rows with all zeros in Jacobian)
   fixedInner <- rownames(jac.symb)[which(apply(jac.symb, 1, function(r) all(r == "0")))]
   
-  # ---------------------------------------------------------------------------
   # Define returned parameter transformation function
-  # ---------------------------------------------------------------------------
   p2p <- function(pars, fixed = NULL, deriv = TRUE) {
     
+    # Collect fixedInner from incoming pars
+    fixedInner_in <- attr(pars, "fixedInner")
+    allFixedNames <- unique(c(names(fixed), fixedInner_in))
+    
+    # Prepare pars: combine with fixed, strip deriv from fixed
     pars <- c(
-      as.parvec(pars[setdiff(names(pars), names(fixed))]),
-      if (!is.null(fixed))   as.parvec(fixed, deriv = FALSE)
+      as.parvec(pars[setdiff(names(pars), allFixedNames)]),
+      if (length(allFixedNames) > 0) as.parvec(pars[intersect(names(pars), allFixedNames)], deriv = FALSE),
+      if (!is.null(fixed)) as.parvec(fixed, deriv = FALSE)
     )
+    
     # Evaluate inner parameters
-    pinnerVal <- fun(NULL, pars, attach.input = attach.input)[1,]
+    pinnerVal <- fun(NULL, pars, attach.input = attach.input)[1, ]
     nonFixedInner <- setdiff(names(pinnerVal), fixedInner)
     
     if (any(is.nan(pinnerVal))) {
@@ -189,10 +183,10 @@ Pexpl <- function(trafo, parameters=NULL, attach.input = FALSE, condition = NULL
       )
     }
     
-    # ----------------- Apply chain rules -----------------
+    # Apply chain rule for derivatives
     myderiv <- NULL
-    if (deriv && !is.null(jac)) {
-      Jac <- aperm(jac(NULL, pars, names(fixed)), c(2, 3, 1))[nonFixedInner, , , drop = FALSE]
+    if (deriv && !is.null(jac) && length(nonFixedInner) > 0) {
+      Jac <- aperm(jac(NULL, pars, allFixedNames), c(2, 3, 1))[nonFixedInner, , , drop = FALSE]
       dim(Jac) <- dim(Jac)[1:2]
       dP <- attr(pars, "deriv")
       if (!is.null(dP)) {
@@ -200,32 +194,29 @@ Pexpl <- function(trafo, parameters=NULL, attach.input = FALSE, condition = NULL
         dimnames(myderiv) <- list(nonFixedInner, colnames(dP))
       } else {
         myderiv <- Jac
-        dimnames(myderiv) <- list(nonFixedInner, names(pars))
+        dimnames(myderiv) <- list(nonFixedInner, colnames(Jac))
       }
-      
     }
     
-    # -------------------------------------------------------------------------
-    # Assemble result and return
-    # -------------------------------------------------------------------------
-    pinner <- as.parvec(pinnerVal, deriv  = if (deriv)  myderiv  else FALSE)
+    # Assemble result
+    pinner <- as.parvec(pinnerVal, deriv = if (deriv) myderiv else FALSE)
     
     if (attach.input && !all(names(pars) %in% names(pinnerVal))) {
       pinner <- c(pinner,
                   as.parvec(pars[setdiff(names(pars), names(pinnerVal))],
-                            deriv  = if (deriv)  NULL else FALSE))
+                            deriv = if (deriv) NULL else FALSE))
     }
     
-    attr(pinner, "fixedInner") <- fixedInner
+    # Propagate fixedInner as attribute
+    attr(pinner, "fixedInner") <- unique(c(fixedInner, allFixedNames))
+    
     pinner
   }
   
-  # ---------------------------------------------------------------------------
-  # Attach metadata
-  # ---------------------------------------------------------------------------
   attr(p2p, "equations")  <- as.eqnvec(trafo)
   attr(p2p, "parameters") <- parameters
   attr(p2p, "modelname")  <- modelname
+  
   parfn(p2p, parameters, condition)
 }
 
