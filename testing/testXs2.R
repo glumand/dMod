@@ -16,31 +16,38 @@ library(dplyr)
 eqns <- eqnvec(x = "-k*x")
 
 events <- eventlist() %>% 
-  addEvent(var = "x", time = NA, value = "xcrit", root = "x-xcrit", method = "add")
+  addEvent(var = "x", time = "te", value = 1, root = NA, method = "add")
 
-x <- odemodel(eqns, events = events, modelname = "test_Xs", compile = F, solver = "boost", useDenseOutput = F) %>% Xs()
+x.ds <- odemodel(eqns, events = events, modelname = "test_Xs_ds", compile = F, solver = "deSolve") %>% Xs()
+x.bs <- odemodel(eqns, events = events, modelname = "test_Xs_bs", compile = F, solver = "boost") %>% Xs()
 
 p <- eqnvec() %>% 
-  define("x~x", x = getParameters(x)) %>% 
+  define("x~x", x = getParameters(x.ds)) %>% 
   insert("x~1") %>% P(compile = F)
 
 getEquations(p)
 
-compile(x,p, verbose = T)
+compile(x.ds, x.bs ,p, verbose = F)
 # loadDLL(x,p)
 
 getParameters(p)
 
-pars <- c(k=1, xcrit = 0.25)
+pars <- c(k=1, te = 1)
 # debugonce(p)
 p(pars)
 p(pars) %>% getDerivs()
 
 
 times <- seq(0,10,len = 300)
-prd <- x*p
-# 
-out <- prd(times,pars)
-out %>% plot()
+prd.ds <- x.ds*p
+prd.bs <- x.bs*p
+out.ds <- prd.ds(times,pars)
+out.bs <- prd.bs(times,pars)
+out.ds %>% plot()
+out.bs %>% plot()
 # debugonce(getDerivs)
-out %>% getDerivs() %>% plot()
+
+derivs <- (getDerivs(out.bs))[[1]] 
+
+out.ds %>% getDerivs() %>% plot()
+out.bs %>% getDerivs() %>% plot()

@@ -149,20 +149,16 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
   
   fun <- PEval$func
   jac <- PEval$jac
-  jac.symb <- attr(PEval, "jacobian.symb")
   
-  # Structurally constant inner parameters (all-zero rows in Jacobian)
-  constNames <- rownames(jac.symb)[which(apply(jac.symb, 1, function(r) all(r == "0")))]
   
   # Define returned parameter transformation function
   p2p <- function(pars, fixed = NULL, deriv = TRUE) {
     
-    # Prepare pars: combine with fixed, strip deriv from fixed
+    # Prepare pars
     p <- c(pars, fixed)
     
     # Evaluate inner parameters
-    pinnerVal <- fun(NULL, p, attach.input = attach.input)[1, ]
-    nonConstNames <- setdiff(names(pinnerVal), constNames)
+    pinnerVal <- fun(NULL, p, attach.input = attach.input, fixed = names(fixed))[1, ]
     
     if (any(is.nan(pinnerVal))) {
       stop(
@@ -176,19 +172,18 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
     
     # Apply chain rule for derivatives
     Jac <- NULL
-    if (deriv && !is.null(jac) && length(nonConstNames) > 0) {
-      Jac <- aperm(jac(NULL, p, names(fixed)), c(2, 3, 1))[nonConstNames, names(pars), , drop = FALSE]
-      dim(Jac) <- dim(Jac)[1:2]
-      dimnames(Jac) <- list(nonConstNames, names(pars))
+    if (deriv && !is.null(jac)) {
+      Jac <- as.matrix(jac(NULL, p, attach.input = attach.input, fixed = names(fixed))[1,,])
+      dimnames(Jac) <- list(names(pinnerVal), names(pars))
       dP <- attr(pars, "deriv")
       if (!is.null(dP)) {
         Jac <- Jac %*% dP[colnames(Jac), , drop = FALSE]
-        dimnames(Jac) <- list(nonConstNames, colnames(dP))
+        dimnames(Jac) <- list(names(pinnerVal), colnames(dP))
       }
     }
     
     # Assemble result
-    pinner <- as.parvec(pinnerVal, deriv = if (deriv) Jac else FALSE)
+    pinner <- as.parvec(pinnerVal, deriv = if (deriv) Jac[rowSums(Jac != 0) > 0, , drop = FALSE] else FALSE)
     
     if (attach.input && !all(names(pars) %in% names(pinnerVal))) {
       pinner <- c(pinner,

@@ -20,36 +20,38 @@ r <- eqnvec() %>%
   addReaction("A", "pA", "k1 * A * R / (Km + A)",  "phos A") %>%
   addReaction("pA", "A", "k2 * pA / (Km2 + pA)",   "dephos pA")
 
-mysteadies <- steadyStates(r, forcings = "Stim")
+mysteadies <- steadyStates(r, forcings = "Stim", resolve = T)
 
 trafo <- eqnvec() %>% 
   define("x~x", x = getParameters(r)) %>% 
   define("Stim~1") %>% 
   insert("x~y", x = names(mysteadies), y = mysteadies) %>% 
-  insert("A~y", y = "totA/(1+k1*k_act_R_bas/(k2*k_deact_R))") %>% 
   insert("x~10^x", x = .currentSymbols[!grepl("Stim", .currentSymbols)]) %>%
   {.}
 
 
-p <- P(trafo, compile = T, condition = "cond1")
+p <- P(trafo, compile = T, condition = "cond1", attach.input = T)
 
-outerpars <- getParameters(p)
+outerpars <- setdiff(getParameters(p), "k2")
 pars <- structure(rep(-1, length(outerpars)), names = outerpars)
+fixed = c(k2 = -1)
 
-debugonce(p)
-
-# Chech if fixed works!
-
-pout <- p(pars)
+pout <- p(pars, fixed = fixed)
 pout
-p(pars) %>% getDerivs()
+p(pars, fixed = fixed) %>% getDerivs()
 
+x.boost <- odemodel(r, modelname = "test_boost", solver = "boost", compile = F) %>% Xs()
+x.dS <- odemodel(r, modelname = "test_dS", compile = F) %>% Xs()
+compile(x.boost, x.dS, cores = 4)
+times <- seq(0,100,len = 300)
 
-x <- odemodel(r, modelname = "test") %>% Xs()
+prd.bs <- x.boost*p
+prd.dS <- x.dS*p
+# debugonce(x.dS)
+out.bs <- prd.bs(times, pars, fixed = fixed)
+out.dS <- prd.dS(times, pars, fixed = fixed)
 
-times <- seq(0,10,len = 100)
-
-prd <- x*p
-debugonce(x)
-out <- prd(times, pars)
-getDerivs(out) %>% plot()
+out.bs %>% plot()
+out.dS %>% plot()
+getDerivs(out.bs) %>% plot()
+getDerivs(out.dS) %>% plot()

@@ -7,7 +7,6 @@
 \alias{getDerivs.prdlist}
 \alias{getDerivs.list}
 \alias{getDerivs.objlist}
-\alias{getDerivs2.objlist}
 \title{Extract the first derivatives of an object}
 \usage{
 getDerivs(x, ...)
@@ -21,8 +20,6 @@ getDerivs(x, ...)
 \method{getDerivs}{list}(x, ...)
 
 \method{getDerivs}{objlist}(x, ...)
-
-\method{getDerivs2}{objlist}(x, ...)
 }
 \arguments{
 \item{x}{Object from which the first derivatives should be extracted.
@@ -57,7 +54,4 @@ d1 <- getDerivs(myprdframe)
 getDerivs(myparvec)
 }
 
-}
-\seealso{
-\link{getDerivs2} for second-order derivatives.
 }

@@ -29,7 +29,6 @@ Xs <- function(odemodel, ...) {
 }
 
 #' @export
-#' @importFrom data.table CJ
 Xs.deSolve <- function(odemodel, forcings = NULL, events = NULL, names = NULL, condition = NULL, 
                        optionsOde = list(method = "lsoda"), optionsSens = list(method = "lsodes"), 
                        fcontrol = NULL) {
@@ -65,14 +64,8 @@ Xs.deSolve <- function(odemodel, forcings = NULL, events = NULL, names = NULL, c
   yiniSens <- as.numeric(senssplit.1 == senssplit.2)
   names(yiniSens) <- sensvar
   
-  # Names for deriv output
-  sensGrid <- data.table::CJ(variables, senspars, sort = FALSE)
-  
   # Only a subset of all variables/forcings is returned
   if (is.null(names)) names <- c(variables, forcnames)
-  
-  # Update sensNames when names are set
-  sensGrid <- sensGrid[sensGrid[[1]] %in% names]
   
   # Controls to be modified from outside
   controls <- list(
@@ -81,16 +74,12 @@ Xs.deSolve <- function(odemodel, forcings = NULL, events = NULL, names = NULL, c
     names = names,
     optionsOde = optionsOde,
     optionsSens = optionsSens,
-    fcontrol = myfcontrol,
-    sensGrid = sensGrid
+    fcontrol = myfcontrol
   )
   
   P2X <- function(times, pars, fixed = NULL, deriv = TRUE) {
     
-    # Get fixedInner from pars attribute, combine with user-fixed
-    fixedInner_in <- attr(pars, "fixedInner")
-    allFixedNames <- unique(c(names(fixed), fixedInner_in))
-    
+    fixedNames <- names(fixed)
     params <- c(unclass(pars), unclass(fixed))
     yini <- params[variables]
     mypars <- params[parameters]
@@ -101,7 +90,6 @@ Xs.deSolve <- function(odemodel, forcings = NULL, events = NULL, names = NULL, c
     optionsSens <- controls$optionsSens
     fcontrol <- controls$fcontrol
     names <- controls$names
-    sensGrid <- controls$sensGrid
     
     # Add event time points (required by integrator) 
     times <- sort(union(unique(events$time), times))
@@ -110,10 +98,7 @@ Xs.deSolve <- function(odemodel, forcings = NULL, events = NULL, names = NULL, c
     if (!is.null(events)) events <- events[order(events$time), ]
     
     # Filter sensGrid by fixed parameters
-    if (length(allFixedNames) > 0)
-      sensGrid <- sensGrid[!sensGrid[[2]] %in% allFixedNames]
-    
-    senspars <- unique(sensGrid[[2]])
+    if (length(fixedNames)) senspars <- setdiff(senspars, fixedNames)
     
     myderivs <- NULL
     if (!deriv) {
@@ -137,26 +122,28 @@ Xs.deSolve <- function(odemodel, forcings = NULL, events = NULL, names = NULL, c
       out <- submatrix(outSens, cols = c("time", names))
       
       # Apply parameter transformation to the derivatives
-      sensNames <- paste(sensGrid[[1]], sensGrid[[2]], sep = ".")
-      sensLong <- matrix(outSens[, sensNames], ncol = length(senspars))
+      sensNames <- as.vector(outer(names, senspars, paste, sep = "."))
+      sensLong <- matrix(outSens[,sensNames], nrow = dim(outSens)[1]*length(variables))
+      
       dP <- attr(pars, "deriv")
       if (!is.null(dP)) {
+        dPsub <- dP[senspars, , drop = FALSE]
         myderivs <- array(
-          data = sensLong %*% dP[senspars, , drop = FALSE],
-          dim = c(nrow(outSens), length(svariables), ncol(dP)),
-          dimnames = list(NULL, svariables, colnames(dP))
+          data = sensLong %*% dPsub,
+          dim = c(nrow(outSens), length(names), ncol(dPsub)),
+          dimnames = list(NULL, names, colnames(dPsub))
         )
       } else {
         myderivs <- array(
           data = sensLong,
-          dim = c(nrow(outSens), length(svariables), length(senspars)),
-          dimnames = list(NULL, svariables, senspars)
+          dim = c(nrow(outSens), length(names), length(senspars)),
+          dimnames = list(NULL, names, senspars)
         )
       }
       
     }
     
-    prdframe(out, deriv = myderivs, parameters = pars, fixedInner = allFixedNames)
+    prdframe(out, deriv = myderivs, parameters = c(pars, fixed))
     
   }
   
@@ -238,14 +225,11 @@ Xs.boost <- function(odemodel, forcings = NULL, events = NULL, names = NULL, con
   
   P2X <- function(times, pars, fixed = NULL, deriv = TRUE) {
     
-    # Get fixedInner from pars attribute, combine with user-fixed
-    fixedInner_in <- attr(pars, "fixedInner")
-    allFixedNames <- unique(c(names(fixed), fixedInner_in))
-    
+    fixedNames <- names(fixed)
     params <- c(unclass(pars), unclass(fixed))
     forcings <- controls$forcings
     names <- controls$names
-    sensnames <- setdiff(controls$sensnames, allFixedNames)
+    sensnames <- setdiff(controls$sensnames, fixedNames)
     nvars <- length(names)
     nsens <- length(sensnames)
     optionsOde <- controls$optionsOde 
@@ -269,7 +253,7 @@ Xs.boost <- function(odemodel, forcings = NULL, events = NULL, names = NULL, con
       
       # Evaluate model with sensitivities
       outSens <- suppressWarnings(
-        CppODE::solveODE(extended, times, params, NULL, NULL, allFixedNames, forcings, 
+        CppODE::solveODE(extended, times, params, NULL, NULL, fixedNames, forcings, 
                          optionsSens$atol, optionsSens$rtol,
                          optionsSens$maxattemps, optionsSens$maxsteps, optionsSens$hini,
                          optionsSens$roottol, optionsSens$maxroot)
@@ -295,7 +279,7 @@ Xs.boost <- function(odemodel, forcings = NULL, events = NULL, names = NULL, con
       
     }
     
-    prdframe(out, deriv = dX, parameters = params, fixedInner = allFixedNames)
+    prdframe(out, deriv = dX, parameters = c(pars,fixed))
     
   }
   
