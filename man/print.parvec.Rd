@@ -4,12 +4,12 @@
 \alias{print.parvec}
 \title{Pretty printing for parvec objects}
 \usage{
-\method{print}{parvec}(x)
+\method{print}{parvec}(x, ...)
 }
 \arguments{
 \item{x}{parvec object}
 }
 \description{
 Prints a parameter vector along with information about
-its attached derivative matrices (\code{deriv}, \code{deriv2}).
+its attached derivatives and information about constant parameters in 'fixed'.
 }

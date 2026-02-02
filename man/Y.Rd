@@ -11,8 +11,6 @@ Y(
   parameters = NULL,
   condition = NULL,
   attach.input = TRUE,
-  deriv = TRUE,
-  deriv2 = FALSE,
   compile = FALSE,
   modelname = NULL,
   verbose = FALSE
@@ -40,18 +38,18 @@ string specifying the condition for which the function generates predictions.}
 \item{attach.input}{Logical, indicating whether the original model input should be
 included in the output.}
 
-\item{deriv}{Logical, if \code{TRUE}, the function evaluates first-order derivatives
-of observables with respect to parameters.}
-
-\item{deriv2}{Logical, if \code{TRUE}, the function also evaluates second derivatives
-of observables with respect to parameters.}
-
 \item{compile}{Logical, if \code{TRUE}, the function is compiled (see \link[CppODE:funCpp]{CppODE::funCpp}).}
 
 \item{modelname}{Character, used if \code{compile = TRUE}, specifies a fixed filename
 for the generated C file.}
 
 \item{verbose}{Logical, print compiler output to the R console.}
+
+\item{deriv}{Logical, if \code{TRUE}, the function evaluates first-order derivatives
+of observables with respect to parameters.}
+
+\item{deriv2}{Logical, if \code{TRUE}, the function also evaluates second derivatives
+of observables with respect to parameters.}
 }
 \value{
 An object of class \link{obsfn}, i.e. a function

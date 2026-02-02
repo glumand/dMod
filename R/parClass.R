@@ -562,29 +562,20 @@ unique.parframe <- function(x, incomparables = FALSE, tol = 1, ...) {
 
 #' Dispatch as.parvec.
 #'
-#' Creates an object of class `parvec`, optionally carrying first- and
-#' second-order derivatives. No automatic identity or zero derivatives are
-#' created.
+#' Creates an object of class \code{"parvec"} from a numeric vector, optionally
+#' carrying first-order derivatives. Existing derivatives may be inherited,
+#' replaced, or dropped; no derivatives are created automatically.
+#'
+#' Parameters missing from the derivative matrix are treated as fixed and
+#' stored in the \code{"fixed"} attribute.
 #'
 #' @param x Numeric vector of parameter values.
-#' @param names Optional character vector of parameter names.
-#' @param deriv Optional Jacobian matrix (first derivatives), `FALSE` to drop,
-#'   or `NULL` to inherit if present attribute 'deriv'.
-#' @param deriv2 Optional Hessian array (second derivatives), `FALSE` to drop,
-#'   or `NULL` to inherit if present atribute 'deriv2'.
+#' @param names Optional parameter names.
+#' @param deriv Optional Jacobian matrix, \code{NULL} to inherit or
+#'   \code{FALSE} to drop.
+#' @param ... Further arguments passed to methods.
 #'
-#' @return
-#' A numeric vector of class `"parvec"` with optional attributes:
-#' \itemize{
-#'   \item `attr(x, "deriv")`  — Jacobian matrix, or `NULL`
-#'   \item `attr(x, "deriv2")` — Hessian tensor, or `NULL`
-#' }
-#'
-#' @details
-#' If `deriv = FALSE` or `deriv2 = FALSE`, the respective attributes are
-#' forcibly removed, even if they exist in the input `x`.
-#' If `deriv = NULL` or `deriv2 = NULL`, existing attributes are inherited
-#' (if present), but nothing is created automatically.
+#' @return A numeric vector of class \code{c("parvec", "numeric")}.
 #'
 #' @export
 #' @rdname parvec
@@ -602,7 +593,7 @@ as.parvec.numeric <- function(x, names = NULL, deriv = NULL, ...) {
   if (is.null(names)) names(p) <- names(x) else names(p) <- names
   pnames <- names(p)
   
-  # --- First derivatives ---
+  # --- Derivative Information ---
   if (isFALSE(deriv)) {
     full_deriv <- NULL
   } else if (is.matrix(deriv)) {
@@ -611,8 +602,17 @@ as.parvec.numeric <- function(x, names = NULL, deriv = NULL, ...) {
     full_deriv <- attr(x, "deriv")
   }
   
+  # --- Infer fixed from missing deriv rows ---
+  fixed <- NULL
+  if (!is.null(full_deriv)) {
+    if (nrow(full_deriv) < length(pnames)) {
+      fixed <- setdiff(pnames, rownames(full_deriv))
+    }
+  }
+  
   # --- Assemble object ---
-  attr(p, "deriv")  <- full_deriv
+  attr(p, "deriv") <- full_deriv
+  attr(p, "fixed") <- fixed
   class(p) <- c("parvec", "numeric")
   p
 }
@@ -620,115 +620,95 @@ as.parvec.numeric <- function(x, names = NULL, deriv = NULL, ...) {
 
 
 
-
 #' Pretty printing for parvec objects
 #'
 #' Prints a parameter vector along with information about
-#' its attached derivative matrices (`deriv`, `deriv2`).
+#' its attached derivatives and information about constant parameters in 'fixed'.
 #'
 #' @param x parvec object
 #' @export
-print.parvec <- function(x) {
+print.parvec <- function(x, ...) {
   
-  # --- Extract parameter values ---
   par <- unclass(x)
   nms <- names(par)
   n_width <- max(nchar(nms))
   
-  # --- Header ---
   cat("Parameter vector:\n")
-  
-  # --- Print parameters neatly aligned ---
   for (i in seq_along(par)) {
     val <- formatC(par[i], digits = 6, format = "g")
     if (par[i] >= 0) val <- paste0(" ", val)
     cat(sprintf("  %s : %s\n", format(nms[i], width = n_width, justify = "right"), val))
   }
   
-  # --- Print derivative info ---
-  deriv  <- attr(x, "deriv")
+  deriv <- attr(x, "deriv")
+  fixed <- attr(x, "fixed")
   
   cat("\nAttributes:\n")
   if (!is.null(deriv)) {
     d <- dim(deriv)
-    cat(sprintf("  deriv  : %d × %d matrix\n", d[1], d[2]))
+    cat(sprintf("  deriv : %d x %d matrix\n", d[1], d[2]))
   } else {
-    cat("  deriv  : <none>\n")
+    cat("  deriv : <none>\n")
+  }
+  
+  if (!is.null(fixed) && length(fixed) > 0) {
+    cat(sprintf("  fixed : %s\n", paste(fixed, collapse = ", ")))
+  } else {
+    cat("  fixed : <none>\n")
   }
   
   invisible(x)
 }
 
 
-#' Subset method for parvec objects
+#' Subset a parameter vector
 #'
-#' Safely subsets a \code{parvec} object while keeping its Jacobian
-#' (\code{deriv}) consistent with the subset.
-#'
-#' If parameters included in the subset are not present in the Jacobian,
-#' their derivatives are assumed to be zero and corresponding zero rows
-#' are added automatically.
+#' Subsets a \code{parvec} object and propagates first-order derivatives.
+#' Derivatives are restricted to retained parameters and optionally dropped
+#' if they become identically zero.
 #'
 #' @param x A \code{parvec} object.
-#' @param ... Parameter indices or names to subset.
-#' @param drop Logical; if \code{TRUE}, drop Jacobian columns that are
-#'   identically zero after subsetting.
+#' @param ... Subsetting indices.
+#' @param drop Logical; drop derivative columns that are zero after subsetting.
 #'
-#' @return A \code{parvec} object with updated numeric values and
-#'   a consistent Jacobian attribute.
+#' @return A subsetted \code{parvec} object.
 #'
 #' @export
 "[.parvec" <- function(x, ..., drop = FALSE) {
-  # --- Extract numeric parameter values ---
+  
   out <- unclass(x)[...]
   nms <- names(out)
   
-  # --- Subset Jacobian (first derivatives) ---
   deriv <- attr(x, "deriv")
   if (!is.null(deriv)) {
     available <- intersect(nms, rownames(deriv))
-    missing <- setdiff(nms, rownames(deriv))
-    
-    # Subset existing rows
-    deriv_sub <- deriv[available, , drop = FALSE]
-    
-    # Add zero rows for missing parameters
-    if (length(missing)) {
-      add_rows <- matrix(0, nrow = length(missing), ncol = ncol(deriv),
-                         dimnames = list(missing, colnames(deriv)))
-      deriv_sub <- rbind(deriv_sub, add_rows)
+    if (length(available) > 0) {
+      deriv <- deriv[available, , drop = FALSE]
+    } else {
+      deriv <- NULL
     }
-    
-    # Reorder rows to match the subset order
-    deriv <- deriv_sub[nms, , drop = FALSE]
   }
   
-  # --- Drop zero columns and matching Hessian dimensions if requested ---
   if (drop && !is.null(deriv)) {
     keep.cols <- colSums(abs(deriv)) > 0
     deriv <- deriv[, keep.cols, drop = FALSE]
   }
   
-  # --- Rebuild the parvec object ---
   as.parvec(out, deriv = deriv)
 }
 
-
-#' Concatenate parvec objects
+#' Concatenate parameter vectors
 #'
-#' Combines multiple \code{parvec} objects into one by concatenating their
-#' numeric values. If first-derivative information (\code{deriv}) is present,
-#' the resulting Jacobian is constructed as a block-diagonal matrix.
+#' Concatenates multiple \code{parvec} objects, combining values and
+#' propagating first-order derivatives when present.
 #'
-#' If some inputs do not carry derivative information, their corresponding
-#' Jacobian blocks are assumed to be zero.
+#' @param ... \code{parvec} objects (or \code{NULL}, which are ignored).
 #'
-#' @param ... \code{parvec} objects to concatenate.
-#'
-#' @return A combined \code{parvec} object with a consistent Jacobian attribute.
+#' @return A combined \code{parvec} object.
 #'
 #' @export
 c.parvec <- function(...) {
+  
   p <- Filter(Negate(is.null), list(...))
   stopifnot(length(p) > 0)
   
@@ -737,24 +717,17 @@ c.parvec <- function(...) {
   if (anyDuplicated(nms)) stop("Duplicated parameter names.")
   
   d <- lapply(p, attr, "deriv")
-  i <- which(!vapply(d, is.null, TRUE))
-  if (!length(i)) return(as.parvec(vals, names = nms))
+  has_deriv <- !vapply(d, is.null, TRUE)
   
-  B <- colnames(d[[i[1]]]); nb <- length(B); nt <- length(vals)
-  J <- matrix(0, nt, nb, dimnames = list(nms, B))
-  
-  r <- 1L
-  for (k in seq_along(p)) {
-    nk <- length(p[[k]])
-    if (!is.null(d[[k]])) J[r:(r+nk-1), ] <- d[[k]]
-    r <- r + nk
+  if (!any(has_deriv)) {
+    return(as.parvec(vals, names = nms))
   }
+  
+  J_list <- Filter(Negate(is.null), d)
+  J <- do.call(rbind, J_list)
   
   as.parvec(vals, names = nms, deriv = J)
 }
-
-
-
 
 
 ## Methods for the class parfn--------------------------------------------------

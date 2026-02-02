@@ -2,22 +2,17 @@
 % Please edit documentation in R/parClass.R
 \name{c.parvec}
 \alias{c.parvec}
-\title{Concatenate parvec objects}
+\title{Concatenate parameter vectors}
 \usage{
 \method{c}{parvec}(...)
 }
 \arguments{
-\item{...}{\code{parvec} objects to concatenate.}
+\item{...}{\code{parvec} objects (or \code{NULL}, which are ignored).}
 }
 \value{
-A combined \code{parvec} object with a consistent Jacobian attribute.
+A combined \code{parvec} object.
 }
 \description{
-Combines multiple \code{parvec} objects into one by concatenating their
-numeric values. If first-derivative information (\code{deriv}) is present,
-the resulting Jacobian is constructed as a block-diagonal matrix.
-}
-\details{
-If some inputs do not carry derivative information, their corresponding
-Jacobian blocks are assumed to be zero.
+Concatenates multiple \code{parvec} objects, combining values and
+propagating first-order derivatives when present.
 }

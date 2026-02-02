@@ -36,8 +36,12 @@ p <- P(trafo, compile = T, condition = "cond1")
 outerpars <- getParameters(p)
 pars <- structure(rep(-1, length(outerpars)), names = outerpars)
 
-# debugonce(p)
+debugonce(p)
+
+# Chech if fixed works!
+
 pout <- p(pars)
+pout
 p(pars) %>% getDerivs()
 
 

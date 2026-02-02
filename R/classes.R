@@ -250,29 +250,28 @@ eqnlist <- function(smatrix = NULL, states = colnames(smatrix), rates = NULL, vo
 
 #' Parameter transformation function
 #'
-#' @description
 #' Generate functions that transform one parameter vector into another
 #' by means of a transformation, pushing forward the jacobian matrix
 #' of the original parameter.
-#' Usually, this function is called internally, e.g. by [P].
+#' Usually, this function is called internally, e.g. by \link{P}.
 #' However, you can use it to add your own specialized parameter
 #' transformations to the general framework.
+#' @param p2p a transformation function for one condition, i.e. a function
+#' \code{p2p(p, fixed, deriv)} which translates a parameter vector \code{p}
+#' and a vector of fixed parameter values \code{fixed} into a new parameter
+#' vector. If \code{deriv = TRUE}, the function should return an attribute
+#' \code{deriv} with the Jacobian matrix of the parameter transformation.
+#' @param parameters character vector, the parameters accepted by the function
+#' @param condition character, the condition for which the transformation is defined
+#' @return object of class \code{parfn}, i.e. a function \code{p(..., fixed, deriv,
+#'  conditions, env)}. The argument \code{pars} should be passed via the \code{...}
+#'  argument.
 #'
-#' @param p2p Function of the form `p2p(pars, fixed, deriv, deriv2, env)`
-#'   that returns transformed parameters with attached derivative attributes.
-#' @param parameters Character vector of parameter names accepted by `p2p`.
-#' @param condition Character string identifying the experimental condition.
-#' @param env Optional environment used for evaluation (passed to `p2p`).
-#'
-#' @return
-#' A function of class `"parfn"`:
-#' `p(..., fixed, deriv, deriv2, conditions, env)` returning a [parvec]
-#' with optional attributes:
-#' \itemize{
-#'   \item `attr(x, "deriv")` — Jacobian matrix
-#' }
-#'
-#' @seealso [Pexpl()], [Pimpl()], [sumfn()]
+#' Contains attributes "mappings", a list of \code{p2p}
+#' functions, "parameters", the union of parameters acceted by the mappings and
+#' "conditions", the total set of conditions.
+#' @seealso \link{sumfn}, \link{P}
+#' @example inst/examples/prediction.R
 #' @export
 parfn <- function(p2p, parameters = NULL, condition = NULL) {
   
@@ -280,43 +279,44 @@ parfn <- function(p2p, parameters = NULL, condition = NULL) {
   mappings <- list()
   mappings[[1]] <- p2p
   names(mappings) <- condition
-  fixedIndiv <- attr(p2p, "fixedIndiv")
   
   outfn <- function(..., fixed = NULL, deriv = TRUE, conditions = condition, env = NULL) {
+    
     
     arglist <- list(...)
     arglist <- arglist[match.fnargs(arglist, "pars")]
     pars <- arglist[[1]]
     
     overlap <- test_conditions(conditions, condition)
+    # NULL if at least one argument is NULL
+    # character(0) if no overlap
+    # character if overlap
     
     if (is.null(overlap)) conditions <- union(condition, conditions)
     
-    if (is.null(overlap) || length(overlap) > 0) {
-      if (!is.null(env))
-        result <- p2p(pars = pars, fixed = fixed, deriv = deriv, env = env)
-      else
-        result <- p2p(pars = pars, fixed = fixed, deriv = deriv)
-    } else {
+    if (is.null(overlap) | length(overlap) > 0)
+      result <- p2p(pars = pars, fixed = fixed, deriv = deriv)
+    else
       result <- NULL
-    }
     
+    # Initialize output object
     length.out <- max(c(1, length(conditions)))
     outlist <- structure(vector("list", length.out), names = conditions)
     
     if (is.null(condition)) available <- 1:length.out else available <- match(condition, conditions)
     for (C in available[!is.na(available)]) outlist[[C]] <- result
     
-    outlist
+    
+    return(outlist)
+    
   }
-  
-  attr(outfn, "mappings")   <- mappings
+  attr(outfn, "mappings") <- mappings
   attr(outfn, "parameters") <- parameters
   attr(outfn, "conditions") <- condition
-  attr(outfn, "fixedIndiv") <- fixedIndiv
   class(outfn) <- c("parfn", "fn")
-  
   return(outfn)
+  
+  
 }
 
 

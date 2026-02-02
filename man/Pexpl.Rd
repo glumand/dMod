@@ -46,17 +46,8 @@ where \eqn{\mathrm{parfn}} is a vector-valued function composed from symbolic
 expressions. Each element of \code{trafo} defines one component of
 \eqn{p_{\text{inner}}}.
 
-Derivatives are obtained by \strong{symbolic differentiation}:
-\itemize{
-\item The \strong{Jacobian}
-\deqn{J_{ij} = \dfrac{\partial p_{\text{inner},i}}{\partial p_{\text{outer},j}}}
-is computed from the transformation expressions.
-\item If \code{deriv2 = TRUE}, the \strong{Hessian tensor}
-\deqn{H_{ijk} = \dfrac{\partial^2 p_{\text{inner},i}}{\partial p_{\text{outer},j}\,\partial p_{\text{outer},k}}}
-is also precomputed symbolically.
-}
-
-These derivatives are attached as attributes \code{"deriv"} and \code{"deriv2"}
+The \strong{Jacobian} is obtained by \strong{symbolic differentiation}.
+It is attached as attribute \code{"deriv"}
 to the resulting function output and automatically composed when
 transformations are combined via the \link{parfn} interface.
 }

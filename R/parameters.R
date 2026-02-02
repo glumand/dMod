@@ -118,7 +118,6 @@ P <- function(trafo = NULL, parameters=NULL, condition = NULL, attach.input = FA
 Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NULL, 
                   compile = FALSE, modelname = NULL, verbose = FALSE) {
   
-  
   # Determine parameter sets
   if (is.null(parameters)) {
     parameters <- getSymbols(trafo)
@@ -152,26 +151,18 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
   jac <- PEval$jac
   jac.symb <- attr(PEval, "jacobian.symb")
   
-  # Get individually fixed inner parameters (rows with all zeros in Jacobian)
-  fixedInner <- rownames(jac.symb)[which(apply(jac.symb, 1, function(r) all(r == "0")))]
+  # Structurally constant inner parameters (all-zero rows in Jacobian)
+  constNames <- rownames(jac.symb)[which(apply(jac.symb, 1, function(r) all(r == "0")))]
   
   # Define returned parameter transformation function
   p2p <- function(pars, fixed = NULL, deriv = TRUE) {
     
-    # Collect fixedInner from incoming pars
-    fixedInner_in <- attr(pars, "fixedInner")
-    allFixedNames <- unique(c(names(fixed), fixedInner_in))
-    
     # Prepare pars: combine with fixed, strip deriv from fixed
-    pars <- c(
-      as.parvec(pars[setdiff(names(pars), allFixedNames)]),
-      if (length(allFixedNames) > 0) as.parvec(pars[intersect(names(pars), allFixedNames)], deriv = FALSE),
-      if (!is.null(fixed)) as.parvec(fixed, deriv = FALSE)
-    )
+    p <- c(pars, fixed)
     
     # Evaluate inner parameters
-    pinnerVal <- fun(NULL, pars, attach.input = attach.input)[1, ]
-    nonFixedInner <- setdiff(names(pinnerVal), fixedInner)
+    pinnerVal <- fun(NULL, p, attach.input = attach.input)[1, ]
+    nonConstNames <- setdiff(names(pinnerVal), constNames)
     
     if (any(is.nan(pinnerVal))) {
       stop(
@@ -184,31 +175,26 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
     }
     
     # Apply chain rule for derivatives
-    myderiv <- NULL
-    if (deriv && !is.null(jac) && length(nonFixedInner) > 0) {
-      Jac <- aperm(jac(NULL, pars, allFixedNames), c(2, 3, 1))[nonFixedInner, , , drop = FALSE]
+    Jac <- NULL
+    if (deriv && !is.null(jac) && length(nonConstNames) > 0) {
+      Jac <- aperm(jac(NULL, p, names(fixed)), c(2, 3, 1))[nonConstNames, names(pars), , drop = FALSE]
       dim(Jac) <- dim(Jac)[1:2]
+      dimnames(Jac) <- list(nonConstNames, names(pars))
       dP <- attr(pars, "deriv")
       if (!is.null(dP)) {
-        myderiv <- Jac %*% dP[colnames(Jac), , drop = FALSE]
-        dimnames(myderiv) <- list(nonFixedInner, colnames(dP))
-      } else {
-        myderiv <- Jac
-        dimnames(myderiv) <- list(nonFixedInner, colnames(Jac))
+        Jac <- Jac %*% dP[colnames(Jac), , drop = FALSE]
+        dimnames(Jac) <- list(nonConstNames, colnames(dP))
       }
     }
     
     # Assemble result
-    pinner <- as.parvec(pinnerVal, deriv = if (deriv) myderiv else FALSE)
+    pinner <- as.parvec(pinnerVal, deriv = if (deriv) Jac else FALSE)
     
     if (attach.input && !all(names(pars) %in% names(pinnerVal))) {
       pinner <- c(pinner,
                   as.parvec(pars[setdiff(names(pars), names(pinnerVal))],
                             deriv = if (deriv) NULL else FALSE))
     }
-    
-    # Propagate fixedInner as attribute
-    attr(pinner, "fixedInner") <- unique(c(fixedInner, allFixedNames))
     
     pinner
   }

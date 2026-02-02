@@ -7,22 +7,24 @@
 parfn(p2p, parameters = NULL, condition = NULL)
 }
 \arguments{
-\item{p2p}{Function of the form \code{p2p(pars, fixed, deriv, deriv2, env)}
-that returns transformed parameters with attached derivative attributes.}
+\item{p2p}{a transformation function for one condition, i.e. a function
+\code{p2p(p, fixed, deriv)} which translates a parameter vector \code{p}
+and a vector of fixed parameter values \code{fixed} into a new parameter
+vector. If \code{deriv = TRUE}, the function should return an attribute
+\code{deriv} with the Jacobian matrix of the parameter transformation.}
 
-\item{parameters}{Character vector of parameter names accepted by \code{p2p}.}
+\item{parameters}{character vector, the parameters accepted by the function}
 
-\item{condition}{Character string identifying the experimental condition.}
-
-\item{env}{Optional environment used for evaluation (passed to \code{p2p}).}
+\item{condition}{character, the condition for which the transformation is defined}
 }
 \value{
-A function of class \code{"parfn"}:
-\code{p(..., fixed, deriv, deriv2, conditions, env)} returning a \link{parvec}
-with optional attributes:
-\itemize{
-\item \code{attr(x, "deriv")} — Jacobian matrix
-}
+object of class \code{parfn}, i.e. a function \code{p(..., fixed, deriv,
+ conditions, env)}. The argument \code{pars} should be passed via the \code{...}
+argument.
+
+Contains attributes "mappings", a list of \code{p2p}
+functions, "parameters", the union of parameters acceted by the mappings and
+"conditions", the total set of conditions.
 }
 \description{
 Generate functions that transform one parameter vector into another
@@ -32,6 +34,46 @@ Usually, this function is called internally, e.g. by \link{P}.
 However, you can use it to add your own specialized parameter
 transformations to the general framework.
 }
+\examples{
+\dontrun{
+  # Define a time grid on which to make a prediction by peace-wise linear function.
+  # Then define a (generic) prediction function based on thid grid.
+  times <- 0:5
+  grid <- data.frame(name = "A", time = times, row.names = paste0("p", times))
+  x <- Xd(grid)
+  
+  # Define an observable and an observation function
+  observables <- eqnvec(Aobs = "s*A")
+  g <- Y(g = observables, f = NULL, states = "A", parameters = "s")
+  
+  # Collect parameters and define an overarching parameter transformation
+  # for two "experimental condtions".
+  dynpars <- attr(x, "parameters")
+  obspars <- attr(g, "parameters")
+  innerpars <- c(dynpars, obspars)
+  
+  trafo <- structure(innerpars, names = innerpars)
+  trafo_C1 <- replaceSymbols(innerpars, paste(innerpars, "C1", sep = "_"), trafo)
+  trafo_C2 <- replaceSymbols(innerpars, paste(innerpars, "C2", sep = "_"), trafo)
+  
+  p <- NULL
+  p <- p + P(trafo = trafo_C1, condition = "C1")
+  p <- p + P(trafo = trafo_C2, condition = "C2")
+  
+  # Collect outer (overarching) parameters and 
+  # initialize with random values
+  outerpars <- attr(p, "parameters")
+  pars <- structure(runif(length(outerpars), 0, 1), names = outerpars)
+  
+  # Predict internal/unobserved states
+  out1 <- (x*p)(times, pars)
+  plot(out1)
+  
+  # Predict observed states in addition to unobserved
+  out2 <- (g*x*p)(times, pars)
+  plot(out2)
+}
+}
 \seealso{
-\code{\link[=Pexpl]{Pexpl()}}, \code{\link[=Pimpl]{Pimpl()}}, \code{\link[=sumfn]{sumfn()}}
+\link{sumfn}, \link{P}
 }

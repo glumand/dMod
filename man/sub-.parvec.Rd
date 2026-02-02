@@ -2,28 +2,22 @@
 % Please edit documentation in R/parClass.R
 \name{[.parvec}
 \alias{[.parvec}
-\title{Subset method for parvec objects}
+\title{Subset a parameter vector}
 \usage{
 \method{[}{parvec}(x, ..., drop = FALSE)
 }
 \arguments{
 \item{x}{A \code{parvec} object.}
 
-\item{...}{Parameter indices or names to subset.}
+\item{...}{Subsetting indices.}
 
-\item{drop}{Logical; if \code{TRUE}, drop Jacobian columns that are
-identically zero after subsetting.}
+\item{drop}{Logical; drop derivative columns that are zero after subsetting.}
 }
 \value{
-A \code{parvec} object with updated numeric values and
-a consistent Jacobian attribute.
+A subsetted \code{parvec} object.
 }
 \description{
-Safely subsets a \code{parvec} object while keeping its Jacobian
-(\code{deriv}) consistent with the subset.
-}
-\details{
-If parameters included in the subset are not present in the Jacobian,
-their derivatives are assumed to be zero and corresponding zero rows
-are added automatically.
+Subsets a \code{parvec} object and propagates first-order derivatives.
+Derivatives are restricted to retained parameters and optionally dropped
+if they become identically zero.
 }
