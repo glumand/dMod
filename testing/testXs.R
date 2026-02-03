@@ -16,7 +16,7 @@ library(dplyr)
 eqns <- eqnvec(x = "-k*x")
 
 events <- eventlist() %>% 
-  addEvent(var = "x", time = NA, value = "xcrit", root = "x-xcrit", method = "add")
+  addEvent(var = "x", time = NA, value = "v", root = "x-xcrit", method = "add")
 
 x <- odemodel(eqns, events = events, modelname = "test_Xs", compile = F, solver = "boost", useDenseOutput = F) %>% Xs()
 
@@ -26,12 +26,12 @@ p <- eqnvec() %>%
 
 getEquations(p)
 
-compile(x,p, verbose = T)
+compile(x,p, cores = 10)
 # loadDLL(x,p)
 
 getParameters(p)
 
-pars <- c(k=1, xcrit = 0.25)
+pars <- c(k=1, xcrit = 0.25, v=1)
 # debugonce(p)
 p(pars)
 p(pars) %>% getDerivs()

@@ -12,8 +12,6 @@ prdframe(prediction = NULL, deriv = NULL, parameters = NULL)
 \item{deriv}{3D numeric array of first-order sensitivities with respect to outer parameters.}
 
 \item{parameters}{Named numeric vector of the inner parameters used for the prediction.}
-
-\item{deriv2}{4D numeric array of second-order sensitivities with respect to outer parameters.}
 }
 \value{
 An object of class \code{"prdframe"} (inheriting from \code{"matrix"}) with attached arrays of
@@ -26,8 +24,6 @@ The object carries several attributes containing sensitivities and parameter inf
 \itemize{
 \item \code{"deriv"} – 3D array of first-order sensitivities with respect to outer parameters
 (see \link{P}); dimensions: \verb{(time, state, outer parameter)}
-\item \code{"deriv2"} – 4D array of second-order sensitivities with respect to outer parameters;
-dimensions: \verb{(time, state, outer parameter, outer parameter)}
 \item \code{"parameters"} – vector of the inner parameters used to generate the prediction
 }
 

@@ -533,6 +533,7 @@ Xd <- function(data, condition = NULL) {
 #' 
 #' @importFrom CppODE funCpp
 #' @importFrom abind abind
+#' @importFrom einsum einsum
 #' @export
 Y <- function(g, f = NULL, states = NULL, parameters = NULL, 
               condition = NULL, attach.input = TRUE,
@@ -593,193 +594,72 @@ Y <- function(g, f = NULL, states = NULL, parameters = NULL,
   
   gfun <- gEval$func
   gjac <- gEval$jac
-  jac.symb <- attr(gEval, "jacobian.symb")
-  
-  # Identify observables with all-zero Jacobian rows (constant outputs)
-  fixedObs <- rownames(jac.symb)[which(apply(jac.symb, 1, function(r) all(r == "0")))]
   
   controls <- list(attach.input = attach.input)
   
   # Core observation mapping function
-  X2Y <- function(out, pars, deriv = TRUE) {
+  # Core observation mapping function
+  X2Y <- function(out, pars, fixed = NULL, deriv = TRUE) {
     
     attach.input <- controls$attach.input
+    fixedObsParams <- intersect(attr(pars, "fixed"), obsParams)
+    params <- c(unclass(pars), unclass(fixed))
     
-    # Get fixedInner from pars and out attributes
-    fixedInner_pars <- attr(pars, "fixedInner")
-    fixedInner_out <- attr(out, "fixedInner")
-    allFixedNames <- unique(c(fixedInner_pars, fixedInner_out))
+    # Values
+    gVal <- gfun(out[, obsStates, drop = FALSE], params[obsParams], attach.input, fixedObsParams)[, observables, drop = FALSE]
     
-    # Evaluate observable values
-    gVal <- gfun(out[, obsStates, drop = FALSE], pars[obsParams])[, observables, drop = FALSE]
+    if (any(is.nan(gVal)))
+      stop("Observable(s) evaluate to NaN: ", 
+           paste(observables[colSums(is.nan(gVal)) > 0], collapse = ", "),
+           "\nLikely cause: division by zero or missing inputs.")
     
-    # Check for NaN
-    if (any(is.nan(gVal))) {
-      stop(
-        paste0(
-          "The following observable(s) evaluate to NaN:\n\t",
-          paste0(observables[apply(gVal, 2, function(col) any(is.nan(col)))], collapse = "\n\t"),
-          ".\nLikely cause: division by zero or missing inputs."
-        )
-      )
-    }
-    
-    # Assemble output values
     values <- cbind(time = out[, "time"], gVal)
     if (attach.input) values <- cbind(values, submatrix(out, cols = -1))
     
-    # Derivative information
+    # Derivatives
     myderivs <- NULL
-    nonFixedObs <- setdiff(observables, fixedObs)
-    
-    if (deriv && !is.null(gjac) && length(nonFixedObs) > 0) {
+    if (deriv && !is.null(gjac)) {
       
-      # Exclude fixed parameters from derivative computation
-      activeStates <- setdiff(obsStates, allFixedNames)
-      activeParams <- setdiff(obsParams, allFixedNames)
-      
+      ntimes <- nrow(out)
+      nobs <- length(observables)
       dX <- attr(out, "deriv")
       dP <- attr(pars, "deriv")
       
-      # Early exit if nothing to compute
-      if (length(activeStates) == 0 && length(activeParams) == 0) {
-        # All inputs are fixed -> no derivatives
-        prdframe(prediction = values, deriv = NULL, parameters = pars, fixedInner = allFixedNames)
+      # Jacobian: [ntimes, nobs, symbols]
+      dG <- gjac(out[, obsStates, drop = FALSE], params[obsParams])
+      
+      activeP <- setdiff(obsParams, fixedObsParams)
+      activeS <- if (!is.null(dX)) intersect(obsStates, dimnames(dX)[[2]]) else character()
+      theta <- if (!is.null(dP)) colnames(dP) else if (!is.null(dX)) dimnames(dX)[[3]] else NULL
+      ntheta <- length(theta)
+      
+      # dY/dtheta = dG/dX * dX/dtheta + dG/dp * dp/dtheta
+      if (length(activeS)) {
+        myderivs <- einsum::einsum("tos,tsp->top", dG[,,activeS,drop=FALSE], dX[,activeS,,drop=FALSE])
       }
       
-      # Get Jacobian: [n_t, n_obs, n_vars+n_pars]
-      Jac_raw <- gjac(out[, obsStates, drop = FALSE], pars[obsParams], fixed = allFixedNames)
-      
-      n_t <- dim(Jac_raw)[1]
-      n_obs <- length(nonFixedObs)
-      
-      outer_pars <- character(0)
-      
-      # -----------------------------------------------------------------------
-      # CASE 1: dX ≠ NULL, dP ≠ NULL → full chain rule
-      # dY/dθ = dG/dX · dX/dθ + dG/dP · dP/dθ
-      # -----------------------------------------------------------------------
-      if (!is.null(dX) && !is.null(dP)) {
-        
-        # Filter dX and dP to active (non-fixed) components
-        activeStates_in_dX <- intersect(activeStates, dimnames(dX)[[2]])
-        activeParams_in_dP <- intersect(activeParams, rownames(dP))
-        
-        n_outer <- ncol(dP)
-        outer_pars <- colnames(dP)
-        
-        myderivs <- array(0, dim = c(n_t, n_obs, n_outer))
-        
-        # term1: dG/dX · dX/dθ
-        if (length(activeStates_in_dX) > 0) {
-          dGdX <- Jac_raw[, nonFixedObs, activeStates_in_dX, drop = FALSE]
-          dXsub <- dX[, activeStates_in_dX, , drop = FALSE]
-          n_states <- length(activeStates_in_dX)
-          
-          for (a in seq_len(n_states)) {
-            myderivs <- myderivs + dGdX[, , a] * dXsub[, a, ][rep(seq_len(n_t), each = n_obs), ]
-          }
-        }
-        
-        # term2: dG/dP · dP/dθ
-        if (length(activeParams_in_dP) > 0) {
-          dGdP <- Jac_raw[, nonFixedObs, activeParams_in_dP, drop = FALSE]
-          dPsub <- dP[activeParams_in_dP, , drop = FALSE]
-          n_pars <- length(activeParams_in_dP)
-          
-          term2 <- matrix(dGdP, nrow = n_t * n_obs, ncol = n_pars) %*% dPsub
-          myderivs <- myderivs + array(term2, dim = c(n_t, n_obs, n_outer))
-        }
+      if (!is.null(dP) && length(activeP)) {
+        term <- array(matrix(dG[,,activeP], ntimes*nobs, length(activeP)) %*% 
+                        dP[activeP,,drop=FALSE], c(ntimes, nobs, ntheta))
+        myderivs <- if (is.null(myderivs)) term else myderivs + term
       }
       
-      # -----------------------------------------------------------------------
-      # CASE 2: dX ≠ NULL, dP = NULL
-      # dY/dθ = dG/dX · dX/dθ + dG/dP (for local params)
-      # -----------------------------------------------------------------------
-      if (!is.null(dX) && is.null(dP)) {
-        
-        activeStates_in_dX <- intersect(activeStates, dimnames(dX)[[2]])
-        outer_pars <- dimnames(dX)[[3]]
-        n_outer <- length(outer_pars)
-        
-        myderivs <- array(0, dim = c(n_t, n_obs, n_outer))
-        
-        # term1: dG/dX · dX/dθ
-        if (length(activeStates_in_dX) > 0) {
-          dGdX <- Jac_raw[, nonFixedObs, activeStates_in_dX, drop = FALSE]
-          dXsub <- dX[, activeStates_in_dX, , drop = FALSE]
-          n_states <- length(activeStates_in_dX)
-          
-          for (a in seq_len(n_states)) {
-            myderivs <- myderivs + dGdX[, , a] * dXsub[, a, ][rep(seq_len(n_t), each = n_obs), ]
-          }
-        }
-        
-        # Add local params (in obsParams but not coming through dX)
-        dyn_params <- intersect(activeParams, outer_pars)
-        local_params <- setdiff(activeParams, dyn_params)
-        
-        if (length(local_params) > 0) {
-          dGdP_local <- Jac_raw[, nonFixedObs, local_params, drop = FALSE]
-          myderivs <- abind::abind(myderivs, dGdP_local, along = 3)
-          outer_pars <- c(outer_pars, local_params)
-        }
-      }
+      if (is.null(dX) && is.null(dP) && length(activeP))
+        myderivs <- dG[,,activeP,drop=FALSE]
       
-      # -----------------------------------------------------------------------
-      # CASE 3: dX = NULL, dP ≠ NULL
-      # dY/dθ = dG/dP · dP/dθ
-      # -----------------------------------------------------------------------
-      if (is.null(dX) && !is.null(dP)) {
-        
-        activeParams_in_dP <- intersect(activeParams, rownames(dP))
-        
-        if (length(activeParams_in_dP) > 0) {
-          dGdP <- Jac_raw[, nonFixedObs, activeParams_in_dP, drop = FALSE]
-          dPsub <- dP[activeParams_in_dP, , drop = FALSE]
-          n_pars <- length(activeParams_in_dP)
-          n_outer <- ncol(dP)
-          
-          myderivs <- array(
-            matrix(dGdP, nrow = n_t * n_obs, ncol = n_pars) %*% dPsub,
-            dim = c(n_t, n_obs, n_outer)
-          )
-          outer_pars <- colnames(dP)
-        }
-      }
+      if (!is.null(myderivs)) dimnames(myderivs) <- list(NULL, observables, theta)
       
-      # -----------------------------------------------------------------------
-      # CASE 4: dX = NULL, dP = NULL
-      # dY/dθ = dG/dP (identity on params)
-      # -----------------------------------------------------------------------
-      if (is.null(dX) && is.null(dP)) {
-        if (length(activeParams) > 0) {
-          myderivs <- Jac_raw[, nonFixedObs, activeParams, drop = FALSE]
-          outer_pars <- activeParams
-        }
-      }
-      
-      # Set dimnames
-      if (!is.null(myderivs) && length(outer_pars) > 0) {
-        dimnames(myderivs) <- list(NULL, nonFixedObs, outer_pars)
-      }
-      
-      # Attach input derivatives if requested
       if (attach.input && !is.null(myderivs) && !is.null(dX)) {
-        dyn_params <- dimnames(dX)[[3]]
-        all_params <- outer_pars
-        
-        if (length(extra <- setdiff(all_params, dyn_params)) > 0) {
-          pad <- array(0, dim = c(dim(dX)[1:2], length(extra)),
-                       dimnames = list(NULL, NULL, extra))
-          dX <- abind::abind(dX, pad, along = 3)
-        }
-        dX <- dX[, , all_params, drop = FALSE]
-        myderivs <- abind::abind(myderivs, dX, along = 2)
+        outer_theta <- if (!is.null(dP)) colnames(dP) else dimnames(dX)[[3]]
+        missing <- setdiff(outer_theta, dimnames(dX)[[3]])
+        if (length(missing))
+          dX <- abind::abind(dX, array(0, c(ntimes, dim(dX)[2], length(missing)),
+                                       dimnames = list(NULL, NULL, missing)), along = 3)
+        myderivs <- abind::abind(myderivs, dX[,,outer_theta,drop=FALSE], along = 2)
       }
     }
     
-    prdframe(prediction = values, deriv = myderivs, parameters = pars, fixedInner = allFixedNames)
+    prdframe(prediction = values, deriv = myderivs, parameters = c(pars, fixed))
   }
   
   attr(X2Y, "equations")  <- as.eqnvec(g)

@@ -4,28 +4,17 @@
 \alias{objframe}
 \title{Objective frame}
 \usage{
-objframe(
-  mydata,
-  deriv = NULL,
-  deriv2 = NULL,
-  deriv.err = NULL,
-  deriv2.err = NULL
-)
+objframe(mydata, deriv = NULL, deriv.err = NULL)
 }
 \arguments{
 \item{mydata}{Data frame produced by \link{res}.}
 
 \item{deriv}{numeric matrix of first-order derivatives of residuals (∂ri/∂θ).}
 
-\item{deriv2}{3D numeric array of second-order derivatives of residuals (∂²r/∂²θ).}
-
 \item{deriv.err}{numeric matrix of first-order derivatives of the error model (∂σ/∂θ).}
-
-\item{deriv2.err}{3D numeric array of second-order derivatives of the error model (∂²σ/∂²θ).}
 }
 \value{
-An object of class \code{"objframe"} (data.frame) with attributes \code{"deriv"}, \code{"deriv2"},
-\code{"deriv.err"}, and \code{"deriv2.err"}.
+An object of class \code{"objframe"} (data.frame) with attributes \code{"deriv"} and \code{"deriv.err"}.
 These arrays have the same parameter axes as those returned by \link{prdframe} and \link{res}.
 }
 \description{
