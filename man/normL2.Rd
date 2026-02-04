@@ -10,7 +10,8 @@ normL2(
   errmodel = NULL,
   times = NULL,
   attr.name = "data",
-  use.bessel = ifelse(!is.null(errmodel), TRUE, FALSE)
+  use.bessel = !is.null(errmodel),
+  cores = 1L
 )
 }
 \arguments{
@@ -18,42 +19,46 @@ normL2(
 
 \item{x}{Object of class \link{prdfn}.}
 
-\item{errmodel}{Optional object of class \link{obsfn}. The error model does not
-need to be defined for all conditions.}
+\item{errmodel}{Optional object of class \link{obsfn}. The error model may be
+defined only for a subset of conditions.}
 
-\item{times}{Numeric vector of additional time points where the prediction
-function is evaluated. If NULL, time points are extracted from the data.
-If the prediction function uses events, event times should be provided here.}
+\item{times}{Optional numeric vector of additional time points at which the
+prediction function is evaluated. If NULL, time points are taken from the
+data. Event times should be included here if the prediction model uses events.}
 
 \item{attr.name}{Character string. The objective value is additionally returned
 as an attribute with this name.}
 
-\item{use.bessel}{Logical. If TRUE and an error model is present, applies a
+\item{use.bessel}{Logical. If TRUE and an error model is provided, applies a
 global Bessel correction to variance estimates to account for finite-sample
-bias. Default is TRUE if an error model is provided, FALSE otherwise.}
+bias. Defaults to TRUE if an error model is supplied, FALSE otherwise.}
+
+\item{cores}{Integer. Number of CPU cores used for parallel evaluation over
+conditions. Must be >= 1. Parallelization is configured once when the
+objective function is created.}
 }
 \value{
 An object of class \code{objfn}, i.e. a function
-\code{obj(pars, fixed, deriv, deriv2, conditions, env, cores)} returning an
-\link{objlist}.
+\code{obj(pars, fixed, deriv, env)} returning an \link{objlist}.
 }
 \description{
-For parameter estimation and optimization, an objective function is needed.
-\code{normL2} returns an objective function based on the (negative log-likelihood)
-L2 norm between data and model prediction. The resulting objective function
-can be used for optimization with the trust optimizer, see \link{mstrust}.
+Creates an objective function for parameter estimation based on the
+(negative log-likelihood) L2 norm between observed data and model predictions.
+The returned objective function can be used with optimizers such as
+\link{mstrust} and supports aggregation over multiple experimental conditions.
 }
 \details{
-Objective functions can be combined using the \code{+} operator, see \link{sumobjfn}.
+Objective functions can be combined using the \code{+} operator, see
+\link{sumobjfn}.
 
 The Bessel correction is applied globally across all conditions and is given by
 \deqn{\sqrt{n / (n - p)}}
-where \eqn{n} is the total number of data points and \eqn{p} the number of
+where \eqn{n} is the total number of data points and \eqn{p} is the number of
 structural (non-error-model) parameters.
 
-Parallel evaluation over conditions is supported via the \code{cores} argument
-of the returned objective function. Parallelization is only applied if
-\code{cores > 1}. A value of \code{cores <= 0} is not allowed.
+Parallelization is performed over experimental conditions if
+\code{cores > 1}. The number of cores is fixed when calling \code{normL2()}
+and cannot be changed at evaluation time.
 }
 \examples{
 \dontrun{

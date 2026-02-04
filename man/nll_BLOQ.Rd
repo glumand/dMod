@@ -8,8 +8,7 @@ nll_BLOQ(
   nout.bloq,
   derivs.bloq,
   derivs.err.bloq,
-  deriv2.bloq = NULL,
-  deriv2.err.bloq = NULL,
+  par_names,
   opt.BLOQ = c("M3", "M4NM", "M4BEAL", "M1"),
   opt.hessian = c(BLOQ_part1 = TRUE, BLOQ_part2 = TRUE, BLOQ_part3 = TRUE)
 )
@@ -19,12 +18,11 @@ nll_BLOQ(
 
 \item{derivs.bloq, derivs.err.bloq}{matrix of first derivatives}
 
-\item{deriv2.bloq, deriv2.err.bloq}{array of second derivatives}
+\item{par_names}{Character vector of ALL parameter names (full set)}
 
 \item{opt.BLOQ}{Character denoting the method to deal with BLOQ data}
 
-\item{opt.hessian}{Named logical vector to include or exclude
-various summands of the hessian matrix}
+\item{opt.hessian}{Named logical vector for hessian components}
 }
 \description{
 Non-linear log likelihood for the BLOQ part of the data

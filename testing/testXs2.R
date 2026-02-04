@@ -34,12 +34,12 @@ getEquations(x.bs)
 getEquations(g)
 
 
-# compile(g, x.ds, x.bs ,p, cores = 10)
-loadDLL(g, x.ds, x.bs ,p)
+compile(g, x.ds, x.bs ,p, cores = 10)
+# loadDLL(g, x.ds, x.bs ,p)
 
 getParameters(p)
 
-pars <- c(k=1, te = 1, v=2, offset = 1)
+pars <- c(k=1, te = 1, v=0, offset = 1)
 # debugonce(p)
 p(pars)
 p(pars) %>% getDerivs()
@@ -48,13 +48,12 @@ p(pars) %>% getDerivs()
 times <- seq(0,10,len = 300)
 prd.ds <- x.ds*p
 prd.bs <- x.bs*p
+# debugonce(x.bs)
 out.ds <- prd.ds(times,pars)
 out.bs <- prd.bs(times,pars)
 out.ds %>% plot()
 out.bs %>% plot()
 # debugonce(getDerivs)
-
-derivs <- (getDerivs(out.bs))[[1]] 
 
 out.ds %>% getDerivs() %>% plot()
 out.bs %>% getDerivs() %>% plot()

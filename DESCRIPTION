@@ -36,7 +36,8 @@ Imports:
     optimx,
     nleqslv,
     reticulate,
-    BH
+    BH,
+    Rcpp
 Remotes:
     simonbeyer1/CppODE
 Suggests:
@@ -47,3 +48,5 @@ Suggests:
 RoxygenNote: 7.3.3
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
+LinkingTo: 
+    Rcpp

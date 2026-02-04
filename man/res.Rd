@@ -9,10 +9,13 @@ res(data, out, err = NULL)
 \arguments{
 \item{data}{data.frame with columns: time, name, value, sigma, lloq}
 
-\item{out}{matrix with predictions (first column = time)}
+\item{out}{matrix with predictions (first column = time), optional "deriv" attribute}
 
-\item{err}{Nullable matrix with error model predictions}
+\item{err}{optional matrix with error model predictions, optional "deriv" attribute}
+}
+\value{
+objframe with attributes "deriv", "deriv.err"
 }
 \description{
-When sigma is given in the data, it always has priority over the sigma in the error model
+Compare data and model prediction by computing residuals
 }

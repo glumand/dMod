@@ -8,8 +8,7 @@ nll_ALOQ(
   nout,
   derivs,
   derivs.err,
-  deriv2 = NULL,
-  deriv2.err = NULL,
+  par_names,
   opt.BLOQ = c("M3", "M4NM", "M4BEAL", "M1"),
   opt.hessian = c(ALOQ_part1 = TRUE, ALOQ_part2 = TRUE, ALOQ_part3 = TRUE),
   bessel.correction = 1
@@ -18,17 +17,15 @@ nll_ALOQ(
 \arguments{
 \item{nout}{output of \code{\link[=res]{res()}}}
 
-\item{derivs, derivs.err}{matrix of first derivatives}
+\item{derivs, derivs.err}{matrix of first derivatives (may have subset of parameters)}
 
-\item{deriv2, deriv2.err}{array of second derivatives}
+\item{par_names}{Character vector of ALL parameter names (full set)}
 
 \item{opt.BLOQ}{Character denoting the method to deal with BLOQ data}
 
-\item{opt.hessian}{Named logical vector to include or exclude
-various non-convex summands of the hessian matrix}
+\item{opt.hessian}{Named logical vector for hessian components}
 
-\item{bessel.correction}{Numeric. Bessel correction factor applied to the
-weighted residuals. Default is 1 (no correction).}
+\item{bessel.correction}{Numeric. Bessel correction factor.}
 }
 \description{
 Non-linear log likelihood for the ALOQ part of the data

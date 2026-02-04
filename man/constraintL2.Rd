@@ -7,33 +7,25 @@
 constraintL2(mu, sigma = 1, attr.name = "prior", condition = NULL)
 }
 \arguments{
-\item{mu}{named numeric, the prior values}
+\item{mu}{Named numeric vector of prior means.}
 
-\item{sigma}{named numeric of length of mu or numeric of length one
-or character of length of mu or character of length one}
+\item{sigma}{Named numeric or character vector. Character entries indicate
+log-scale sigma parameters to be estimated.}
 
-\item{attr.name}{character. The constraint value is additionally returned in an
-attributed with this name}
+\item{attr.name}{Character. Name of the attribute storing the constraint value.}
 
-\item{condition}{character, the condition for which the constraint should apply. If
-\code{NULL}, applies to any condition.}
+\item{condition}{Optional character vector of conditions.}
 }
 \value{
-object of class \code{objfn}
+Object of class \code{objfn}.
 }
 \description{
 Soft L2 constraint on parameters
 }
 \details{
-If sigma is numeric, the function computes the constraint value
-\deqn{\left(\frac{p-\mu}{\sigma}\right)^2}{(p-mu)^2/sigma^2}
-and its derivatives with respect to p. If sigma is a character, the
-function computes
-\deqn{\left(\frac{p-\mu}{\sigma}\right)^2 + \log(\sigma^2)}{(p-mu)^2/sigma^2 + log(sigma^2)}
-and its derivatives with respect to p and sigma. Sigma parameters being
-passed to the function are ALWAYS assumed to be on a log scale, i.e. internally
-sigma parameters are converted by \code{exp()}.
-}
-\seealso{
-\link{wrss}
+Computes
+\deqn{(p-\mu)^2 / \sigma^2}
+or, if sigma is estimated,
+\deqn{(p-\mu)^2 / \sigma^2 + 2\log(\sigma)},
+with sigma internally transformed via \code{exp()}.
 }

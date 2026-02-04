@@ -174,7 +174,6 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
     Jac <- NULL
     if (deriv && !is.null(jac)) {
       Jac <- as.matrix(jac(NULL, p, attach.input = attach.input, fixed = names(fixed))[1,,])
-      dimnames(Jac) <- list(names(pinnerVal), names(pars))
       dP <- attr(pars, "deriv")
       if (!is.null(dP)) {
         Jac <- Jac %*% dP[colnames(Jac), , drop = FALSE]

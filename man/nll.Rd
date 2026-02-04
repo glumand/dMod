@@ -17,7 +17,7 @@ nll(
 \arguments{
 \item{nout}{data.frame (result of \link{res}) or object of class \link{res}.}
 
-\item{pars}{Named vector of outer parameters to construct the objlist}
+\item{pars}{Named vector of ALL outer parameters (union across conditions)}
 
 \item{deriv}{Logical. If TRUE, compute gradient and hessian}
 
@@ -25,26 +25,16 @@ nll(
 One of "M1", "M3", "M4NM", or "M4BEAL".}
 
 \item{opt.hessian}{Named logical vector to include or exclude various
-summands of the hessian matrix. Controls which parts contribute to the
-Hessian calculation for both ALOQ and BLOQ data.}
+summands of the hessian matrix.}
 
-\item{bessel.correction}{Numeric. Bessel correction factor for variance estimation.
-Default is 1 (no correction). When use.bessel = TRUE in normL2(), this is set to
-sqrt(n/(n-p)) where n is total data points and p is number of structural (non-errormodel) parameters.}
+\item{bessel.correction}{Numeric. Bessel correction factor for variance estimation.}
 }
 \value{
-list with entries value (numeric, the negative log-likelihood with Bessel correction applied),
-gradient (numeric vector, gradient with respect to parameters) and
-hessian (matrix of type numeric, second derivatives). The returned value includes the Bessel correction
-and is used for optimization. The TRUE maximum likelihood (for BIC/AIC) is stored in attr(*, "neg2ll").
+list with entries value, gradient, and hessian (Gauss-Newton approximation).
 }
 \description{
 Gaussian Log-likelihood. Supports NONMEM-like BLOQ handling methods M1, M3 and M4
 and estimation of error models with optional Bessel correction for variance parameter bias.
-}
-\details{
-The Bessel correction is applied by multiplying weighted residuals with bessel.correction.
-This changes both the objective value AND the gradient/Hessian, leading to corrected parameter
-estimates during optimization. The TRUE maximum likelihood value (without correction) is stored
-in the "neg2ll" attribute for use in BIC/AIC calculations.
+The Hessian is approximated via the Jacobian of the residuals (Gauss-Newton approximation).
+Supports different parameter sets per condition - gradients and Hessians are merged by parameter name.
 }
