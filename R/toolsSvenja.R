@@ -94,6 +94,9 @@ predict_array <- function (prd, times, pars = partable, whichpar = par, keep_nam
   out
 }
 
+
+#' @keywords internal
+#' @importFrom ggplot2 ggplot
 PlotPaths <- function(profs=myprofiles, ..., whichPar, sort = FALSE, relative = TRUE, scales = "fixed", multi = TRUE, n_pars = 5, normalizePaths = FALSE) {
   
   if ("parframe" %in% class(profs)) {
@@ -202,7 +205,7 @@ PlotPaths <- function(profs=myprofiles, ..., whichPar, sort = FALSE, relative = 
     )
     
     suppressMessages(
-      p <- ggplot(data, aes(x = x, y = y, color = label, group = partner)) + 
+      p <- ggplot2::ggplot(data, aes(x = x, y = y, color = label, group = partner)) + 
         geom_line() + #geom_point(aes=aes(size=1), alpha=1/3) +
         xlab(whichPar) + ylab("relative change of\n other paramters") +
         scale_linetype_discrete(name = "profile\nlist") +
@@ -214,7 +217,7 @@ PlotPaths <- function(profs=myprofiles, ..., whichPar, sort = FALSE, relative = 
     )
   } else {
     suppressMessages(
-      p <- ggplot(data, aes(x = x, y = y, group = interaction(name, proflist), color = name, lty = proflist)) + 
+      p <- ggplot2::ggplot(data, aes(x = x, y = y, group = interaction(name, proflist), color = name, lty = proflist)) + 
         facet_wrap(~combination, scales = scales) + 
         geom_path() + #geom_point(aes=aes(size=1), alpha=1/3) +
         xlab(axis.labels[1]) + ylab(axis.labels[2]) +
@@ -243,6 +246,7 @@ PlotPaths <- function(profs=myprofiles, ..., whichPar, sort = FALSE, relative = 
 #' }
 #' @export
 #' @import data.table
+#' @importFrom cowplot plot_grid
 plotPathsMulti <- function(profs, whichpars, npars = 5, normalizePaths = FALSE) {
   if(length(whichpars) == 1){
     p <- PlotPaths(profs=profs, whichPar = whichpars, n_pars = npars, normalizePaths = normalizePaths)
@@ -279,6 +283,7 @@ expand.grid.alt <- function(seq1, seq2) {
 #' 
 #' @return A combined `ggplot` object containing the profiles and paths (no shared legend).
 #' 
+#' @importFrom cowplot align_plots plot_grid
 #' @export
 plotProfilesAndPaths <- function(profs, whichpars, npars = 5, ncols = 3, normalizePaths = FALSE, ...) {
   profs <- profs[profs$whichPar %in% whichpars]

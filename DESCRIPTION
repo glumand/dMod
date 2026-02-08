@@ -32,9 +32,7 @@ Imports:
     purrr,
     CppODE,
     abind,
-    einsum,
     optimx,
-    nleqslv,
     reticulate,
     BH,
     Rcpp

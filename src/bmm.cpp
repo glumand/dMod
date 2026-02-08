@@ -1,5 +1,6 @@
 #include <Rcpp.h>
 #include <R_ext/BLAS.h>
+#include <R_ext/RS.h>
 using namespace Rcpp;
 
 /*
