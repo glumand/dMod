@@ -28,8 +28,8 @@
 #' Both transformation types can be combined with other mappings via arithmetic
 #' operators (`+` and `*`) thanks to the [parfn] interface.
 #'
-#' @param trafo object of class \code{eqnvec} or named character or list thereof. In case,
-#' trafo is a list, \code{P()} is called on each element and conditions are assumed to be
+#' @param trafo object of class [eqnvec] or named character or list thereof. In case,
+#' trafo is a list, [P()] is called on each element and conditions are assumed to be
 #' the list names.
 #' @param parameters character vector
 #' @param condition character, the condition for which the transformation is generated
@@ -38,9 +38,10 @@
 #' @param keep.root logical, applies for \code{method = "implicit"}. The root of the last
 #' evaluation of the parameter transformation function is saved as guess for the next 
 #' evaluation.
-#' @param compile logical, compile the function (see \link{funC0})
-#' @param modelname character, see \link{funC0}
+#' @param compile logical, compile the function (see [CppODE::funCpp])
+#' @param modelname character, see (see [CppODE::funCpp])
 #' @param method character, either \code{"explicit"} or \code{"implicit"}
+#' @param cores Number of cores for parallel method call of [Pexpl] or [Pimpl] per condtion
 #' @param verbose Print out information during compilation
 #'
 #' @return
@@ -50,7 +51,8 @@
 #' [Pexpl], [Pimpl], [parfn]
 #'
 #' @export
-P <- function(trafo = NULL, parameters=NULL, condition = NULL, attach.input = FALSE,  keep.root = TRUE, compile = FALSE, modelname = NULL, method = c("explicit", "implicit"), verbose = FALSE) {
+P <- function(trafo = NULL, parameters=NULL, condition = NULL, attach.input = FALSE,  keep.root = TRUE, compile = FALSE, 
+              modelname = NULL, method = c("explicit", "implicit"), cores = detectFreeCores(), verbose = FALSE) {
   
   if (is.null(trafo)) return()
   if (!is.list(trafo)) {
@@ -59,16 +61,14 @@ P <- function(trafo = NULL, parameters=NULL, condition = NULL, attach.input = FA
   }
   
   method <- match.arg(method)
-  
-  Reduce("+", lapply(1:length(trafo), function(i) {
+  if (Sys.info()[['sysname']] == "Windows") cores <- 1
+  Reduce("+", mclapply(1:length(trafo), function(i) {
     
     switch(method, 
            explicit = Pexpl(trafo = as.eqnvec(trafo[[i]]), parameters = parameters, attach.input = attach.input, condition = names(trafo[i]), compile = compile, modelname = modelname, verbose = verbose),
            implicit = Pimpl(trafo = as.eqnvec(trafo[[i]]), parameters = parameters, keep.root = keep.root, condition = names(trafo[i]), compile = compile, modelname = modelname, verbose = verbose))
     
-    
-  }))
-  
+  }, mc.cores = max(detectFreeCores(), cores)))
   
 }
 
@@ -158,7 +158,7 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
     p <- c(pars, fixed)
     
     # Evaluate inner parameters
-    pinnerVal <- fun(NULL, p, attach.input = attach.input, fixed = names(fixed))[1, ]
+    pinnerVal <- fun(NULL, p, attach.input = attach.input, fixed = names(fixed))[,]
     
     if (any(is.nan(pinnerVal))) {
       stop(
@@ -173,7 +173,7 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
     # Apply chain rule for derivatives
     Jac <- NULL
     if (deriv && !is.null(jac)) {
-      Jac <- as.matrix(jac(NULL, p, attach.input = attach.input, fixed = names(fixed))[1,,])
+      Jac <- as.matrix(jac(NULL, p, attach.input = attach.input, fixed = names(fixed))[,,1])
       dP <- attr(pars, "deriv")
       if (!is.null(dP)) {
         Jac <- Jac %*% dP[colnames(Jac), , drop = FALSE]

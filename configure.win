@@ -1,0 +1,76 @@
+#!/bin/sh
+# configure.win for dMod package (runs under Rtools sh on Windows)
+# Detects availability of cblas_dgemm_batch_strided (Intel MKL)
+
+# Get R compilation settings
+CC=`"${R_HOME}/bin${R_ARCH_BIN}/R" CMD config CC`
+CFLAGS=`"${R_HOME}/bin${R_ARCH_BIN}/R" CMD config CFLAGS`
+BLAS_LIBS=`"${R_HOME}/bin${R_ARCH_BIN}/R" CMD config BLAS_LIBS`
+LAPACK_LIBS=`"${R_HOME}/bin${R_ARCH_BIN}/R" CMD config LAPACK_LIBS`
+FLIBS=`"${R_HOME}/bin${R_ARCH_BIN}/R" CMD config FLIBS`
+
+PKG_CPPFLAGS=""
+PKG_LIBS="${LAPACK_LIBS} ${BLAS_LIBS} ${FLIBS}"
+
+# ---- Test for cblas_dgemm_batch_strided ------------------------------------
+
+echo "* Checking for cblas_dgemm_batch_strided ..."
+
+cat > conftest.c <<EOF
+#include <stddef.h>
+
+extern void cblas_dgemm_batch_strided(
+    int, int, int,
+    int, int, int,
+    double,
+    const double *, int, int,
+    const double *, int, int,
+    double,
+    double *, int, int,
+    int);
+
+int main() {
+    cblas_dgemm_batch_strided(
+        101, 111, 111,
+        1, 1, 1,
+        1.0,
+        (double*)0, 1, 1,
+        (double*)0, 1, 1,
+        0.0,
+        (double*)0, 1, 1,
+        1);
+    return 0;
+}
+EOF
+
+HAVE_BATCH_STRIDED="no"
+if ${CC} ${CFLAGS} -o conftest.exe conftest.c ${PKG_LIBS} 2>/dev/null; then
+    HAVE_BATCH_STRIDED="yes"
+    PKG_CPPFLAGS="${PKG_CPPFLAGS} -DHAVE_BATCH_STRIDED"
+else
+    echo ""
+    echo "  +------------------------------------------------------------------------------------------+"
+    echo "  |  For maximum batched matrix performance, install Intel MKL:                              |"
+    echo "  |                                                                                          |"
+    echo "  |    https://www.intel.com/content/www/us/en/developer/tools/oneapi/onemkl-download.html   |"
+    echo "  |                                                                                          |"
+    echo "  |  Then reinstall dMod to pick up the optimized backend.                                   |"
+    echo "  +------------------------------------------------------------------------------------------+"
+    echo ""
+fi
+
+rm -f conftest.exe conftest.c conftest.o
+
+# ---- Write src/Makevars.win ------------------------------------------------
+
+echo "* Generating src/Makevars.win ..."
+
+sed -e "s|@PKG_CPPFLAGS@|${PKG_CPPFLAGS}|" \
+    -e "s|@PKG_LIBS@|${PKG_LIBS}|" \
+    src/Makevars.win.in > src/Makevars.win
+
+echo ""
+echo "  PKG_CPPFLAGS: ${PKG_CPPFLAGS}"
+echo "  PKG_LIBS:     ${PKG_LIBS}"
+echo ""
+echo "* Configuration complete."

@@ -13,12 +13,13 @@ P(
   compile = FALSE,
   modelname = NULL,
   method = c("explicit", "implicit"),
+  cores = detectFreeCores(),
   verbose = FALSE
 )
 }
 \arguments{
-\item{trafo}{object of class \code{eqnvec} or named character or list thereof. In case,
-trafo is a list, \code{P()} is called on each element and conditions are assumed to be
+\item{trafo}{object of class \link{eqnvec} or named character or list thereof. In case,
+trafo is a list, \code{\link[=P]{P()}} is called on each element and conditions are assumed to be
 the list names.}
 
 \item{parameters}{character vector}
@@ -32,11 +33,13 @@ the parameter transformation.}
 evaluation of the parameter transformation function is saved as guess for the next
 evaluation.}
 
-\item{compile}{logical, compile the function (see \link{funC0})}
+\item{compile}{logical, compile the function (see \link[CppODE:funCpp]{CppODE::funCpp})}
 
-\item{modelname}{character, see \link{funC0}}
+\item{modelname}{character, see (see \link[CppODE:funCpp]{CppODE::funCpp})}
 
 \item{method}{character, either \code{"explicit"} or \code{"implicit"}}
+
+\item{cores}{Number of cores for parallel method call of \link{Pexpl} or \link{Pimpl} per condtion}
 
 \item{verbose}{Print out information during compilation}
 }

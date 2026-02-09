@@ -1,0 +1,2 @@
+PKG_CPPFLAGS =  -DHAVE_BATCH_STRIDED
+PKG_LIBS = -llapack -lblas -lgfortran -lm -lquadmath
