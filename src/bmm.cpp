@@ -30,23 +30,52 @@ using namespace Rcpp;
 
 
 /* --------------------------------------------------------------------------
- * Batched BLAS (optional, detected at package built)
+ * Batched BLAS (optional, detected at package build)
  * -------------------------------------------------------------------------- */
 
 #ifdef HAVE_BATCH_STRIDED
-extern "C" void cblas_dgemm_batch_strided(
-    int layout, int transa, int transb,
-    int M, int N, int K,
-    double alpha,
-    const double *A, int lda, int stride_a,
-    const double *B, int ldb, int stride_b,
-    double beta,
-    double *C, int ldc, int stride_c,
-    int batch_size);
 
-static const int CBLAS_COL_MAJOR = 102;
-static const int CBLAS_NO_TRANS  = 111;
+// Try to include proper CBLAS header
+#if defined(__has_include)
+#if __has_include(<mkl_cblas.h>)
+#include <mkl_cblas.h>
+#define USING_MKL_HEADER 1
+#elif __has_include(<cblas.h>)
+#include <cblas.h>
+#define USING_CBLAS_HEADER 1
+#else
+// No header found, use manual declarations
+#define NEED_CBLAS_DECL 1
 #endif
+#else
+// Compiler doesn't support __has_include, try cblas.h
+#if __cplusplus >= 201703L
+#include <cblas.h>
+#define USING_CBLAS_HEADER 1
+#else
+#define NEED_CBLAS_DECL 1
+#endif
+#endif
+
+// Manual declarations if no header available
+#ifdef NEED_CBLAS_DECL
+enum CBLAS_LAYOUT { CblasRowMajor=101, CblasColMajor=102 };
+enum CBLAS_TRANSPOSE { CblasNoTrans=111, CblasTrans=112, CblasConjTrans=113 };
+
+extern "C" void cblas_dgemm_batch_strided(
+    const CBLAS_LAYOUT Layout,
+    const CBLAS_TRANSPOSE TransA,
+    const CBLAS_TRANSPOSE TransB,
+    const int M, const int N, const int K,
+    const double alpha,
+    const double *A, const int lda, const int stride_a,
+    const double *B, const int ldb, const int stride_b,
+    const double beta,
+    double *C, const int ldc, const int stride_c,
+    const int batch_size);
+#endif
+
+#endif // HAVE_BATCH_STRIDED
 
 
 /* --------------------------------------------------------------------------
@@ -76,11 +105,38 @@ inline void dgemm_nn(int M, int N, int K,
 NumericVector bmm_lb(NumericVector A, NumericVector B,
                      int Bn, int M, int K, int N) {
   
+  // SAFETY CHECKS
+  if (A.size() != M * K * Bn) {
+    stop("bmm_lb: A size mismatch: got %d, expected %d (M=%d, K=%d, Bn=%d)", 
+         A.size(), M*K*Bn, M, K, Bn);
+  }
+  if (B.size() != K * N) {
+    stop("bmm_lb: B size mismatch: got %d, expected %d (K=%d, N=%d)", 
+         B.size(), K*N, K, N);
+  }
+  
   NumericVector C(M * N * Bn);
   
 #ifdef HAVE_BATCH_STRIDED
+  // DEBUG OUTPUT
+  Rprintf("\n=== bmm_lb DEBUG ===\n");
+  Rprintf("Using batched BLAS (cblas_dgemm_batch_strided)\n");
+#ifdef USING_MKL_HEADER
+  Rprintf("Header: mkl_cblas.h\n");
+#elif defined(USING_CBLAS_HEADER)
+  Rprintf("Header: cblas.h\n");
+#else
+  Rprintf("Header: manual declaration\n");
+#endif
+  Rprintf("Parameters:\n");
+  Rprintf("  M=%d, N=%d, K=%d, Bn=%d\n", M, N, K, Bn);
+  Rprintf("  A: size=%d, lda=%d, stride=%d\n", A.size(), M, M*K);
+  Rprintf("  B: size=%d, ldb=%d, stride=%d\n", B.size(), K, 0);
+  Rprintf("  C: size=%d, ldc=%d, stride=%d\n", C.size(), M, M*N);
+  Rprintf("Calling cblas_dgemm_batch_strided...\n");
+  
   cblas_dgemm_batch_strided(
-    CBLAS_COL_MAJOR, CBLAS_NO_TRANS, CBLAS_NO_TRANS,
+    CblasColMajor, CblasNoTrans, CblasNoTrans,
     M, N, K,
     1.0,
     &A[0], M, M * K,   // A strides between batches
@@ -88,6 +144,9 @@ NumericVector bmm_lb(NumericVector A, NumericVector B,
     0.0,
     &C[0], M, M * N,
     Bn);
+  
+  Rprintf("SUCCESS! Call returned without crash.\n");
+  Rprintf("===================\n\n");
 #else
   const int MK = M * K;
   const int MN = M * N;
@@ -117,12 +176,28 @@ NumericVector bmm_lb(NumericVector A, NumericVector B,
 NumericVector bmm_rb(NumericVector A, NumericVector B,
                      int Bn, int M, int K, int N) {
   
+  // SAFETY CHECKS
+  if (A.size() != M * K) {
+    stop("bmm_rb: A size mismatch: got %d, expected %d (M=%d, K=%d)", 
+         A.size(), M*K, M, K);
+  }
+  if (B.size() != K * N * Bn) {
+    stop("bmm_rb: B size mismatch: got %d, expected %d (K=%d, N=%d, Bn=%d)", 
+         B.size(), K*N*Bn, K, N, Bn);
+  }
+  
   NumericVector C(M * N * Bn);
+  
+  Rprintf("\n=== bmm_rb (no batched BLAS) ===\n");
+  Rprintf("M=%d, N=%d, K=%d, Bn=%d\n", M, N, K, Bn);
+  Rprintf("Calling single dgemm: M=%d, N*Bn=%d, K=%d\n", M, N*Bn, K);
   
   dgemm_nn(M, N * Bn, K,
            &A[0], M,
            &B[0], K,
            &C[0], M);
+           
+           Rprintf("SUCCESS!\n===================\n\n");
            
            C.attr("dim") = IntegerVector::create(M, N, Bn);
            return C;
@@ -143,11 +218,38 @@ NumericVector bmm_rb(NumericVector A, NumericVector B,
 NumericVector bmm_bb(NumericVector A, NumericVector B,
                      int Bn, int M, int K, int N) {
   
+  // SAFETY CHECKS
+  if (A.size() != M * K * Bn) {
+    stop("bmm_bb: A size mismatch: got %d, expected %d (M=%d, K=%d, Bn=%d)", 
+         A.size(), M*K*Bn, M, K, Bn);
+  }
+  if (B.size() != K * N * Bn) {
+    stop("bmm_bb: B size mismatch: got %d, expected %d (K=%d, N=%d, Bn=%d)", 
+         B.size(), K*N*Bn, K, N, Bn);
+  }
+  
   NumericVector C(M * N * Bn);
   
 #ifdef HAVE_BATCH_STRIDED
+  // DEBUG OUTPUT
+  Rprintf("\n=== bmm_bb DEBUG ===\n");
+  Rprintf("Using batched BLAS (cblas_dgemm_batch_strided)\n");
+#ifdef USING_MKL_HEADER
+  Rprintf("Header: mkl_cblas.h\n");
+#elif defined(USING_CBLAS_HEADER)
+  Rprintf("Header: cblas.h\n");
+#else
+  Rprintf("Header: manual declaration\n");
+#endif
+  Rprintf("Parameters:\n");
+  Rprintf("  M=%d, N=%d, K=%d, Bn=%d\n", M, N, K, Bn);
+  Rprintf("  A: size=%d, lda=%d, stride=%d\n", A.size(), M, M*K);
+  Rprintf("  B: size=%d, ldb=%d, stride=%d\n", B.size(), K, K*N);
+  Rprintf("  C: size=%d, ldc=%d, stride=%d\n", C.size(), M, M*N);
+  Rprintf("Calling cblas_dgemm_batch_strided...\n");
+  
   cblas_dgemm_batch_strided(
-    CBLAS_COL_MAJOR, CBLAS_NO_TRANS, CBLAS_NO_TRANS,
+    CblasColMajor, CblasNoTrans, CblasNoTrans,
     M, N, K,
     1.0,
     &A[0], M, M * K,
@@ -155,6 +257,9 @@ NumericVector bmm_bb(NumericVector A, NumericVector B,
     0.0,
     &C[0], M, M * N,
     Bn);
+  
+  Rprintf("SUCCESS! Call returned without crash.\n");
+  Rprintf("===================\n\n");
 #else
   const int MK = M * K;
   const int KN = K * N;

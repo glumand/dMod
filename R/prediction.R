@@ -123,7 +123,7 @@ Xs.deSolve <- function(odemodel, forcings = NULL, events = NULL, names = NULL, c
       
       # Apply parameter transformation to the derivatives
       sensNames <- as.vector(outer(names, senspars, paste, sep = "."))
-      mysensitivities <- array(outSens[, sensNames], dim = c(nrow(outSens), length(names), length(senspars)))
+      mysensitivities <- aperm(array(outSens[, sensNames], dim = c(nrow(outSens), length(names), length(senspars))), c(2, 3, 1))
       
       dP <- attr(pars, "deriv")
       if (!is.null(dP)) {

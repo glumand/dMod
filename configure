@@ -13,31 +13,50 @@ PKG_CPPFLAGS=""
 PKG_LIBS="${LAPACK_LIBS} ${BLAS_LIBS} ${FLIBS}"
 
 # ---- Test for cblas_dgemm_batch_strided ------------------------------------
-
 echo "* Checking for cblas_dgemm_batch_strided ..."
 
 cat > conftest.c <<EOF
 #include <stddef.h>
 
-extern void cblas_dgemm_batch_strided(
-    int, int, int,
-    int, int, int,
-    double,
-    const double *, int, int,
-    const double *, int, int,
-    double,
-    double *, int, int,
-    int);
+// Try to include proper CBLAS headers
+#if defined(__has_include)
+  #if __has_include(<mkl_cblas.h>)
+    #include <mkl_cblas.h>
+    #define HAVE_CBLAS_HEADER 1
+  #elif __has_include(<cblas.h>)
+    #include <cblas.h>
+    #define HAVE_CBLAS_HEADER 1
+  #endif
+#endif
+
+// Fallback: Manual declaration if no header found
+#ifndef HAVE_CBLAS_HEADER
+  typedef enum CBLAS_LAYOUT {CblasRowMajor=101, CblasColMajor=102} CBLAS_LAYOUT;
+  typedef enum CBLAS_TRANSPOSE {CblasNoTrans=111, CblasTrans=112} CBLAS_TRANSPOSE;
+  
+  extern void cblas_dgemm_batch_strided(
+      const CBLAS_LAYOUT Layout,
+      const CBLAS_TRANSPOSE TransA,
+      const CBLAS_TRANSPOSE TransB,
+      const int M, const int N, const int K,
+      const double alpha,
+      const double *A, const int lda, const int stride_a,
+      const double *B, const int ldb, const int stride_b,
+      const double beta,
+      double *C, const int ldc, const int stride_c,
+      const int batch_size);
+#endif
 
 int main() {
+    // Test call with NULL pointers (won't actually run)
     cblas_dgemm_batch_strided(
-        101, 111, 111,
+        CblasColMajor, CblasNoTrans, CblasNoTrans,
         1, 1, 1,
         1.0,
-        (double*)0, 1, 1,
-        (double*)0, 1, 1,
+        (const double*)NULL, 1, 1,
+        (const double*)NULL, 1, 1,
         0.0,
-        (double*)0, 1, 1,
+        (double*)NULL, 1, 1,
         1);
     return 0;
 }
@@ -45,9 +64,11 @@ EOF
 
 HAVE_BATCH_STRIDED="no"
 if ${CC} ${CFLAGS} -o conftest conftest.c ${PKG_LIBS} 2>/dev/null; then
-    # HAVE_BATCH_STRIDED="yes"
+    HAVE_BATCH_STRIDED="yes"
     PKG_CPPFLAGS="${PKG_CPPFLAGS} -DHAVE_BATCH_STRIDED"
+    echo "  ✓ cblas_dgemm_batch_strided found - using optimized batched BLAS"
 else
+    echo "  ✗ cblas_dgemm_batch_strided not found - using fallback implementation"
     echo ""
     echo "  ┌──────────────────────────────────────────────────────────────┐"
     echo "  │  For maximum batched matrix performance, install Intel MKL:  │"
@@ -60,13 +81,10 @@ else
     echo "  └──────────────────────────────────────────────────────────────┘"
     echo ""
 fi
-
 rm -f conftest conftest.c conftest.o
 
 # ---- Write src/Makevars ----------------------------------------------------
-
 echo "* Generating src/Makevars ..."
-
 sed -e "s|@PKG_CPPFLAGS@|${PKG_CPPFLAGS}|" \
     -e "s|@PKG_LIBS@|${PKG_LIBS}|" \
     src/Makevars.in > src/Makevars
