@@ -1,0 +1,2 @@
+PKG_CPPFLAGS = -DHAVE_BATCH_STRIDED -I"C:/Program Files (x86)/Intel/oneAPI/mkl/latest/include"
+PKG_LIBS = -L"C:/Program Files (x86)/Intel/oneAPI/mkl/latest/lib" -lmkl_rt -LC:/PROGRA~1/R/R-45~1.2/bin/x64 -lRlapack -LC:/PROGRA~1/R/R-45~1.2/bin/x64 -lRblas -lgfortran -lquadmath

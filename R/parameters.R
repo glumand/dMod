@@ -68,7 +68,7 @@ P <- function(trafo = NULL, parameters=NULL, condition = NULL, attach.input = FA
            explicit = Pexpl(trafo = as.eqnvec(trafo[[i]]), parameters = parameters, attach.input = attach.input, condition = names(trafo[i]), compile = compile, modelname = modelname, verbose = verbose),
            implicit = Pimpl(trafo = as.eqnvec(trafo[[i]]), parameters = parameters, keep.root = keep.root, condition = names(trafo[i]), compile = compile, modelname = modelname, verbose = verbose))
     
-  }, mc.cores = max(detectFreeCores(), cores)))
+  }, mc.cores = min(detectFreeCores(), cores)))
   
 }
 

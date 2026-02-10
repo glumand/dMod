@@ -7,14 +7,14 @@
 objframe(mydata, deriv = NULL, deriv.err = NULL)
 }
 \arguments{
-\item{mydata}{Data frame produced by \link{res}.}
+\item{mydata}{data.table produced by \link{res}}
 
-\item{deriv}{numeric matrix of first-order derivatives of residuals (∂ri/∂θ).}
+\item{deriv}{numeric matrix of first-order derivatives of residuals (Jacobian)}
 
-\item{deriv.err}{numeric matrix of first-order derivatives of the error model (∂σ/∂θ).}
+\item{deriv.err}{numeric matrix of first-order derivatives of the error model}
 }
 \value{
-An object of class \code{"objframe"} (data.frame) with attributes \code{"deriv"} and \code{"deriv.err"}.
+An object of class \code{"objframe"} (data.table) with attributes \code{"deriv"} and \code{"deriv.err"}.
 These arrays have the same parameter axes as those returned by \link{prdframe} and \link{res}.
 }
 \description{

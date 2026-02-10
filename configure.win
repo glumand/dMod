@@ -2,7 +2,10 @@
 # configure.win for dMod package (runs under Rtools sh on Windows)
 # Detects availability of cblas_dgemm_batch_strided (Intel MKL)
 
-# Get R compilation settings
+## --------------------------------------------------------------------------
+## Get R compilation settings
+## --------------------------------------------------------------------------
+
 CC=`"${R_HOME}/bin${R_ARCH_BIN}/R" CMD config CC`
 CFLAGS=`"${R_HOME}/bin${R_ARCH_BIN}/R" CMD config CFLAGS`
 BLAS_LIBS=`"${R_HOME}/bin${R_ARCH_BIN}/R" CMD config BLAS_LIBS`
@@ -12,9 +15,11 @@ FLIBS=`"${R_HOME}/bin${R_ARCH_BIN}/R" CMD config FLIBS`
 PKG_CPPFLAGS=""
 PKG_LIBS="${LAPACK_LIBS} ${BLAS_LIBS} ${FLIBS}"
 
-# ---- Test for cblas_dgemm_batch_strided ------------------------------------
-
 echo "* Checking for cblas_dgemm_batch_strided ..."
+
+## --------------------------------------------------------------------------
+## Generate test file
+## --------------------------------------------------------------------------
 
 cat > conftest.c <<EOF
 #include <stddef.h>
@@ -29,7 +34,7 @@ extern void cblas_dgemm_batch_strided(
     double *, int, int,
     int);
 
-int main() {
+int main(void) {
     cblas_dgemm_batch_strided(
         101, 111, 111,
         1, 1, 1,
@@ -44,24 +49,96 @@ int main() {
 EOF
 
 HAVE_BATCH_STRIDED="no"
+
+## --------------------------------------------------------------------------
+## 1) Try R's BLAS first
+## --------------------------------------------------------------------------
+
 if ${CC} ${CFLAGS} -o conftest.exe conftest.c ${PKG_LIBS} 2>/dev/null; then
     HAVE_BATCH_STRIDED="yes"
-    PKG_CPPFLAGS="${PKG_CPPFLAGS} -DHAVE_BATCH_STRIDED"
+    PKG_CPPFLAGS="-DHAVE_BATCH_STRIDED"
+fi
+
+## --------------------------------------------------------------------------
+## 2) Try Intel MKL explicitly
+## --------------------------------------------------------------------------
+
+if [ "${HAVE_BATCH_STRIDED}" = "no" ]; then
+    MKL_ROOT=""
+
+    if [ -n "${MKLROOT}" ]; then
+        MKL_ROOT="${MKLROOT}"
+    elif [ -d "C:/Program Files (x86)/Intel/oneAPI/mkl/latest" ]; then
+        MKL_ROOT="C:/Program Files (x86)/Intel/oneAPI/mkl/latest"
+    fi
+
+    if [ -n "${MKL_ROOT}" ] && [ -d "${MKL_ROOT}/include" ]; then
+        # Explicit header test
+        if [ ! -f "${MKL_ROOT}/include/mkl.h" ]; then
+            echo "  -> MKL detected but mkl.h not found, skipping MKL backend."
+        else
+            for MKL_TRY in \
+                "${MKL_ROOT}/lib" \
+                "${MKL_ROOT}/bin" \
+                "${MKL_ROOT}/redist/intel64" \
+                "${MKL_ROOT}/../../redist/intel64"
+            do
+                if [ -d "${MKL_TRY}" ]; then
+                    if ${CC} ${CFLAGS} \
+                        -I"${MKL_ROOT}/include" \
+                        -o conftest.exe conftest.c \
+                        -L"${MKL_TRY}" -lmkl_rt \
+                        ${PKG_LIBS} 2>/dev/null; then
+
+                        HAVE_BATCH_STRIDED="yes"
+                        PKG_CPPFLAGS="-DHAVE_BATCH_STRIDED -I\"${MKL_ROOT}/include\""
+                        PKG_LIBS="-L\"${MKL_TRY}\" -lmkl_rt ${PKG_LIBS}"
+                        break
+                    fi
+                fi
+            done
+        fi
+    fi
+fi
+
+## --------------------------------------------------------------------------
+## Result
+## --------------------------------------------------------------------------
+
+if [ "${HAVE_BATCH_STRIDED}" = "yes" ]; then
+    echo "  -> Found! Batched BLAS operations will use single-call dispatch."
 else
     echo ""
-    echo "  +------------------------------------------------------------------------------------------+"
-    echo "  |  For maximum batched matrix performance, install Intel MKL:                              |"
-    echo "  |                                                                                          |"
-    echo "  |    https://www.intel.com/content/www/us/en/developer/tools/oneapi/onemkl-download.html   |"
-    echo "  |                                                                                          |"
-    echo "  |  Then reinstall dMod to pick up the optimized backend.                                   |"
-    echo "  +------------------------------------------------------------------------------------------+"
+    echo "  +--------------------------------------------------------------------------------------------+"
+    echo "  |  For maximum performance of batched matrix multiplication:                                 |"
+    echo "  |                                                                                            |"
+    echo "  |  1. Install Intel oneAPI Math Kernel Library if not already installed:                     |"
+    echo "  |       https://www.intel.com/content/www/us/en/developer/tools/oneapi/onemkl-download.html  |"
+    echo "  |                                                                                            |"
+    echo "  |  2. Check if MKLROOT is set:                                                               |"
+    echo "  |       In R, run:  Sys.getenv('MKLROOT')                                                    |"
+    echo "  |       - If it prints a valid path, MKLROOT is set.                                         |"
+    echo "  |       - If it is empty or invalid, set it:                                                 |"
+    echo "  |             Sys.setenv(MKLROOT='C:/Program Files (x86)/Intel/oneAPI/mkl/latest')           |"
+    echo "  |                                                                                            |"
+    echo "  |  3. Ensure mkl_rt.dll is in your PATH:                                                     |"
+    echo "  |       In R, run:                                                                           |"
+    echo "  |             Sys.setenv(PATH=paste(Sys.getenv('PATH'),                                      |"
+    echo "  |                                  paste0(Sys.getenv('MKLROOT'), '/redist/intel64'),         |"
+    echo "  |                                  sep=.Platform$path.sep))                                  |"
+    echo "  |                                                                                            |"
+    echo "  |  4. Reinstall dMod to enable MKL backend.                                                  |"
+    echo "  +--------------------------------------------------------------------------------------------+"
     echo ""
 fi
 
+
+
 rm -f conftest.exe conftest.c conftest.o
 
-# ---- Write src/Makevars.win ------------------------------------------------
+## --------------------------------------------------------------------------
+## Write src/Makevars.win
+## --------------------------------------------------------------------------
 
 echo "* Generating src/Makevars.win ..."
 

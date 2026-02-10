@@ -2,20 +2,35 @@
 % Please edit documentation in R/data.R
 \name{res}
 \alias{res}
-\title{Compare data and model prediction by computing residuals}
+\title{Compute residuals between data and model prediction}
 \usage{
 res(data, out, err = NULL)
 }
 \arguments{
-\item{data}{data.frame with columns: time, name, value, sigma, lloq}
+\item{data}{Data frame with columns \code{time}, \code{name}, \code{value}, \code{sigma}, \code{lloq}.
+Rows with \code{sigma = NA} are filled from \code{err}.}
 
-\item{out}{matrix with predictions (first column = time), optional "deriv" attribute}
+\item{out}{Prediction matrix (first column = time, remaining = observables).
+Optional \code{"deriv"} attribute: \verb{[name, param, time]} array.}
 
-\item{err}{optional matrix with error model predictions, optional "deriv" attribute}
+\item{err}{Optional error-model matrix (same layout as \code{out}).
+Optional \code{"deriv"} attribute: \verb{[name, param, time]} array.}
 }
 \value{
-objframe with attributes "deriv", "deriv.err"
+An \code{\link[=objframe]{objframe()}} with columns \code{time}, \code{name}, \code{value}, \code{prediction},
+\code{sigma}, \code{residual}, \code{weighted.residual}, \code{bloq}, \code{weighted.0} and
+attributes \code{"deriv"} and \code{"deriv.err"}.
 }
 \description{
-Compare data and model prediction by computing residuals
+Matches data to predictions by time and observable, computes (weighted)
+residuals, and propagates parameter derivatives. Values below \code{lloq} are
+censored via \code{pmax(value, lloq)}.
+}
+\details{
+The returned \code{"deriv"} and \code{"deriv.err"} matrices have shape
+\eqn{n \times p}{n x p} (residuals x parameters), extracted from the
+\verb{[name, param, time]} arrays on \code{out} and \code{err}.
+}
+\seealso{
+\code{\link[=objframe]{objframe()}}
 }

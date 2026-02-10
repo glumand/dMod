@@ -61,18 +61,21 @@ p <- P(trafo, condition = "closed", compile = F)
 
 
 # Compile the objects
-compile(g, x, p, cores = 8) # Compile C/C++ output of odemodel in parallel
+compile(g, x, p, output = "bamodel", cores = 8) # Compile C/C++ output of odemodel in parallel
 
 ## Use simulate data to calibrate outer model parameters ---
 outerpars <- getParameters(p)
 pouter <- structure(rep(-1,length(outerpars)), names = outerpars)
 
 prd <- x*p
-debugonce(x)
+# debugonce(x)
 times <- seq(0, 45, len = 300)
 # debugonce(g)
 out <- prd(times, pouter)
+out %>% plot()
 out %>% getDerivs() %>% plot()
+
+myderivs <- attr(out$closed, "deriv")
 # Define objective function
 obj <- normL2(data, g * x * p)
 
@@ -112,7 +115,7 @@ system.time({obj(pouter)})
 myfit <- trust(obj, pouter, rinit = 0.1, rmax = 5, iterlim = 500, printIter = T)
 
 # Fit 50 times, sample with sd=4 around pouter
-out_frame <- mstrust(obj, pouter, sd = 4, studyname = "bamodel", cores=20, fits=100, iterlim = 1e3)
+out_frame <- mstrust(obj, pouter, sd = 4, studyname = "bamodel", cores=detectFreeCores(), fits=100, iterlim = 1e3)
 out_frame <- as.parframe(out_frame)
 plotValues(out_frame) # Show "Waterfall" plot
 plotPars(out_frame) # Show parameter plot
@@ -133,7 +136,9 @@ profiles_integrate <- profile(obj, bestfit, whichPar = names(bestfit), method = 
 profiles_optimize <- profile(obj, bestfit, whichPar = names(bestfit), method = "optimize", cores = 10, limits = c(lower = -5, upper = 5), 
                              stepControl = list(stepsize = 1e-4, min = 1e-4, max = Inf, atol = 1e-2, rtol = 1e-2, limit = 200, stop = "data"))
 
+proflist <- list(integrate = profiles_integrate, optimize = profiles_optimize)
 # plotProfile(profiles)
+plotProfile(proflist, mode %in% c("data", "prior"))
 plotProfile(profiles_integrate, mode %in% c("data", "prior"))
 plotProfile(profiles_optimize, mode %in% c("data", "prior"))
 # plotPaths(profiles, whichPar = "TCA_CANA")

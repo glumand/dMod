@@ -691,35 +691,28 @@ objlist <- function(value, gradient, hessian) {
 #' An objective frame stores residuals and their derivatives with respect to parameters.
 #' It is typically created by [res] and used internally in objective functions.
 #'
-#' @param mydata Data frame produced by [res].
-#' @param deriv numeric matrix of first-order derivatives of residuals (∂ri/∂θ).
-#' @param deriv.err numeric matrix of first-order derivatives of the error model (∂σ/∂θ).
+#' @param mydata data.table produced by [res]
+#' @param deriv numeric matrix of first-order derivatives of residuals (Jacobian)
+#' @param deriv.err numeric matrix of first-order derivatives of the error model
 #'
 #' @return
-#' An object of class `"objframe"` (data.frame) with attributes `"deriv"` and `"deriv.err"`.
+#' An object of class `"objframe"` (data.table) with attributes `"deriv"` and `"deriv.err"`.
 #' These arrays have the same parameter axes as those returned by [prdframe] and [res].
 #'
 #' @export
-objframe <- function(mydata,
-                     deriv = NULL,
-                     deriv.err = NULL) {
+objframe <- function(mydata, deriv = NULL, deriv.err = NULL) {
   
-  # Validate structure
-  mydata <- as.data.frame(mydata)
-  required.names <- c("time", "name", "value", "prediction",
-                      "sigma", "residual", "weighted.residual",
-                      "bloq", "weighted.0")
-  if (!all(required.names %in% names(mydata)))
+  required <- c("time", "name", "value", "prediction",
+                "sigma", "residual", "weighted.residual",
+                "bloq", "weighted.0")
+  if (!all(required %in% names(mydata)))
     stop("mydata does not have all required columns.")
   
-  out <- mydata[, required.names]
-  
-  # Attach derivative attributes
-  attr(out, "deriv")      <- deriv
-  attr(out, "deriv.err")  <- deriv.err
-  
-  class(out) <- c("objframe", "data.frame")
-  return(out)
+  out <- data.table::as.data.table(mydata)[, ..required]
+  data.table::setattr(out, "deriv",     deriv)
+  data.table::setattr(out, "deriv.err", deriv.err)
+  data.table::setattr(out, "class", c("objframe", "data.table", "data.frame"))
+  out
 }
 
 
@@ -1580,18 +1573,18 @@ getDerivs.prdframe <- function(x, ...) {
     stop("Object does not contain first-order derivatives.")
   
   dn <- dimnames(derivs)
-  n  <- dim(derivs)[1]
-  v  <- dim(derivs)[2]
-  d  <- dim(derivs)[3]
+  n  <- dim(derivs)[3]
+  v  <- dim(derivs)[1]
+  d  <- dim(derivs)[2]
   
-  varnames <- dn[[2]] %||% paste0("var", seq_len(v))
-  parnames <- dn[[3]] %||% paste0("par", seq_len(d))
+  varnames <- dn[[1]] %||% paste0("var", seq_len(v))
+  parnames <- dn[[2]] %||% paste0("par", seq_len(d))
   
   derivswide <- times
   
   for (i in seq_len(v)) {
-    m <- matrix(derivs[, i, , drop = FALSE], nrow = n, ncol = d)
-    colnames(m) <- paste0("∂", varnames[i], "/∂", parnames)
+    m <- t(matrix(derivs[i, , ], nrow = d, ncol = n))
+    colnames(m) <- paste0("\u2202", varnames[i], "/\u2202", parnames)
     derivswide <- cbind(derivswide, m)
   }
   

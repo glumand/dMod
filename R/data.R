@@ -1,77 +1,85 @@
-#' Compare data and model prediction by computing residuals
+#' Compute residuals between data and model prediction
 #'
-#' @param data data.frame with columns: time, name, value, sigma, lloq
-#' @param out matrix with predictions (first column = time), optional "deriv" attribute
-#' @param err optional matrix with error model predictions, optional "deriv" attribute
-#' @return objframe with attributes "deriv", "deriv.err"
+#' Matches data to predictions by time and observable, computes (weighted)
+#' residuals, and propagates parameter derivatives. Values below `lloq` are
+#' censored via `pmax(value, lloq)`.
+#'
+#' @md
+#' @param data Data frame with columns `time`, `name`, `value`, `sigma`, `lloq`.
+#'   Rows with `sigma = NA` are filled from `err`.
+#' @param out Prediction matrix (first column = time, remaining = observables).
+#'   Optional `"deriv"` attribute: `[name, param, time]` array.
+#' @param err Optional error-model matrix (same layout as `out`).
+#'   Optional `"deriv"` attribute: `[name, param, time]` array.
+#'
+#' @details
+#' The returned `"deriv"` and `"deriv.err"` matrices have shape
+#' \eqn{n \times p}{n x p} (residuals x parameters), extracted from the
+#' `[name, param, time]` arrays on `out` and `err`.
+#'
+#' @return An [objframe()] with columns `time`, `name`, `value`, `prediction`,
+#'   `sigma`, `residual`, `weighted.residual`, `bloq`, `weighted.0` and
+#'   attributes `"deriv"` and `"deriv.err"`.
+#'
+#' @seealso [objframe()]
 #' @export
 res <- function(data, out, err = NULL) {
   
   data$name <- as.character(data$name)
   n <- nrow(data)
-  
   times <- sort(unique(data$time))
   names <- unique(data$name)
   
-  dt <- match.num(data$time, times)
-  dn <- match(data$name, names)
-  
-  ot <- match.num(times, out[,1])
-  on <- match(names, colnames(out))
-  if (anyNA(on))
+  ti <- match.num(times, out[, 1])[match.num(data$time, times)]
+  ni <- match(names, colnames(out))[match(data$name, names)]
+  if (anyNA(ni))
     stop("Observable not found: ",
          paste(setdiff(names, colnames(out)), collapse = ", "))
-  
-  ti <- ot[dt]; ni <- on[dn]
   if (anyNA(ti)) stop("Some data$time not found in out[,1]")
   
   pred <- out[cbind(ti, ni)]
   
   deriv <- NULL
   if (!is.null(d <- attr(out, "deriv"))) {
-    oi <- match(data$name, dimnames(d)[[2]])
-    np <- dim(d)[3]
+    oi <- match(data$name, dimnames(d)[[1]])
+    np <- dim(d)[2]
     deriv <- matrix(
-      d[cbind(rep(ti, np), rep(oi, np), rep(seq_len(np), each = n))],
-      n, np, dimnames = list(NULL, dimnames(d)[[3]])
-    )
+      d[cbind(rep(oi, np), rep(seq_len(np), each = n), rep(ti, np))],
+      n, np, dimnames = list(NULL, dimnames(d)[[2]]))
   }
   
-  sig <- data$sigma
-  sNA <- is.na(sig)
+  sig  <- data$sigma
+  sNA  <- is.na(sig)
   derr <- NULL
   
   if (any(sNA)) {
     if (is.null(err)) stop("NA sigmas but no errmodel")
-    et <- match.num(times, err[,1])
-    en <- match(names, colnames(err))
-    ti_e <- et[dt]; ni_e <- en[dn]
+    ti_e <- match.num(times, err[, 1])[match.num(data$time, times)]
+    ni_e <- match(names, colnames(err))[match(data$name, names)]
     sig[sNA] <- err[cbind(ti_e, ni_e)][sNA]
     
     if (!is.null(de <- attr(err, "deriv"))) {
-      oi <- match(data$name, dimnames(de)[[2]])
-      np <- dim(de)[3]
-      derr <- matrix(0, n, np, dimnames = list(NULL, dimnames(de)[[3]]))
-      derr[sNA,] <- matrix(
-        de[cbind(rep(ti_e[sNA], np),
-                 rep(oi[sNA], np),
-                 rep(seq_len(np), each = sum(sNA)))],
-        sum(sNA), np
-      )
+      oi <- match(data$name, dimnames(de)[[1]])
+      np <- dim(de)[2]
+      ns <- sum(sNA)
+      derr <- matrix(0, n, np, dimnames = list(NULL, dimnames(de)[[2]]))
+      derr[sNA, ] <- matrix(
+        de[cbind(rep(oi[sNA], np), rep(seq_len(np), each = ns), rep(ti_e[sNA], np))],
+        ns, np)
     }
   }
   
-  val <- pmax(data$value, data$lloq)
+  val  <- pmax(data$value, data$lloq)
   resi <- pred - val
-  inv <- 1 / sig
+  inv  <- 1 / sig
   
   objframe(
-    data.frame(data[c("time","name")], value = val,
-               prediction = pred, sigma = sig,
-               residual = resi, weighted.residual = resi * inv,
-               bloq = val <= data$lloq, weighted.0 = pred * inv),
-    deriv = deriv, deriv.err = derr
-  )
+    data.table::data.table(
+      time = data$time, name = data$name, value = val,
+      prediction = pred, sigma = sig, residual = resi,
+      weighted.residual = resi * inv,
+      bloq = val <= data$lloq, weighted.0 = pred * inv),
+    deriv = deriv, deriv.err = derr)
 }
 
 
