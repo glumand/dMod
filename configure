@@ -1,79 +1,76 @@
 #!/bin/sh
-# configure script for dMod package
-# Detects availability of cblas_dgemm_batch (Intel MKL / OpenBLAS)
 
-## --------------------------------------------------------------------------
-## Get R compilation settings
-## --------------------------------------------------------------------------
+# Path to R
+R_BIN="${R_HOME:-$(R RHOME)}/bin/R"
 
-CC=`"${R_HOME}/bin/R" CMD config CC`
-CFLAGS=`"${R_HOME}/bin/R" CMD config CFLAGS`
-BLAS_LIBS=`"${R_HOME}/bin/R" CMD config BLAS_LIBS`
-LAPACK_LIBS=`"${R_HOME}/bin/R" CMD config LAPACK_LIBS`
-FLIBS=`"${R_HOME}/bin/R" CMD config FLIBS`
+# Compiler and flags from R
+CC="$($R_BIN CMD config CC)"
+CFLAGS="$($R_BIN CMD config CFLAGS)"
+CPPFLAGS="$($R_BIN CMD config CPPFLAGS)"
+BLAS_LIBS="$($R_BIN CMD config BLAS_LIBS)"
+LAPACK_LIBS="$($R_BIN CMD config LAPACK_LIBS)"
+FLIBS="$($R_BIN CMD config FLIBS)"
 
 PKG_CPPFLAGS=""
 PKG_LIBS="${LAPACK_LIBS} ${BLAS_LIBS} ${FLIBS}"
 
+# Optional MKL flags if an MKL module is loaded (HPC)
+MKL_FLAGS=""
+if [ -n "$MKLROOT" ]; then
+    MKL_FLAGS="-I${MKLROOT}/include -L${MKLROOT}/lib/intel64 -lmkl_rt -lpthread -lm -ldl"
+fi
+
 echo "* Checking for cblas_dgemm_batch ..."
 
-## --------------------------------------------------------------------------
-## Test if symbol is available (LP64 ABI: all int)
-## --------------------------------------------------------------------------
-
-cat > conftest.c <<EOF
-/* Test for cblas_dgemm_batch with LP64 ABI (32-bit integers) */
+cat > conftest.c <<'EOF'
 typedef enum { CblasColMajor = 102 } CBLAS_LAYOUT;
 typedef enum { CblasNoTrans = 111 } CBLAS_TRANSPOSE;
-
 extern void cblas_dgemm_batch(
     const CBLAS_LAYOUT,
     const CBLAS_TRANSPOSE*, const CBLAS_TRANSPOSE*,
     const int*, const int*, const int*,
     const double*,
-    const double**, const int*,
-    const double**, const int*,
+    const double* const*, const int*,
+    const double* const*, const int*,
     const double*,
-    double**, const int*,
+    double* const*, const int*,
     const int, const int*);
 
 int main(void) {
     double a = 1.0, b = 1.0, c = 0.0;
     const double *a_ptr = &a, *b_ptr = &b;
     double *c_ptr = &c;
-    CBLAS_TRANSPOSE transa = CblasNoTrans, transb = CblasNoTrans;
+    CBLAS_TRANSPOSE ta = CblasNoTrans, tb = CblasNoTrans;
     int m = 1, n = 1, k = 1, lda = 1, ldb = 1, ldc = 1;
     double alpha = 1.0, beta = 0.0;
-    int group_count = 1, group_size = 1;
-    
-    cblas_dgemm_batch(
-        CblasColMajor,
-        &transa, &transb,
-        &m, &n, &k,
-        &alpha,
-        &a_ptr, &lda,
-        &b_ptr, &ldb,
-        &beta,
-        &c_ptr, &ldc,
-        group_count, &group_size);
+    int gc = 1, gs = 1;
+    cblas_dgemm_batch(CblasColMajor, &ta, &tb,
+                      &m, &n, &k, &alpha,
+                      &a_ptr, &lda,
+                      &b_ptr, &ldb,
+                      &beta,
+                      &c_ptr, &ldc,
+                      gc, &gs);
     return 0;
 }
 EOF
 
-HAVE_BATCH_GEMM="no"
+have_batch=no
 
-if ${CC} ${CFLAGS} -o conftest conftest.c ${PKG_LIBS} 2>/dev/null; then
-    HAVE_BATCH_GEMM="yes"
-    PKG_CPPFLAGS="-DHAVE_BATCH_GEMM"
-fi
+# Try R's BLAS first, then add MKL flags if available
+for libs in "$PKG_LIBS" "$MKL_FLAGS $PKG_LIBS"; do
+    [ -z "$libs" ] && continue
+    if ${CC} ${CFLAGS} -o conftest conftest.c ${CPPFLAGS} ${libs} >/dev/null 2>&1; then
+        have_batch=yes
+        PKG_LIBS="${libs}"
+        break
+    fi
+done
 
 rm -f conftest conftest.c conftest.o
 
-## --------------------------------------------------------------------------
-## Result
-## --------------------------------------------------------------------------
-
-if [ "${HAVE_BATCH_GEMM}" = "yes" ]; then
+if [ "${have_batch}" = "yes" ]; then
+    PKG_CPPFLAGS="${PKG_CPPFLAGS} -DHAVE_BATCH_GEMM"
     echo "  ✓ cblas_dgemm_batch found"
 else
     echo "  ✗ cblas_dgemm_batch not found - using fallback implementation"
@@ -87,27 +84,24 @@ else
     echo "  │       Fedora/RHEL:    sudo dnf install intel-oneapi-mkl-devel                              │"
     echo "  │       macOS/conda:    conda install mkl mkl-devel                                          │"
     echo "  │                                                                                            │"
-    echo "  │  2. Make sure, that MKL is set as R's BLAS backend so that R links against it:             │"
+    echo "  │  2. Make sure that MKL is set as R's BLAS backend so that R links against it:              │"
     echo "  │                                                                                            │"
     echo "  │       Ubuntu/Debian:  sudo update-alternatives --config libblas.so.3-x86_64-linux-gnu      │"
     echo "  │                                                                                            │"
-    echo "  │  3. Reinstall dMod to pick up the optimized backend.                                       │"
+    echo "  │  3. On HPC systems you must load the MKL module (e.g. module load numlib/mkl/2022.2)       │"
+    echo "  │     before running R CMD INSTALL so that MKL can be found.                                 │"
+    echo "  │                                                                                            │"
+    echo "  │  4. Reinstall dMod to pick up the optimized backend.                                       │"
     echo "  └────────────────────────────────────────────────────────────────────────────────────────────┘"
     echo ""
 fi
 
-## --------------------------------------------------------------------------
-## Write src/Makevars
-## --------------------------------------------------------------------------
-
+# Write src/Makevars
 echo "* Generating src/Makevars ..."
-
 sed -e "s|@PKG_CPPFLAGS@|${PKG_CPPFLAGS}|" \
     -e "s|@PKG_LIBS@|${PKG_LIBS}|" \
     src/Makevars.in > src/Makevars
 
-echo ""
 echo "  PKG_CPPFLAGS: ${PKG_CPPFLAGS}"
 echo "  PKG_LIBS:     ${PKG_LIBS}"
-echo ""
 echo "* Configuration complete."
