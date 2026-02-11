@@ -34,7 +34,7 @@ and its derivatives with respect to p.
 }
 \examples{
 prediction <- list(a = matrix(c(0, 1), nrow = 1, dimnames = list(NULL, c("time", "A"))))
-derivs <- array(c(1, 0.1), dim = c(1, 1, 2), dimnames = list(NULL, "A", c("A", "k1")))
+derivs <- matrix(c(0, 1, 0.1), nrow = 1, dimnames = list(NULL, c("time", "A.A", "A.k1")))
 attr(prediction$a, "deriv") <- derivs
 p0 <- c(A = 1, k1 = 2)
 

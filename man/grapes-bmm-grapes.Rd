@@ -26,4 +26,3 @@ Efficient batched matrix multiplication with BLAS-backend.
 }
 }
 
-\keyword{internal}

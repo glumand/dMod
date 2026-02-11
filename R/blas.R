@@ -12,7 +12,7 @@
 #' @param A Numeric matrix or 3D array
 #' @param B Numeric matrix or 3D array
 #' @return Numeric 3D array with dim \code{[M, N, B]}
-#' @keywords internal
+#' @export
 `%bmm%` <- function(A, B) {
   da <- dim(A)
   db <- dim(B)

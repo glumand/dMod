@@ -8,25 +8,21 @@
  *
  * OPERATIONS:
  *
- *   bmm_lb:  [M,K,B] x [K,N]   -> [M,N,B]   (B dgemm / 1 batched dgemm call)
- *   bmm_rb:  [M,K]   x [K,N,B] -> [M,N,B]   (1 dgemm call)
- *   bmm_bb:  [M,K,B] x [K,N,B] -> [M,N,B]   (B dgemm / 1 batched dgemm call)
+ *   bmm_lb:  [M,K,B] x [K,N]   -> [M,N,B]   (1 batched dgemm call if available)
+ *   bmm_rb:  [M,K]   x [K,N,B] -> [M,N,B]   (1 dgemm call - reshape trick)
+ *   bmm_bb:  [M,K,B] x [K,N,B] -> [M,N,B]   (1 batched dgemm call if available)
  *
- * If R is linked against Intel MKL, configure detects
- * cblas_dgemm_batch_strided and defines HAVE_BATCH_STRIDED.
- * In that case bmm_lb and bmm_bb use a single batched BLAS call.
+ * If configure detects cblas_dgemm_batch (MKL, FlexiBLAS, etc.),
+ * it defines HAVE_BATCH_GEMM. Then bmm_lb and bmm_bb use a single
+ * batched BLAS call.
  *
  * ============================================================================
  */
 
 #include <Rcpp.h>
-
-#ifdef HAVE_BATCH_STRIDED
-#include <mkl.h>
-#else
 #include <R_ext/BLAS.h>
 #include <R_ext/RS.h>
-#endif
+#include <vector>
 
 using namespace Rcpp;
 
@@ -35,13 +31,58 @@ using namespace Rcpp;
 #endif
 
 
+#ifdef HAVE_BATCH_GEMM
+/* --------------------------------------------------------------------------
+ * CBLAS declarations - no MKL header needed
+ * --------------------------------------------------------------------------
+ * We declare these ourselves to guarantee LP64 ABI (32-bit integers).
+ */
+extern "C" {
+  
+  typedef enum { CblasRowMajor = 101, CblasColMajor = 102 } CBLAS_LAYOUT;
+  typedef enum { CblasNoTrans = 111, CblasTrans = 112, CblasConjTrans = 113 } CBLAS_TRANSPOSE;
+  
+  void cblas_dgemm(const CBLAS_LAYOUT Layout, const CBLAS_TRANSPOSE TransA, const CBLAS_TRANSPOSE TransB,
+                   const int M, const int N, const int K,
+                   const double alpha, const double* A, const int lda,
+                   const double* B, const int ldb,
+                   const double beta, double* C, const int ldc);
+  
+  /*
+   * cblas_dgemm_batch: Group API for batched GEMM
+   * 
+   * Performs multiple groups of GEMM operations. Each group shares the same
+   * parameters (transa, transb, m, n, k, alpha, beta, lda, ldb, ldc) but
+   * operates on different matrices specified by pointer arrays.
+   */
+  void cblas_dgemm_batch(const CBLAS_LAYOUT Layout,
+                         const CBLAS_TRANSPOSE* transa_array,
+                         const CBLAS_TRANSPOSE* transb_array,
+                         const int* m_array,
+                         const int* n_array,
+                         const int* k_array,
+                         const double* alpha_array,
+                         const double** a_array,
+                         const int* lda_array,
+                         const double** b_array,
+                         const int* ldb_array,
+                         const double* beta_array,
+                         double** c_array,
+                         const int* ldc_array,
+                         const int group_count,
+                         const int* group_size);
+  
+}  // extern "C"
+#endif
+
+
 /* --------------------------------------------------------------------------
  * Query whether batched BLAS is available
  * -------------------------------------------------------------------------- */
 
 // [[Rcpp::export]]
-bool has_batch_strided() {
-#ifdef HAVE_BATCH_STRIDED
+bool has_batch_gemm() {
+#ifdef HAVE_BATCH_GEMM
   return true;
 #else
   return false;
@@ -49,19 +90,23 @@ bool has_batch_strided() {
 }
 
 
-#ifndef HAVE_BATCH_STRIDED
 /* --------------------------------------------------------------------------
- * Standard BLAS wrapper: C = A * B
+ * Standard BLAS wrapper: C = alpha * A * B + beta * C
  * -------------------------------------------------------------------------- */
 inline void dgemm_nn(int M, int N, int K,
+                     double alpha,
                      const double* A, int lda,
                      const double* B, int ldb,
+                     double beta,
                      double* C, int ldc) {
-  const double one = 1.0, zero = 0.0;
-  F77_CALL(dgemm)("N", "N", &M, &N, &K, &one,
-           A, &lda, B, &ldb, &zero, C, &ldc FCONE FCONE);
-}
+#ifdef HAVE_BATCH_GEMM
+  cblas_dgemm(CblasColMajor, CblasNoTrans, CblasNoTrans,
+              M, N, K, alpha, A, lda, B, ldb, beta, C, ldc);
+#else
+  F77_CALL(dgemm)("N", "N", &M, &N, &K, &alpha,
+           A, &lda, B, &ldb, &beta, C, &ldc FCONE FCONE);
 #endif
+}
 
 
 /* --------------------------------------------------------------------------
@@ -70,8 +115,9 @@ inline void dgemm_nn(int M, int N, int K,
  *
  * Left argument batched: same B multiplied into each batch of A.
  *
- * With HAVE_BATCH_STRIDED: 1 stided dgemm call (stride_B = 0 reuses the same matrix).
- * Fallback: B dgemm calls on contiguous slices.
+ * With HAVE_BATCH_GEMM: 1 batched dgemm call with pointer arrays.
+ *   - All B pointers point to the same matrix (broadcast).
+ * Fallback: Bn dgemm calls on contiguous slices.
  */
 // [[Rcpp::export]]
 NumericVector bmm_lb(NumericVector A, NumericVector B,
@@ -79,30 +125,55 @@ NumericVector bmm_lb(NumericVector A, NumericVector B,
   
   NumericVector C((size_t) M * N * Bn);
   
-#ifdef HAVE_BATCH_STRIDED
-  MKL_INT m = M, n = N, k = K, batch = Bn;
-  MKL_INT lda = M, ldb = K, ldc = M;
-  MKL_INT strideA = (MKL_INT) M * K;
-  MKL_INT strideB = 0;
-  MKL_INT strideC = (MKL_INT) M * N;
+#ifdef HAVE_BATCH_GEMM
+  // Build pointer arrays
+  std::vector<const double*> a_ptrs(Bn);
+  std::vector<const double*> b_ptrs(Bn);
+  std::vector<double*> c_ptrs(Bn);
   
-  cblas_dgemm_batch_strided(
-    CblasColMajor, CblasNoTrans, CblasNoTrans,
-    m, n, k,
-    1.0,
-    A.begin(), lda, strideA,
-    B.begin(), ldb, strideB,
-    0.0,
-    C.begin(), ldc, strideC,
-    batch
-  );
+  const int MK = M * K;
+  const int MN = M * N;
+  const double* A_data = A.begin();
+  const double* B_data = B.begin();
+  double* C_data = C.begin();
+  
+  for (int b = 0; b < Bn; ++b) {
+    a_ptrs[b] = A_data + b * MK;
+    b_ptrs[b] = B_data;  // Same B for all batches (broadcast)
+    c_ptrs[b] = C_data + b * MN;
+  }
+  
+  // Single group with Bn operations
+  CBLAS_TRANSPOSE transa = CblasNoTrans;
+  CBLAS_TRANSPOSE transb = CblasNoTrans;
+  double alpha = 1.0;
+  double beta = 0.0;
+  int lda = M;
+  int ldb = K;
+  int ldc = M;
+  int group_count = 1;
+  int group_size = Bn;
+  
+  cblas_dgemm_batch(CblasColMajor,
+                    &transa, &transb,
+                    &M, &N, &K,
+                    &alpha,
+                    a_ptrs.data(), &lda,
+                    b_ptrs.data(), &ldb,
+                    &beta,
+                    c_ptrs.data(), &ldc,
+                    group_count, &group_size);
 #else
   const int MK = M * K;
   const int MN = M * N;
+  const double* Bptr = B.begin();
+  
   for (int b = 0; b < Bn; ++b) {
     dgemm_nn(M, N, K,
+             1.0,
              &A[b * MK], M,
-             &B[0], K,
+             Bptr, K,
+             0.0,
              &C[b * MN], M);
   }
 #endif
@@ -121,7 +192,6 @@ NumericVector bmm_lb(NumericVector A, NumericVector B,
  * [K,N,B] is contiguous as [K, N*B] in memory.
  * So: [M,K] x [K, N*B] = [M, N*B] which IS [M,N,B].
  * ONE dgemm call always: no batched BLAS needed!
- * 
  */
 // [[Rcpp::export]]
 NumericVector bmm_rb(NumericVector A, NumericVector B,
@@ -129,21 +199,15 @@ NumericVector bmm_rb(NumericVector A, NumericVector B,
   
   NumericVector C(M * N * Bn);
   
-#ifdef HAVE_BATCH_STRIDED
-  // MKL: use standard cblas_dgemm
-  cblas_dgemm(CblasColMajor, CblasNoTrans, CblasNoTrans,
-              M, N*Bn, K,
-              1.0, &A[0], M, &B[0], K, 0.0, &C[0], M);
-#else
-  // fallback: use our wrapper
   dgemm_nn(M, N * Bn, K,
-           &A[0], M,
-           &B[0], K,
-           &C[0], M);
-#endif
-           
-           C.attr("dim") = IntegerVector::create(M, N, Bn);
-           return C;
+           1.0,
+           A.begin(), M,
+           B.begin(), K,
+           0.0,
+           C.begin(), M);
+  
+  C.attr("dim") = IntegerVector::create(M, N, Bn);
+  return C;
 }
 
 
@@ -153,8 +217,8 @@ NumericVector bmm_rb(NumericVector A, NumericVector B,
  *
  * Both arguments batched. Each slice [,,b] is contiguous column-major.
  *
- * With HAVE_BATCH_STRIDED: 1 stided dgemm call.
- * Fallback: B dgemm calls on contiguous slices.
+ * With HAVE_BATCH_GEMM: 1 batched dgemm call with pointer arrays.
+ * Fallback: Bn dgemm calls on contiguous slices.
  */
 // [[Rcpp::export]]
 NumericVector bmm_bb(NumericVector A, NumericVector B,
@@ -162,31 +226,55 @@ NumericVector bmm_bb(NumericVector A, NumericVector B,
   
   NumericVector C((size_t) M * N * Bn);
   
-#ifdef HAVE_BATCH_STRIDED
-  MKL_INT m = M, n = N, k = K, batch = Bn;
-  MKL_INT lda = M, ldb = K, ldc = M;
-  MKL_INT strideA = (MKL_INT) M * K;
-  MKL_INT strideB = (MKL_INT) K * N;
-  MKL_INT strideC = (MKL_INT) M * N;
+#ifdef HAVE_BATCH_GEMM
+  // Build pointer arrays
+  std::vector<const double*> a_ptrs(Bn);
+  std::vector<const double*> b_ptrs(Bn);
+  std::vector<double*> c_ptrs(Bn);
   
-  cblas_dgemm_batch_strided(
-    CblasColMajor, CblasNoTrans, CblasNoTrans,
-    m, n, k,
-    1.0,
-    A.begin(), lda, strideA,
-    B.begin(), ldb, strideB,
-    0.0,
-    C.begin(), ldc, strideC,
-    batch
-  );
+  const int MK = M * K;
+  const int KN = K * N;
+  const int MN = M * N;
+  const double* A_data = A.begin();
+  const double* B_data = B.begin();
+  double* C_data = C.begin();
+  
+  for (int b = 0; b < Bn; ++b) {
+    a_ptrs[b] = A_data + b * MK;
+    b_ptrs[b] = B_data + b * KN;
+    c_ptrs[b] = C_data + b * MN;
+  }
+  
+  // Single group with Bn operations
+  CBLAS_TRANSPOSE transa = CblasNoTrans;
+  CBLAS_TRANSPOSE transb = CblasNoTrans;
+  double alpha = 1.0;
+  double beta = 0.0;
+  int lda = M;
+  int ldb = K;
+  int ldc = M;
+  int group_count = 1;
+  int group_size = Bn;
+  
+  cblas_dgemm_batch(CblasColMajor,
+                    &transa, &transb,
+                    &M, &N, &K,
+                    &alpha,
+                    a_ptrs.data(), &lda,
+                    b_ptrs.data(), &ldb,
+                    &beta,
+                    c_ptrs.data(), &ldc,
+                    group_count, &group_size);
 #else
   const int MK = M * K;
   const int KN = K * N;
   const int MN = M * N;
   for (int b = 0; b < Bn; ++b) {
     dgemm_nn(M, N, K,
+             1.0,
              &A[b * MK], M,
              &B[b * KN], K,
+             0.0,
              &C[b * MN], M);
   }
 #endif

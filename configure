@@ -1,8 +1,11 @@
 #!/bin/sh
 # configure script for dMod package
-# Detects availability of cblas_dgemm_batch_strided (MKL / OpenBLAS >= 0.3.27)
+# Detects availability of cblas_dgemm_batch (Intel MKL / OpenBLAS)
 
-# Get R compilation settings
+## --------------------------------------------------------------------------
+## Get R compilation settings
+## --------------------------------------------------------------------------
+
 CC=`"${R_HOME}/bin/R" CMD config CC`
 CFLAGS=`"${R_HOME}/bin/R" CMD config CFLAGS`
 BLAS_LIBS=`"${R_HOME}/bin/R" CMD config BLAS_LIBS`
@@ -12,85 +15,99 @@ FLIBS=`"${R_HOME}/bin/R" CMD config FLIBS`
 PKG_CPPFLAGS=""
 PKG_LIBS="${LAPACK_LIBS} ${BLAS_LIBS} ${FLIBS}"
 
-# ---- Test for cblas_dgemm_batch_strided ------------------------------------
-echo "* Checking for cblas_dgemm_batch_strided ..."
+echo "* Checking for cblas_dgemm_batch ..."
+
+## --------------------------------------------------------------------------
+## Test if symbol is available (LP64 ABI: all int)
+## --------------------------------------------------------------------------
 
 cat > conftest.c <<EOF
-#include <stddef.h>
+/* Test for cblas_dgemm_batch with LP64 ABI (32-bit integers) */
+typedef enum { CblasColMajor = 102 } CBLAS_LAYOUT;
+typedef enum { CblasNoTrans = 111 } CBLAS_TRANSPOSE;
 
-// Try to include proper CBLAS headers
-#if defined(__has_include)
-  #if __has_include(<mkl_cblas.h>)
-    #include <mkl_cblas.h>
-    #define HAVE_CBLAS_HEADER 1
-  #elif __has_include(<cblas.h>)
-    #include <cblas.h>
-    #define HAVE_CBLAS_HEADER 1
-  #endif
-#endif
+extern void cblas_dgemm_batch(
+    const CBLAS_LAYOUT,
+    const CBLAS_TRANSPOSE*, const CBLAS_TRANSPOSE*,
+    const int*, const int*, const int*,
+    const double*,
+    const double**, const int*,
+    const double**, const int*,
+    const double*,
+    double**, const int*,
+    const int, const int*);
 
-// Fallback: Manual declaration if no header found
-#ifndef HAVE_CBLAS_HEADER
-  typedef enum CBLAS_LAYOUT {CblasRowMajor=101, CblasColMajor=102} CBLAS_LAYOUT;
-  typedef enum CBLAS_TRANSPOSE {CblasNoTrans=111, CblasTrans=112} CBLAS_TRANSPOSE;
-  
-  extern void cblas_dgemm_batch_strided(
-      const CBLAS_LAYOUT Layout,
-      const CBLAS_TRANSPOSE TransA,
-      const CBLAS_TRANSPOSE TransB,
-      const int M, const int N, const int K,
-      const double alpha,
-      const double *A, const int lda, const int stride_a,
-      const double *B, const int ldb, const int stride_b,
-      const double beta,
-      double *C, const int ldc, const int stride_c,
-      const int batch_size);
-#endif
-
-int main() {
-    // Test call with NULL pointers (won't actually run)
-    cblas_dgemm_batch_strided(
-        CblasColMajor, CblasNoTrans, CblasNoTrans,
-        1, 1, 1,
-        1.0,
-        (const double*)NULL, 1, 1,
-        (const double*)NULL, 1, 1,
-        0.0,
-        (double*)NULL, 1, 1,
-        1);
+int main(void) {
+    double a = 1.0, b = 1.0, c = 0.0;
+    const double *a_ptr = &a, *b_ptr = &b;
+    double *c_ptr = &c;
+    CBLAS_TRANSPOSE transa = CblasNoTrans, transb = CblasNoTrans;
+    int m = 1, n = 1, k = 1, lda = 1, ldb = 1, ldc = 1;
+    double alpha = 1.0, beta = 0.0;
+    int group_count = 1, group_size = 1;
+    
+    cblas_dgemm_batch(
+        CblasColMajor,
+        &transa, &transb,
+        &m, &n, &k,
+        &alpha,
+        &a_ptr, &lda,
+        &b_ptr, &ldb,
+        &beta,
+        &c_ptr, &ldc,
+        group_count, &group_size);
     return 0;
 }
 EOF
 
-HAVE_BATCH_STRIDED="no"
+HAVE_BATCH_GEMM="no"
+
 if ${CC} ${CFLAGS} -o conftest conftest.c ${PKG_LIBS} 2>/dev/null; then
-    HAVE_BATCH_STRIDED="yes"
-    PKG_CPPFLAGS="${PKG_CPPFLAGS} -DHAVE_BATCH_STRIDED"
-    echo "  ✓ cblas_dgemm_batch_strided found - using optimized batched BLAS"
-else
-    echo "  ✗ cblas_dgemm_batch_strided not found - using fallback implementation"
-    echo ""
-    echo "  ┌──────────────────────────────────────────────────────────────┐"
-    echo "  │  For maximum batched matrix performance, install Intel MKL:  │"
-    echo "  │                                                              │"
-    echo "  │    Ubuntu/Debian:  sudo apt install intel-mkl                │"
-    echo "  │    Fedora/RHEL:    sudo dnf install intel-oneapi-mkl-devel   │"
-    echo "  │    macOS/conda:    conda install mkl mkl-devel               │"
-    echo "  │                                                              │"
-    echo "  │  Then reinstall dMod to pick up the optimized backend.       │"
-    echo "  └──────────────────────────────────────────────────────────────┘"
-    echo ""
+    HAVE_BATCH_GEMM="yes"
+    PKG_CPPFLAGS="-DHAVE_BATCH_GEMM"
 fi
+
 rm -f conftest conftest.c conftest.o
 
-# ---- Write src/Makevars ----------------------------------------------------
+## --------------------------------------------------------------------------
+## Result
+## --------------------------------------------------------------------------
+
+if [ "${HAVE_BATCH_GEMM}" = "yes" ]; then
+    echo "  ✓ cblas_dgemm_batch found"
+else
+    echo "  ✗ cblas_dgemm_batch not found - using fallback implementation"
+    echo ""
+    echo "  ┌────────────────────────────────────────────────────────────────────────────────────────────┐"
+    echo "  │  For maximum performance of batched matrix multiplication:                                 │"
+    echo "  │                                                                                            │"
+    echo "  │  1. Install Intel oneAPI Math Kernel Library if not already installed:                     │"
+    echo "  │                                                                                            │"
+    echo "  │       Ubuntu/Debian:  sudo apt install intel-mkl                                           │"
+    echo "  │       Fedora/RHEL:    sudo dnf install intel-oneapi-mkl-devel                              │"
+    echo "  │       macOS/conda:    conda install mkl mkl-devel                                          │"
+    echo "  │                                                                                            │"
+    echo "  │  2. Make sure, that MKL is set as R's BLAS backend so that R links against it:             │"
+    echo "  │                                                                                            │"
+    echo "  │       Ubuntu/Debian:  sudo update-alternatives --config libblas.so.3-x86_64-linux-gnu      │"
+    echo "  │                                                                                            │"
+    echo "  │  3. Reinstall dMod to pick up the optimized backend.                                       │"
+    echo "  └────────────────────────────────────────────────────────────────────────────────────────────┘"
+    echo ""
+fi
+
+## --------------------------------------------------------------------------
+## Write src/Makevars
+## --------------------------------------------------------------------------
+
 echo "* Generating src/Makevars ..."
+
 sed -e "s|@PKG_CPPFLAGS@|${PKG_CPPFLAGS}|" \
     -e "s|@PKG_LIBS@|${PKG_LIBS}|" \
     src/Makevars.in > src/Makevars
 
 echo ""
 echo "  PKG_CPPFLAGS: ${PKG_CPPFLAGS}"
-echo "  PKG_LIBS: ${PKG_LIBS}"
+echo "  PKG_LIBS:     ${PKG_LIBS}"
 echo ""
 echo "* Configuration complete."

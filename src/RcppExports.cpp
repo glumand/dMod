@@ -10,13 +10,13 @@ Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
 Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
-// has_batch_strided
-bool has_batch_strided();
-RcppExport SEXP _dMod_has_batch_strided() {
+// has_batch_gemm
+bool has_batch_gemm();
+RcppExport SEXP _dMod_has_batch_gemm() {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
-    rcpp_result_gen = Rcpp::wrap(has_batch_strided());
+    rcpp_result_gen = Rcpp::wrap(has_batch_gemm());
     return rcpp_result_gen;
 END_RCPP
 }
@@ -70,7 +70,7 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
-    {"_dMod_has_batch_strided", (DL_FUNC) &_dMod_has_batch_strided, 0},
+    {"_dMod_has_batch_gemm", (DL_FUNC) &_dMod_has_batch_gemm, 0},
     {"_dMod_bmm_lb", (DL_FUNC) &_dMod_bmm_lb, 6},
     {"_dMod_bmm_rb", (DL_FUNC) &_dMod_bmm_rb, 6},
     {"_dMod_bmm_bb", (DL_FUNC) &_dMod_bmm_bb, 6},
