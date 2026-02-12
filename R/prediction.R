@@ -517,10 +517,8 @@ Xd <- function(data, condition = NULL) {
 #' @param verbose Logical, print compiler output to the R console.
 #' 
 #' @return 
-#' An object of class [obsfn], i.e. a function 
-#' `g(..., deriv = TRUE, deriv2 = FALSE, condition = NULL, verbose = F)` representing the evaluation of the 
-#' observation function. The function returns observable values and, if requested, 
-#' their first- and second-order derivatives with respect to the parameters.
+#' An object of class [obsfn], i.e. a function  `g(..., fixed = NULL, deriv = TRUE, condition = NULL, env = NULL)`
+#' returning predictions for observables and its derivatives.
 #' 
 #' @example inst/examples/prediction.R
 #' 

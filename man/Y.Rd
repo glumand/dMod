@@ -52,10 +52,8 @@ of observables with respect to parameters.}
 of observables with respect to parameters.}
 }
 \value{
-An object of class \link{obsfn}, i.e. a function
-\code{g(..., deriv = TRUE, deriv2 = FALSE, condition = NULL, verbose = F)} representing the evaluation of the
-observation function. The function returns observable values and, if requested,
-their first- and second-order derivatives with respect to the parameters.
+An object of class \link{obsfn}, i.e. a function  \code{g(..., fixed = NULL, deriv = TRUE, condition = NULL, env = NULL)}
+returning predictions for observables and its derivatives.
 }
 \description{
 Creates an object of type \link{obsfn} that evaluates an observation function
