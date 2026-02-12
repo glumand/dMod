@@ -219,7 +219,7 @@ Xs.boost <- function(odemodel, forcings = NULL, events = NULL, names = NULL, con
   
   P2X <- function(times, pars, fixed = NULL, deriv = TRUE) {
     
-    fixedNames <- names(fixed)
+    fixedNames <- intersect(names(fixed),controls$sensnames)
     params <- c(unclass(pars), unclass(fixed))
     forcings <- controls$forcings
     names <- controls$names
@@ -526,7 +526,6 @@ Xd <- function(data, condition = NULL) {
 #' 
 #' @importFrom CppODE funCpp
 #' @importFrom abind abind
-#' @importFrom einsum einsum
 #' @export
 Y <- function(g, f = NULL, states = NULL, parameters = NULL, 
               condition = NULL, attach.input = TRUE,

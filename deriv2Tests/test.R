@@ -31,7 +31,7 @@ reactions <- eqnlist() %>%
 #             TCA_cell = "k_import * TCA_buffer - k_export_sinus * TCA_cell - k_export_cana * TCA_cell")
 
 # Translate reactions into ODE model object
-mymodel <- odemodel(reactions, modelname = "bamodel", compile = F)
+mymodel <- odemodel(reactions, modelname = "bamodel", compile = F, solver = "boost")
 # Generate trajectories for the default condition
 x <- Xs(mymodel)
 
