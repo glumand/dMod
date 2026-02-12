@@ -1,153 +1,120 @@
 #!/bin/sh
 # configure.win for dMod package (runs under Rtools sh on Windows)
-# Detects availability of cblas_dgemm_batch_strided (Intel MKL)
+# Detects availability of cblas_dgemm_batch (Intel MKL)
 
-## --------------------------------------------------------------------------
-## Get R compilation settings
-## --------------------------------------------------------------------------
+R_BIN="${R_HOME}/bin${R_ARCH_BIN}/R"
 
-CC=`"${R_HOME}/bin${R_ARCH_BIN}/R" CMD config CC`
-CFLAGS=`"${R_HOME}/bin${R_ARCH_BIN}/R" CMD config CFLAGS`
-BLAS_LIBS=`"${R_HOME}/bin${R_ARCH_BIN}/R" CMD config BLAS_LIBS`
-LAPACK_LIBS=`"${R_HOME}/bin${R_ARCH_BIN}/R" CMD config LAPACK_LIBS`
-FLIBS=`"${R_HOME}/bin${R_ARCH_BIN}/R" CMD config FLIBS`
+CC=$("${R_BIN}" CMD config CC)
+CFLAGS=$("${R_BIN}" CMD config CFLAGS)
+CPPFLAGS=$("${R_BIN}" CMD config CPPFLAGS)
+BLAS_LIBS=$("${R_BIN}" CMD config BLAS_LIBS)
+LAPACK_LIBS=$("${R_BIN}" CMD config LAPACK_LIBS)
+FLIBS=$("${R_BIN}" CMD config FLIBS)
 
 PKG_CPPFLAGS=""
 PKG_LIBS="${LAPACK_LIBS} ${BLAS_LIBS} ${FLIBS}"
 
-echo "* Checking for cblas_dgemm_batch_strided ..."
+# Resolve MKL: environment or well-known paths
+MKL_ROOT="${MKLROOT}"
+if [ -z "${MKL_ROOT}" ]; then
+    for d in \
+        "C:/Program Files (x86)/Intel/oneAPI/mkl/latest" \
+        "C:/Program Files/Intel/oneAPI/mkl/latest"
+    do
+        if [ -d "$d/include" ]; then MKL_ROOT="$d"; break; fi
+    done
+fi
 
-## --------------------------------------------------------------------------
-## Generate test file
-## --------------------------------------------------------------------------
+# Find mkl_rt DLL (may be called mkl_rt.dll or mkl_rt.2.dll etc.)
+MKL_DLL=""
+if [ -n "${MKL_ROOT}" ]; then
+    for trydir in "${MKL_ROOT}/bin" "${MKL_ROOT}/redist/intel64"; do
+        for f in "${trydir}"/mkl_rt*.dll; do
+            if [ -f "$f" ]; then MKL_DLL="$f"; break 2; fi
+        done
+    done
+fi
 
-cat > conftest.c <<EOF
-#include <stddef.h>
+MKL_FLAGS=""
+if [ -n "${MKL_DLL}" ]; then
+    MKL_FLAGS="-I\"${MKL_ROOT}/include\" \"${MKL_DLL}\""
+fi
 
-extern void cblas_dgemm_batch_strided(
-    int, int, int,
-    int, int, int,
-    double,
-    const double *, int, int,
-    const double *, int, int,
-    double,
-    double *, int, int,
-    int);
+echo "* Checking for cblas_dgemm_batch ..."
+
+cat > conftest.c <<'EOF'
+typedef enum { CblasColMajor = 102 } CBLAS_LAYOUT;
+typedef enum { CblasNoTrans = 111 } CBLAS_TRANSPOSE;
+extern void cblas_dgemm_batch(
+    const CBLAS_LAYOUT,
+    const CBLAS_TRANSPOSE*, const CBLAS_TRANSPOSE*,
+    const int*, const int*, const int*,
+    const double*,
+    const double* const*, const int*,
+    const double* const*, const int*,
+    const double*,
+    double* const*, const int*,
+    const int, const int*);
 
 int main(void) {
-    cblas_dgemm_batch_strided(
-        101, 111, 111,
-        1, 1, 1,
-        1.0,
-        (double*)0, 1, 1,
-        (double*)0, 1, 1,
-        0.0,
-        (double*)0, 1, 1,
-        1);
+    double a = 1.0, b = 1.0, c = 0.0;
+    const double *a_ptr = &a, *b_ptr = &b;
+    double *c_ptr = &c;
+    CBLAS_TRANSPOSE ta = CblasNoTrans, tb = CblasNoTrans;
+    int m = 1, n = 1, k = 1, lda = 1, ldb = 1, ldc = 1;
+    double alpha = 1.0, beta = 0.0;
+    int gc = 1, gs = 1;
+    cblas_dgemm_batch(CblasColMajor, &ta, &tb,
+                      &m, &n, &k, &alpha,
+                      &a_ptr, &lda,
+                      &b_ptr, &ldb,
+                      &beta,
+                      &c_ptr, &ldc,
+                      gc, &gs);
     return 0;
 }
 EOF
 
-HAVE_BATCH_STRIDED="no"
+have_batch=no
 
-## --------------------------------------------------------------------------
-## 1) Try R's BLAS first
-## --------------------------------------------------------------------------
-
-if ${CC} ${CFLAGS} -o conftest.exe conftest.c ${PKG_LIBS} 2>/dev/null; then
-    HAVE_BATCH_STRIDED="yes"
-    PKG_CPPFLAGS="-DHAVE_BATCH_STRIDED"
-fi
-
-## --------------------------------------------------------------------------
-## 2) Try Intel MKL explicitly
-## --------------------------------------------------------------------------
-
-if [ "${HAVE_BATCH_STRIDED}" = "no" ]; then
-    MKL_ROOT=""
-
-    if [ -n "${MKLROOT}" ]; then
-        MKL_ROOT="${MKLROOT}"
-    elif [ -d "C:/Program Files (x86)/Intel/oneAPI/mkl/latest" ]; then
-        MKL_ROOT="C:/Program Files (x86)/Intel/oneAPI/mkl/latest"
+# Try R's BLAS first, then MKL
+for libs in "${PKG_LIBS}" "${MKL_FLAGS} ${PKG_LIBS}"; do
+    [ -z "${libs}" ] && continue
+    if eval ${CC} ${CFLAGS} ${CPPFLAGS} -o conftest.exe conftest.c ${libs} >/dev/null 2>&1; then
+        have_batch=yes
+        PKG_LIBS="${libs}"
+        break
     fi
+done
 
-    if [ -n "${MKL_ROOT}" ] && [ -d "${MKL_ROOT}/include" ]; then
-        # Explicit header test
-        if [ ! -f "${MKL_ROOT}/include/mkl.h" ]; then
-            echo "  -> MKL detected but mkl.h not found, skipping MKL backend."
-        else
-            for MKL_TRY in \
-                "${MKL_ROOT}/lib" \
-                "${MKL_ROOT}/bin" \
-                "${MKL_ROOT}/redist/intel64" \
-                "${MKL_ROOT}/../../redist/intel64"
-            do
-                if [ -d "${MKL_TRY}" ]; then
-                    if ${CC} ${CFLAGS} \
-                        -I"${MKL_ROOT}/include" \
-                        -o conftest.exe conftest.c \
-                        -L"${MKL_TRY}" -lmkl_rt \
-                        ${PKG_LIBS} 2>/dev/null; then
+rm -f conftest.exe conftest.c conftest.o
 
-                        HAVE_BATCH_STRIDED="yes"
-                        PKG_CPPFLAGS="-DHAVE_BATCH_STRIDED -I\"${MKL_ROOT}/include\""
-                        PKG_LIBS="-L\"${MKL_TRY}\" -lmkl_rt ${PKG_LIBS}"
-                        break
-                    fi
-                fi
-            done
-        fi
-    fi
-fi
-
-## --------------------------------------------------------------------------
-## Result
-## --------------------------------------------------------------------------
-
-if [ "${HAVE_BATCH_STRIDED}" = "yes" ]; then
-    echo "  -> Found! Batched BLAS operations will use single-call dispatch."
+if [ "${have_batch}" = "yes" ]; then
+    PKG_CPPFLAGS="${PKG_CPPFLAGS} -DHAVE_BATCH_GEMM"
+    echo "  * cblas_dgemm_batch found"
 else
+    echo "  * cblas_dgemm_batch not found - using fallback implementation"
     echo ""
     echo "  +--------------------------------------------------------------------------------------------+"
     echo "  |  For maximum performance of batched matrix multiplication:                                 |"
     echo "  |                                                                                            |"
-    echo "  |  1. Install Intel oneAPI Math Kernel Library if not already installed:                     |"
+    echo "  |  1. Install Intel oneAPI Math Kernel Library:                                              |"
     echo "  |       https://www.intel.com/content/www/us/en/developer/tools/oneapi/onemkl-download.html  |"
     echo "  |                                                                                            |"
-    echo "  |  2. Check if MKLROOT is set:                                                               |"
-    echo "  |       In R, run:  Sys.getenv('MKLROOT')                                                    |"
-    echo "  |       - If it prints a valid path, MKLROOT is set.                                         |"
-    echo "  |       - If it is empty or invalid, set it:                                                 |"
-    echo "  |             Sys.setenv(MKLROOT='C:/Program Files (x86)/Intel/oneAPI/mkl/latest')           |"
+    echo "  |  2. Set MKLROOT in R before installing:                                                    |"
+    echo "  |       Sys.setenv(MKLROOT='C:/Program Files (x86)/Intel/oneAPI/mkl/latest')                 |"
     echo "  |                                                                                            |"
-    echo "  |  3. Ensure mkl_rt.dll is in your PATH:                                                     |"
-    echo "  |       In R, run:                                                                           |"
-    echo "  |             Sys.setenv(PATH=paste(Sys.getenv('PATH'),                                      |"
-    echo "  |                                  paste0(Sys.getenv('MKLROOT'), '/redist/intel64'),         |"
-    echo "  |                                  sep=.Platform$path.sep))                                  |"
-    echo "  |                                                                                            |"
-    echo "  |  4. Reinstall dMod to enable MKL backend.                                                  |"
+    echo "  |  3. Reinstall dMod to pick up the optimized backend.                                       |"
     echo "  +--------------------------------------------------------------------------------------------+"
     echo ""
 fi
 
-
-
-rm -f conftest.exe conftest.c conftest.o
-
-## --------------------------------------------------------------------------
-## Write src/Makevars.win
-## --------------------------------------------------------------------------
-
+# Write src/Makevars.win
 echo "* Generating src/Makevars.win ..."
-
 sed -e "s|@PKG_CPPFLAGS@|${PKG_CPPFLAGS}|" \
     -e "s|@PKG_LIBS@|${PKG_LIBS}|" \
     src/Makevars.win.in > src/Makevars.win
 
-echo ""
 echo "  PKG_CPPFLAGS: ${PKG_CPPFLAGS}"
 echo "  PKG_LIBS:     ${PKG_LIBS}"
-echo ""
 echo "* Configuration complete."
