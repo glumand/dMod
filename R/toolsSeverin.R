@@ -354,12 +354,12 @@ distributed_computing <- function(
   package_list <- sapply(strsplit(search(), "package:", fixed = TRUE), function(v) v[2])
   package_list <- package_list[!is.na(package_list)]
   package_list <- paste(paste0("try(library(", package_list, "))"), collapse = "\n")
-  if (compile | link) {
+  if (compile || link) {
     objfns <- 'obj.fns <- ls()[sapply(ls(), function(nm) inherits(get(nm, envir=.GlobalEnv), c("obsfn", "parfn", "prdfn")))]'
     setmn <- sprintf('for (o in obj.fns) eval(parse(text=paste0("modelname(", o, ") <- \'%s\'")))\n', paste0(jobname, "_shared_object"))
     load_so <- paste0("dyn.load('",jobname,"_shared_object.so')")
   } else {
-    setmodelname <- ""
+    objfns <- ""
     setmn <-""
     load_so <- ""
   }
@@ -435,7 +435,7 @@ distributed_computing <- function(
       },
       "",
       "# load shared object if precompiled",
-      setmodelname,
+      objfns,
       setmn,
       load_so,
       "",
