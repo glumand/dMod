@@ -23,17 +23,15 @@ Names correspond to dependent variables.}
 
 \item{condition}{character, the condition for which the transformation is generated}
 
-\item{keep.root}{logical, applies for \code{method = "implicit"}. The root of the last
-evaluation of the parameter transformation function is saved as guess for the next
-evaluation.}
+\item{keep.root}{logical, The root of the last evaluation of the parameter transformation
+function is saved as guess for the next evaluation.}
 
-\item{positive}{logical, returns projection to the (semi)positive range. Comes with a warning if
-the steady state has been found to be negative.}
+\item{positive}{logical, if \code{TRUE} the implicit variables are solved in log-space to
+enforce strict positivity of the solution.}
 
-\item{compile}{Logical, compile the function (see \link{funC0})}
+\item{compile}{Logical, compile the C++ code containing the function and jacobian (see \link{funCpp})}
 
-\item{modelname}{Character, used if \code{compile = TRUE}, sets a fixed filename for the
-C file.}
+\item{modelname}{Character, sets a fixed filename for the C++ file.}
 
 \item{verbose}{Print compiler output to R command line.}
 }
@@ -52,9 +50,14 @@ Usually, the equations contain the dependent variables, the independent variable
 other parameters. The argument \code{p} of \code{p2p} must provide values for the independent
 variables and the parameters but ALSO FOR THE DEPENDENT VARIABLES. Those serve as initial guess
 for the dependent variables. The dependent variables are then numerically computed by
-\link[rootSolve]{multiroot}. The Jacobian of the solution with respect to dependent variables
+\link[nleqslv]{nleqslv}. The Jacobian of the solution with respect to dependent variables
 and parameters is computed by the implicit function theorem. The function \code{p2p} returns
 all parameters as they are with corresponding 1-entries in the Jacobian.
+
+When \code{positive = TRUE}, the solver works in log-space internally: the substitution
+\code{x = exp(logx)} is applied, so \code{f(exp(logx), p) = 0} is solved for \code{logx}.
+This guarantees \code{x > 0} by construction. The analytic Jacobian for the nonlinear solver
+is transformed via the chain rule: \code{df/d(logx) = df/dx * diag(x)}.
 }
 \examples{
 ########################################################################

@@ -207,14 +207,12 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
 #' Names correspond to dependent variables.
 #' @param parameters Character vector, the independent variables.  
 #' @param condition character, the condition for which the transformation is generated
-#' @param compile Logical, compile the function (see \link{funC0})
-#' @param keep.root logical, applies for \code{method = "implicit"}. The root of the last
-#' evaluation of the parameter transformation function is saved as guess for the next 
-#' evaluation.
-#' @param positive logical, returns projection to the (semi)positive range. Comes with a warning if
-#' the steady state has been found to be negative. 
-#' @param modelname Character, used if \code{compile = TRUE}, sets a fixed filename for the
-#' C file.
+#' @param compile Logical, compile the C++ code containing the function and jacobian (see \link{funCpp})
+#' @param keep.root logical, The root of the last evaluation of the parameter transformation 
+#' function is saved as guess for the next evaluation.
+#' @param positive logical, if \code{TRUE} the implicit variables are solved in log-space to 
+#' enforce strict positivity of the solution. 
+#' @param modelname Character, sets a fixed filename for the C++ file.
 #' @param verbose Print compiler output to R command line.
 #' @return a function \code{p2p(p, fixed = NULL, deriv = TRUE)} representing the parameter 
 #' transformation. Here, \code{p} is a named numeric vector with the values of the outer parameters,
@@ -225,9 +223,15 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
 #' other parameters. The argument \code{p} of \code{p2p} must provide values for the independent
 #' variables and the parameters but ALSO FOR THE DEPENDENT VARIABLES. Those serve as initial guess
 #' for the dependent variables. The dependent variables are then numerically computed by 
-#' \link[rootSolve]{multiroot}. The Jacobian of the solution with respect to dependent variables
+#' \link[nleqslv]{nleqslv}. The Jacobian of the solution with respect to dependent variables
 #' and parameters is computed by the implicit function theorem. The function \code{p2p} returns
 #' all parameters as they are with corresponding 1-entries in the Jacobian.
+#' 
+#' When \code{positive = TRUE}, the solver works in log-space internally: the substitution 
+#' \code{x = exp(logx)} is applied, so \code{f(exp(logx), p) = 0} is solved for \code{logx}. 
+#' This guarantees \code{x > 0} by construction. The analytic Jacobian for the nonlinear solver 
+#' is transformed via the chain rule: \code{df/d(logx) = df/dx * diag(x)}.
+#' 
 #' @seealso \link{Pexpl} for explicit parameter transformations
 #' @examples
 #' ########################################################################
@@ -264,9 +268,106 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
 #' pSS <- Pimpl(f, "total")
 #' pSS(c(k1 = 1, k2 = 2, A = 5, B = 5, total = 3))
 #' @export
-#' @import rootSolve
-Pimpl <- function(trafo, parameters=NULL, condition = NULL, keep.root = TRUE, positive = TRUE, compile = FALSE, modelname = NULL, verbose = FALSE) {
-  stop("Pimpl not supported yet")
+#' @import nleqslv
+Pimpl <- function(trafo, parameters = NULL, condition = NULL, keep.root = TRUE, 
+                  positive = TRUE, compile = FALSE, modelname = NULL, verbose = FALSE) {
+  
+  states    <- names(trafo)
+  dependent <- setdiff(states, parameters)
+  
+  # Determine required input parameters (analogous to Pexpl):
+  # All symbols in the equations that are not dependent variables.
+  # If the user passed `parameters`, those not appearing as states are 
+  # added as identity pass-through.
+  if (is.null(parameters)) {
+    parameters <- getSymbols(trafo, exclude = dependent)
+  } else {
+    parameters <- union(getSymbols(trafo, exclude = dependent), parameters)
+  }
+  
+  # For funCpp: the dependent variables are "variables", everything else is "parameters"
+  parms_all <- setdiff(parameters, dependent)
+  n_dep     <- length(dependent)
+  
+  if (is.null(modelname)) modelname <- "impl_parfn"
+  if (!is.null(condition)) modelname <- paste(modelname, sanitizeConditions(condition), sep = "_")
+  
+  # Single funCpp call: Jacobian columns = c(dependent, parms_all)
+  PEval <- suppressWarnings(CppODE::funCpp(
+    unclass(trafo[dependent]), variables = dependent, parameters = parms_all,
+    fixed = NULL, compile = compile, modelname = modelname,
+    outdir = getwd(), verbose = verbose, convenient = FALSE, deriv = TRUE
+  ))
+  
+  jac_cols <- c(dependent, parms_all)
+  
+  eval_f <- function(x, p) {
+    PEval$func(matrix(x[dependent], 1, dimnames = list(NULL, dependent)), p[parms_all])[, 1]
+  }
+  eval_J <- function(x, p) {
+    J <- PEval$jac(matrix(x[dependent], 1, dimnames = list(NULL, dependent)), p[parms_all])
+    matrix(J[, , 1], n_dep, length(jac_cols), dimnames = list(dependent, jac_cols))
+  }
+  
+  guess    <- NULL
+  controls <- list(keep.root = keep.root, positive = positive)
+  
+  p2p <- function(pars, fixed = NULL, deriv = TRUE) {
+    
+    p <- pars; dP <- attr(p, "deriv")
+    keep.root <- controls$keep.root; positive <- controls$positive
+    
+    if (!is.null(fixed)) {
+      is.fixed <- which(names(p) %in% names(fixed))
+      if (length(is.fixed) > 0) p <- p[-is.fixed]
+      p <- c(p, fixed)
+    }
+    
+    emptypars <- names(p)[!names(p) %in% c(dependent, names(fixed))]
+    if (!is.null(guess)) p[intersect(dependent, names(guess))] <- guess[intersect(dependent, names(guess))]
+    if (!all(dependent %in% names(p))) p[setdiff(dependent, names(p))] <- 1
+    
+    pv <- p[parms_all]
+    
+    if (positive) {
+      s0 <- p[dependent]; s0[s0 <= 0] <- 1
+      sol <- nleqslv::nleqslv(
+        x   = log(s0),
+        fn  = function(lx) { names(lx) <- dependent; eval_f(exp(lx), pv) },
+        jac = function(lx) { names(lx) <- dependent; x <- exp(lx); eval_J(x, pv)[, dependent] %*% diag(x, n_dep) },
+        method = "Newton", control = list(maxit = 100L, ftol = 1e-12))
+      root <- setNames(exp(sol$x), dependent)
+    } else {
+      sol <- nleqslv::nleqslv(
+        x   = p[dependent],
+        fn  = function(x) { names(x) <- dependent; eval_f(x, pv) },
+        jac = function(x) { names(x) <- dependent; eval_J(x, pv)[, dependent] },
+        method = "Newton", control = list(maxit = 100L, ftol = 1e-12))
+      root <- setNames(sol$x, dependent)
+    }
+    if (sol$termcd > 2) warning("nleqslv did not converge (code ", sol$termcd, "): ", sol$message)
+    
+    out <- c(root, p[setdiff(names(p), names(root))])
+    if (keep.root) guess <<- out
+    
+    # Implicit function theorem: dx/dp = -dfdx^{-1} dfdp
+    Jfull <- eval_J(root, pv)
+    dxdp  <- solve(Jfull[, dependent], -Jfull[, parms_all])
+    
+    # Jacobian columns: only actual input parameters (exclude dependent and fixed)
+    input_cols <- setdiff(names(p), c(dependent, names(fixed)))
+    jacobian <- matrix(0, length(out), length(input_cols), dimnames = list(names(out), input_cols))
+    for (ep in intersect(emptypars, input_cols)) jacobian[ep, ep] <- 1
+    jacobian[rownames(dxdp), intersect(colnames(dxdp), input_cols)] <- dxdp[, intersect(colnames(dxdp), input_cols)]
+    if (!is.null(dP)) jacobian <- jacobian %*% submatrix(dP, rows = colnames(jacobian))
+    
+    as.parvec(out, deriv = if (deriv) jacobian else NULL)
+  }
+  
+  attr(p2p, "equations")  <- as.eqnvec(trafo)
+  attr(p2p, "parameters") <- parameters
+  attr(p2p, "modelname")  <- modelname
+  parfn(p2p, parameters, condition)
 }
 
 
