@@ -49,14 +49,3 @@ compiled routines. In addition, the attributes \code{sourcefiles} (C/C++
 source files) and \code{objfiles} (corresponding object files) are added to
 each object for diagnostic purposes.
 }
-\examples{
-\dontrun{
-## Compile a single model into separate shared libraries
-x <- odemodel(reactions)
-compile(x)
-
-## Compile multiple models into a single shared library
-compile(x, g, output = "combined")
-}
-
-}

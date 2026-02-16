@@ -450,16 +450,6 @@ expand.grid.alt <- function(seq1, seq2) {
 #' @return
 #' Invisibly returns `TRUE` if compilation and linking succeed.
 #'
-#' @examples
-#' \dontrun{
-#' ## Compile a single model into separate shared libraries
-#' x <- odemodel(reactions)
-#' compile(x)
-#'
-#' ## Compile multiple models into a single shared library
-#' compile(x, g, output = "combined")
-#' }
-#'
 #' @export
 compile <- function(..., output=NULL, args=NULL, cores=1, verbose=FALSE){
   
@@ -475,7 +465,7 @@ compile <- function(..., output=NULL, args=NULL, cores=1, verbose=FALSE){
   Rbin <- shQuote(file.path(R.home("bin"),"R"))
   so   <- .Platform$dynlib.ext
   
-  files <- unique(unlist(lapply(objs, \(o){
+  files <- unique(unlist(lapply(objs, function(o){
     if(!inherits(o,c("obsfn","parfn","prdfn"))) return(NULL)
     b <- outer(modelname(o),
                c("","_deriv","_s","_s2","_sdcv","_dfdx","_dfdp"),
@@ -494,13 +484,13 @@ compile <- function(..., output=NULL, args=NULL, cores=1, verbose=FALSE){
   
   Sys.setenv(
     PKG_CFLAGS   = base,
-    PKG_CXXFLAGS = paste("-std=c++20", base),
+    PKG_CXXFLAGS = base,
     PKG_CPPFLAGS = paste0("-I", shQuote(system.file("include",package="CppODE")))
   )
   
   ## toolchain report (truthful)
-  cfg <- \(x) system(paste(shQuote(file.path(R.home("bin"),"R")),"CMD config",x),intern=TRUE)
-  strip <- \(x) trimws(gsub("(^| )-std=[^ ]+","",x))
+  cfg <- function(x) system(paste(shQuote(file.path(R.home("bin"),"R")),"CMD config",x),intern=TRUE)
+  strip <- function(x) trimws(gsub("(^| )-std=[^ ]+","",x))
   
   if(any(grepl("\\.c$",files)))
     cat(sprintf("using C compiler:   %s [%s]\n",
@@ -511,10 +501,10 @@ compile <- function(..., output=NULL, args=NULL, cores=1, verbose=FALSE){
                 strip(cfg("CXX")), trimws(Sys.getenv("PKG_CXXFLAGS"))))
   
   
-  invisible(lapply(c(roots,output),\(x)
+  invisible(lapply(c(roots,output),function(x)
                    if(!is.null(x)) try(dyn.unload(paste0(x,so)),silent=TRUE)))
   
-  run <- \(cmd){
+  run <- function(cmd){
     if(verbose) cat(cmd,"\n")
     if(system(cmd,ignore.stdout=!verbose,ignore.stderr=!verbose)!=0)
       stop("Compilation failed")
@@ -522,7 +512,7 @@ compile <- function(..., output=NULL, args=NULL, cores=1, verbose=FALSE){
   
   if(is.null(output)){
     if(.Platform$OS.type=="unix" && cores>1)
-      parallel::mclapply(files, \(f) run(paste(Rbin,"CMD SHLIB",shQuote(f))), mc.cores=cores)
+      parallel::mclapply(files, function(f) run(paste(Rbin,"CMD SHLIB",shQuote(f))), mc.cores=cores)
     else
       for(f in files) run(paste(Rbin,"CMD SHLIB",shQuote(f)))
     for(r in roots) dyn.load(paste0(r,so))
