@@ -128,8 +128,12 @@ Xs.deSolve <- function(odemodel, forcings = NULL, events = NULL, names = NULL, c
       dP <- attr(pars, "deriv")
       if (!is.null(dP)) {
         dPsub <- dP[senspars, , drop = FALSE]
-        myderivs <- mysensitivities %bmm% dPsub
-        dimnames(myderivs) <- list(names, colnames(dPsub), NULL)
+        if(any(rownames(dP) %in% senspars)) {
+          myderivs <- mysensitivities %bmm% dPsub
+          dimnames(myderivs) <- list(names, colnames(dPsub), NULL)
+        } else {
+          myderivs <- NULL
+        }
       } else {
         myderivs <- mysensitivities
         dimnames(myderivs) <- list(names, senspars, NULL)
