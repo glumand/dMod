@@ -1828,33 +1828,40 @@ mname.fn <- function(x, conditions = NULL) {
 #' @export
 #' @rdname modelname
 "modelname<-.fn" <- function(x, conditions = NULL, ..., value) {
-
+  
   mappings <- attr(x, "mappings")
-  select <- 1:length(mappings)
-  if (!is.null(conditions)) select <- intersect(names(mappings), conditions)
-  #if (length(value) > 1 && length(value) != length(mappings[select]))
-  #  stop("Length of modelname vector should be either 1 or equal to the number of conditions.")
-  if (length(value) == 1) {
-    value <- rep(value, length.out = length(mappings[select]))
-    if (!is.null(conditions)) names(value) <- conditions
-  }
-
-
-  for (i in select) {
-    attr(attr(x, "mappings")[[i]], "modelname") <- value[i]
-    if (inherits(x, "prdfn")) {
-      extended <- environment(attr(x, "mappings")[[i]])[["extended"]]
-      if (!is.null(extended)) {
-        attr(environment(attr(x, "mappings")[[i]])[["extended"]], "modelname") <- value[i]
+  if (!is.null(mappings)) {
+    select <- seq_along(mappings)
+    if (!is.null(conditions)) select <- intersect(names(mappings), conditions)
+    if (length(value) == 1) value <- rep(value, length.out = length(select))
+    
+    for (i in select) {
+      m <- mappings[[i]]
+      
+      if ("composed" %in% class(m)) {
+        modelname(m) <- value[i %% length(value) + 1]  # recursive
+      } else {
+        attr(m, "modelname") <- value[i %% length(value) + 1]
+        # handle prdfn special environments
+        if (inherits(x, "prdfn")) {
+          if (!is.null(environment(m)[["func"]])) 
+            attr(environment(m)[["func"]], "modelname") <- value[i %% length(value) + 1]
+          if (!is.null(environment(m)[["extended"]])) 
+            attr(environment(m)[["extended"]], "modelname") <- value[i %% length(value) + 1]
+        }
       }
-      attr(environment(attr(x, "mappings")[[i]])[["func"]], "modelname") <- value[i]
+      mappings[[i]] <- m
     }
+    
+    attr(x, "mappings") <- mappings
+    
+  } else {
+    attr(x, "modelname") <- value[1]
   }
-
-
-  return(x)
-
+  
+  x
 }
+
 
 #' @export
 #' @rdname modelname
