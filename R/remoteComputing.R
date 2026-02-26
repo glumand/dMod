@@ -287,33 +287,31 @@ runbg <- function(..., machine = "localhost", filename = NULL, input = ls(.Globa
   # Define outputs
   output <- ".runbgOutput"
   
-  # --- compile / link / neither: R code lines for the remote script ---
+  # --- compile / link: build command to run on remote via SSH before R CMD BATCH ---
+  if (compile) {
+    sourcefiles <- paste(
+      c(list.files(pattern = glob2rx("*.c")), list.files(pattern = glob2rx("*.cpp"))),
+      collapse = " "
+    )
+    compile_remote <- paste0("cd ", filename0, "_MFOLDER && R CMD SHLIB ", sourcefiles, " -o ", filename0, "_shared_object.so && cd ~")
+  } else if (link) {
+    object_files <- Sys.glob("*.o")
+    if (length(object_files) == 0)
+      stop("No .o files found for linking! You must compile first.")
+    compile_remote <- paste0("cd ", filename0, "_MFOLDER && R CMD SHLIB ", paste(object_files, collapse = " "), " -o ", filename0, "_shared_object.so && cd ~")
+  } else {
+    compile_remote <- ""
+  }
+  
   if (compile || link) {
-    # Detect obsfn/parfn/prdfn objects and reassign modelname to the new shared object
+    # R code lines to load the shared object and update modelnames
     objfns <- 'obj.fns <- ls()[sapply(ls(), function(nm) inherits(get(nm, envir=.GlobalEnv), c("obsfn", "parfn", "prdfn")))]'
     setmn <- sprintf('for (o in obj.fns) eval(parse(text=paste0("modelname(", o, ") <- \'%s\'")))', paste0(filename0, "_shared_object"))
     load_so <- paste0("dyn.load('", filename0, "_shared_object.so')")
-    
-    if (compile) {
-      compile.line <- paste(
-        "cfiles <- list.files(pattern = '\\\\.c$')",
-        "cppfiles <- list.files(pattern = '\\\\.cpp$')",
-        "filelist <- paste(paste(cfiles, collapse = ' '), paste(cppfiles, collapse = ' '))",
-        paste0("system(paste0('R CMD SHLIB ', filelist, ' -o ", filename0, "_shared_object.so'))"),
-        sep = "\n")
-    } else {
-      # link only: .o files are already present
-      compile.line <- paste(
-        "ofiles <- list.files(pattern = '\\\\.o$')",
-        "filelist <- paste(ofiles, collapse = ' ')",
-        paste0("system(paste0('R CMD SHLIB ', filelist, ' -o ", filename0, "_shared_object.so'))"),
-        sep = "\n")
-    }
   } else {
     objfns <- NULL
     setmn <- NULL
     load_so <- NULL
-    compile.line <- NULL
   }
   
   # Write program into character
@@ -323,7 +321,6 @@ runbg <- function(..., machine = "localhost", filename = NULL, input = ls(.Globa
       paste0("setwd('~/", filename[m], "_folder')"),
       "rm(list = ls())",
       if (!is.null(walltime)) paste0("Sys.setenv(R_TIMEOUT='", walltime, "')"),
-      compile.line,
       paste0("load('", filename0, ".RData')"),
       objfns,
       setmn,
@@ -371,25 +368,22 @@ runbg <- function(..., machine = "localhost", filename = NULL, input = ls(.Globa
     system(paste0("scp ", getwd(), "/*.o ", machine[m], ":", filename[m], "_folder/"),
            ignore.stdout = TRUE, ignore.stderr = TRUE)
     
-    if (link) {
-      # Validate that .o files exist when link-only is requested
-      ofiles <- Sys.glob(paste0(getwd(), "/*.o"))
-      if (length(ofiles) == 0)
-        stop("No .o files found for linking! You must compile first.")
-    }
-    
     if (!compile && !link) {
       # Copy existing shared objects only when no remote build is requested
       system(paste0("scp ", getwd(), "/*.so ", machine[m], ":", filename[m], "_folder/"),
              ignore.stdout = TRUE, ignore.stderr = TRUE)
     }
     
-    # Execute the R script on the remote machine
+    # Build the compile/link command with the correct folder for this machine
+    compile_cmd <- gsub(paste0(filename0, "_MFOLDER"), paste0(filename[m], "_folder"), compile_remote)
+    
+    # Execute: first compile/link (if any), then the R script
     # OMP_NUM_THREADS=1 & MKL_NUM_THREADS=1 ensure that each job uses only one thread
     system(paste0(
       "ssh ", machine[m], 
-      " 'export OMP_NUM_THREADS=1 && export MKL_NUM_THREADS=1 && ", 
-      "R CMD BATCH --vanilla ", filename[m], "_folder/", filename[m], ".R'"
+      " 'export OMP_NUM_THREADS=1 && export MKL_NUM_THREADS=1",
+      if (nzchar(compile_cmd)) paste0(" && ", compile_cmd),
+      " && R CMD BATCH --vanilla ", filename[m], "_folder/", filename[m], ".R'"
     ), intern = FALSE, wait = wait)
   }
   

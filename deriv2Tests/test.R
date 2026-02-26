@@ -119,13 +119,13 @@ myfit <- trust(obj, pouter, rinit = 0.1, rmax = 5, iterlim = 500, printIter = T)
 
 outknecht <- runbg({
   mstrust(obj, pouter, sd = 4, studyname = "bamodelms", cores=detectFreeCores(), fits=100, iterlim = 1e3)
-}, machine = "knecht3", filename = "testJoschi")
+}, machine = "knecht3", filename = "testJoschi", compile = T)
 outknecht$check()
 outknecht$get()
 
 outms <- .runbgOutput$knecht3
 
-out_frame <- as.parframe(out_frame)
+out_frame <- as.parframe(outms)
 plotValues(out_frame) # Show "Waterfall" plot
 plotPars(out_frame) # Show parameter plot
 bestfit <- as.parvec(out_frame)
