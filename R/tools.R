@@ -479,7 +479,7 @@ compile <- function(..., output=NULL, args=NULL, cores=1, verbose=FALSE){
   roots <- sub("\\.(c|cpp)$","",basename(files))
   
   pic <- if(.Platform$OS.type=="windows") "" else "-fPIC"
-  base <- paste("-O2 -DNDEBUG", pic)
+  base <- paste("-O2 -DNDEBUG -w", pic)
   if(!is.null(args) && nzchar(args)) base <- paste(base, args)
   
   Sys.setenv(

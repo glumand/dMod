@@ -61,7 +61,7 @@ p <- P(trafo, condition = "closed", compile = F)
 
 
 # Compile the objects
-compile(g, x, p, output = "bamodel", cores = 8) # Compile C/C++ output of odemodel in parallel
+compile(g, x, p, output = "bamodelSO", cores = 8) # Compile C/C++ output of odemodel in parallel
 
 ## Use simulate data to calibrate outer model parameters ---
 outerpars <- getParameters(p)
@@ -116,6 +116,12 @@ myfit <- trust(obj, pouter, rinit = 0.1, rmax = 5, iterlim = 500, printIter = T)
 
 # Fit 50 times, sample with sd=4 around pouter
 out_frame <- mstrust(obj, pouter, sd = 4, studyname = "bamodel", cores=detectFreeCores(), fits=100, iterlim = 1e3)
+
+outknecht <- runbg({
+  mstrust(obj, pouter, sd = 4, studyname = "bamodel", cores=10, fits=100, iterlim = 1e3)
+}, machine = "knecht3", filename = "testJoschi")
+
+
 out_frame <- as.parframe(out_frame)
 plotValues(out_frame) # Show "Waterfall" plot
 plotPars(out_frame) # Show parameter plot
