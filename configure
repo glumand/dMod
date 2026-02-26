@@ -23,6 +23,9 @@ fi
 echo "* Checking for cblas_dgemm_batch ..."
 
 cat > conftest.c <<'EOF'
+typedef struct { int MajorVersion; int MinorVersion; int UpdateVersion; char ProductStatus[512]; char Build[512]; char Processor[512]; char Platform[512]; } MKLVersion;
+extern void mkl_get_version(MKLVersion *version);
+
 typedef enum { CblasColMajor = 102 } CBLAS_LAYOUT;
 typedef enum { CblasNoTrans = 111 } CBLAS_TRANSPOSE;
 extern void cblas_dgemm_batch(
@@ -37,6 +40,9 @@ extern void cblas_dgemm_batch(
     const int, const int*);
 
 int main(void) {
+    MKLVersion v;
+    mkl_get_version(&v);
+
     double a = 1.0, b = 1.0, c = 0.0;
     const double *a_ptr = &a, *b_ptr = &b;
     double *c_ptr = &c;

@@ -31,7 +31,7 @@ reactions <- eqnlist() %>%
 #             TCA_cell = "k_import * TCA_buffer - k_export_sinus * TCA_cell - k_export_cana * TCA_cell")
 
 # Translate reactions into ODE model object
-mymodel <- odemodel(reactions, modelname = "bamodel", compile = F, solver = "boost")
+mymodel <- odemodel(reactions, modelname = "bamodel", compile = F)
 # Generate trajectories for the default condition
 x <- Xs(mymodel)
 
@@ -61,7 +61,7 @@ p <- P(trafo, condition = "closed", compile = F)
 
 
 # Compile the objects
-compile(g, x, p, output = "bamodelSO", cores = 8) # Compile C/C++ output of odemodel in parallel
+compile(g, x, p, cores = 8) # Compile C/C++ output of odemodel in parallel
 
 ## Use simulate data to calibrate outer model parameters ---
 outerpars <- getParameters(p)
@@ -99,7 +99,7 @@ plot(data)
 
 trafo <- getEquations(p, conditions = "closed") %>% 
   insert("K_REFLUX~K_REFLUX_OPEN")
-p <- p + P(trafo, condition = "open", compile = T)
+p <- p + P(trafo, condition = "open", compile = F)
 
 outerpars <- getParameters(p)
 pouter <- structure(rep(-1, length(outerpars)), names = outerpars)
@@ -115,12 +115,15 @@ system.time({obj(pouter)})
 myfit <- trust(obj, pouter, rinit = 0.1, rmax = 5, iterlim = 500, printIter = T)
 
 # Fit 50 times, sample with sd=4 around pouter
-out_frame <- mstrust(obj, pouter, sd = 4, studyname = "bamodel", cores=detectFreeCores(), fits=100, iterlim = 1e3)
+# out_frame <- mstrust(obj, pouter, sd = 4, studyname = "bamodel", cores=detectFreeCores(), fits=100, iterlim = 1e3)
 
 outknecht <- runbg({
-  mstrust(obj, pouter, sd = 4, studyname = "bamodel", cores=10, fits=100, iterlim = 1e3)
+  mstrust(obj, pouter, sd = 4, studyname = "bamodelms", cores=detectFreeCores(), fits=100, iterlim = 1e3)
 }, machine = "knecht3", filename = "testJoschi")
+outknecht$check()
+outknecht$get()
 
+outms <- .runbgOutput$knecht3
 
 out_frame <- as.parframe(out_frame)
 plotValues(out_frame) # Show "Waterfall" plot
