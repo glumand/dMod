@@ -12,9 +12,9 @@ steadyStates(
   givenCQs = NULL,
   neglect = NULL,
   sparsifyLevel = 2,
+  maxPolyDegree = 2L,
   outputFormat = "R",
-  testSteady = "T",
-  resolve = TRUE
+  testSteady = "T"
 )
 }
 \arguments{
@@ -26,27 +26,56 @@ steadyStates(
 
 \item{forcings}{Character vector with the names of the forcings}
 
-\item{givenCQs}{(Unnamed) Character vector with conserved quantities. Use the format c("A + pA = totA", "B + pB = totB"). The format c("A + pA", "B + pB") works also. If NULL, conserved quantities are automatically calculated.}
+\item{givenCQs}{(Unnamed) Character vector with conserved quantities. Use the
+format c("A + pA = totA", "B + pB = totB"). The format c("A + pA", "B +
+pB") works also. If NULL, conserved quantities are automatically calculated.}
 
-\item{neglect}{Character vector with names of states and parameters that must not be used for solving the steady-state equations}
+\item{neglect}{Character vector with names of states and parameters that must
+not be used for solving the steady-state equations}
 
-\item{sparsifyLevel}{numeric, Upper bound for length of linear combinations used for simplifying the stoichiometric matrix}
+\item{sparsifyLevel}{numeric, Upper bound for length of linear combinations
+used for simplifying the stoichiometric matrix}
+
+\item{maxPolyDegree}{integer, Maximum polynomial degree for which closed-form
+solutions of FVS species are attempted. Default 2. Degrees 3-4 are
+supported but computationally expensive.}
 
 \item{outputFormat}{Define the output format. By default "R" generating dMod
-compatible output. To obtain an output appropriate for d2d [2] "M" must be
+compatible output. To obtain an output appropriate for d2d [3] "M" must be
 selected.}
 
-\item{testSteady}{Boolean, if "T" the correctness of the obtained steady states is numerically checked (this can be very time intensive). If "F" this is skipped.}
-
-\item{resolve}{Boolean. If TRUE, recursive dependencies are resolved, meaning that independent equations are substituted into each expression and then simplified.}
+\item{testSteady}{Boolean, if "T" the correctness of the obtained steady
+states is numerically checked (this can be very time intensive). If "F" this
+is skipped.}
 }
 \value{
-Character vector of steady-state equations.
+List with components:
+\describe{
+\item{equations}{Named character vector of steady-state equations (dMod compatible).}
+\item{fvs_species}{Character vector of FVS species names (empty if no FVS needed).}
+\item{fvs_results}{Character vector of FVS solution details.}
+\item{fvs_unsolved}{Character vector of FVS species that could not be solved in closed form.}
+\item{convergence_conditions}{Character vector of symbolic stability conditions (only for unsolved FVS with n <= 2).}
+}
+For backward compatibility, if no FVS species are present, returns only the
+named character vector of equations (as in v1.x).
 }
 \description{
-This function follows the method published in [1]. Find the latest version of the tool and some examples under [2]. The determined steady-state solution is tailored to parameter estimation. Please note that kinetic parameters might be fixed for solution of steady-state equations. Note that additional parameters might be introduced to ensure positivity of the solution.
+This function follows the method published in [1]. Find the
+latest version of the tool and some examples under [2]. The determined
+steady-state solution is tailored to parameter estimation. Please note that
+kinetic parameters might be fixed for solution of steady-state equations.
+Note that additional parameters might be introduced to ensure positivity of
+the solution.
 
-The function calls a python script via the reticulate package. Use python3.x
+The function calls a python script via the reticulate package.
+Use python3.x
+
+Since v2.0 the tool handles cycles that cannot be removed
+analytically by computing a minimal Feedback Vertex Set (FVS), attempting
+polynomial solving for any symbol in the FVS equations (preferring the
+lowest polynomial degree), and providing symbolic global stability
+conditions (1D/2D) when closed-form solutions are not available.
 }
 \examples{
 

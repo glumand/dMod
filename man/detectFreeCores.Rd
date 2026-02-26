@@ -2,13 +2,19 @@
 % Please edit documentation in R/remoteComputing.R
 \name{detectFreeCores}
 \alias{detectFreeCores}
-\title{Detect number of free cores (on UNIX)}
+\title{Detect number of free cores}
 \usage{
 detectFreeCores(machine = NULL)
 }
 \arguments{
-\item{machine}{character, e.g. "user@localhost".}
+\item{machine}{character vector of SSH hosts, e.g. "user@localhost".
+NULL (default) for the local machine.}
+}
+\value{
+numeric vector of free cores with attributes "ncores" and "used".
 }
 \description{
-Read \verb{/proc/loadavg} and subtract from the number of cores
+Estimates free cores from the 1-min load average.
+Supports Linux, macOS, and remote machines via SSH.
+On Windows, returns 1 with a warning (no load average available).
 }

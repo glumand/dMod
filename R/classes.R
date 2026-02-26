@@ -1332,11 +1332,13 @@ test_conditions <- function(c1, c2) {
       pars <- arglist[[1]]
 
       step1 <- p2(pars = pars, fixed = fixed, deriv = deriv, conditions = conditions)
-      step2 <- do.call(c, lapply(1:length(step1), function(i) p1(pars = step1[[i]], fixed = fixed, deriv = deriv, conditions = names(step1)[i])))
+      step2 <- do.call(c, lapply(1:length(step1), function(i) 
+        p1(pars = (step1[[i]])[setdiff(names(step1[[i]]), attr(step1[[i]], "fixed"))], 
+           fixed = (step1[[i]])[attr(step1[[i]], "fixed")],
+           deriv = deriv, conditions = names(step1)[i])))
       return(step2)
 
     }
-
 
     # Generate mappings for parameters function
     l <- max(c(1, length(conditions.out)))

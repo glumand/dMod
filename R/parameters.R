@@ -1,75 +1,77 @@
 ## Functions to generate parameter transformation ----
 
-
 #' Generate a parameter transformation function
 #' 
 #' @description
 #' This function provides a unified interface for generating condition-specific
 #' parameter transformations, as commonly required in ODE-based modeling workflows.
 #' 
-#' `P()` can operate in two modes:
+#' `P()` can operate in three modes:
 #' 
 #' - **Explicit mode** (`method = "explicit"`, see [Pexpl]):
-#'   Inner parameters are directly computed from symbolic expressions,
-#'   for example
-#'   \deqn{p_{\text{inner}} = \mathrm{parfn}(p_{\text{outer}})}
-#'   A common application of the explicit mode is the log-transformation
-#'   \deqn{p_{\text{outer}} \mapsto \exp(p_{\text{outer}})}
-#'   which ensures positive parameters.
+#'   Inner parameters are directly computed from symbolic expressions.
 #'
 #' - **Implicit mode** (`method = "implicit"`, see [Pimpl]):
-#'   Typically used to infer initial values \eqn{p_{\text{ini}}} satisfying the
-#'   steady-state condition
-#'   \eqn{f(p_{\text{ini}}, p_{\text{dyn}}) = 0}.
-#'   This yields an overall **partially implicit mapping**
-#'   \deqn{p_{\text{dyn}} \mapsto (p_{\text{ini}}, p_{\text{dyn}})}
-#'   where \eqn{f} usually represents the right-hand side (RHS) of an ODE model.
-#' 
-#' Both transformation types can be combined with other mappings via arithmetic
-#' operators (`+` and `*`) thanks to the [parfn] interface.
+#'   Steady states found via nonlinear root finding.
 #'
-#' @param trafo object of class [eqnvec] or named character or list thereof. In case,
-#' trafo is a list, [P()] is called on each element and conditions are assumed to be
-#' the list names.
+#' - **Equilibrate mode** (`method = "equilibrate"`, see [Pequil]):
+#'   Steady states found via ODE integration to equilibrium.
+#'   This is used automatically for [eqnlist] entries when no method is specified.
+#'
+#' @param trafo object of class [eqnvec], named character, [eqnlist], or list thereof.
 #' @param parameters character vector
 #' @param condition character, the condition for which the transformation is generated
-#' @param attach.input attach those incoming parameters to output which are not overwritten by
-#' the parameter transformation.
-#' @param keep.root logical, applies for \code{method = "implicit"}. The root of the last
-#' evaluation of the parameter transformation function is saved as guess for the next 
-#' evaluation.
 #' @param compile logical, compile the function (see [CppODE::funCpp])
-#' @param modelname character, see (see [CppODE::funCpp])
-#' @param method character, either \code{"explicit"} or \code{"implicit"}
-#' @param cores Number of cores for parallel method call of [Pexpl] or [Pimpl] per condtion
+#' @param modelname character, see [CppODE::funCpp]
+#' @param method character, one of \code{"explicit"}, \code{"implicit"}, or \code{"equilibrate"}.
+#'   If \code{NULL} (default), auto-selects \code{"equilibrate"} for [eqnlist] entries 
+#'   and \code{"explicit"} for all others.
+#' @param cores Number of cores for parallel method call per condition
 #' @param verbose Print out information during compilation
+#' @param ... Additional arguments passed to the underlying transformation function
+#'   ([Pexpl], [Pimpl], or [Pequil]).
 #'
 #' @return
 #' An object of class [parfn], representing the parameter transformation.
 #'
 #' @seealso
-#' [Pexpl], [Pimpl], [parfn]
+#' [Pexpl], [Pimpl], [Pequil], [parfn]
 #'
 #' @export
-P <- function(trafo = NULL, parameters=NULL, condition = NULL, attach.input = FALSE,  keep.root = TRUE, compile = FALSE, 
-              modelname = NULL, method = c("explicit", "implicit"), cores = detectFreeCores(), verbose = FALSE) {
+P <- function(trafo = NULL, parameters = NULL, condition = NULL,
+              compile = FALSE, modelname = NULL, method = NULL,
+              cores = detectFreeCores(), verbose = FALSE, ...) {
   
   if (is.null(trafo)) return()
-  if (!is.list(trafo)) {
-    trafo <- list(trafo)
-    names(trafo) <- condition
-  }
   
-  method <- match.arg(method)
+  # Wrap single trafo in named list
+  if (!is.list(trafo) || inherits(trafo, "eqnlist") || inherits(trafo, "eqnvec")) {
+    trafo_list <- list(trafo)
+    names(trafo_list) <- condition
+  } else { trafo_list <- trafo }
+  
   if (Sys.info()[['sysname']] == "Windows") cores <- 1
-  Reduce("+", mclapply(1:length(trafo), function(i) {
+  
+  Reduce("+", mclapply(seq_along(trafo_list), function(i) {
     
-    switch(method, 
-           explicit = Pexpl(trafo = as.eqnvec(trafo[[i]]), parameters = parameters, attach.input = attach.input, condition = names(trafo[i]), compile = compile, modelname = modelname, verbose = verbose),
-           implicit = Pimpl(trafo = as.eqnvec(trafo[[i]]), parameters = parameters, keep.root = keep.root, condition = names(trafo[i]), compile = compile, modelname = modelname, verbose = verbose))
+    tr <- trafo_list[[i]]
+    cond <- names(trafo_list[i])
+    
+    # Auto-select method per entry
+    m <- if (!is.null(method)) match.arg(method, c("explicit", "implicit", "equilibrate"))
+    else if (inherits(tr, "eqnlist")) "equilibrate" 
+    else "explicit"
+    
+    switch(m,
+           explicit    = Pexpl(as.eqnvec(tr), parameters = parameters, condition = cond, compile = compile, 
+                               modelname = modelname, verbose = verbose, ...),
+           implicit    = Pimpl(trafo = as.eqnvec(tr), parameters = parameters, condition = cond, 
+                                 compile = compile, modelname = modelname, verbose = verbose, ...),
+           equilibrate = Pequil(trafo = tr, parameters = parameters, condition = cond, 
+                                 compile = compile, modelname = modelname, verbose = verbose, ...)
+           )
     
   }, mc.cores = min(detectFreeCores(), cores)))
-  
 }
 
 
@@ -365,6 +367,243 @@ Pimpl <- function(trafo, parameters = NULL, condition = NULL, keep.root = TRUE,
   }
   
   attr(p2p, "equations")  <- as.eqnvec(trafo)
+  attr(p2p, "parameters") <- parameters
+  attr(p2p, "modelname")  <- modelname
+  parfn(p2p, parameters, condition)
+}
+
+
+#' Parameter transformation (steady states via pre-equilibration)
+#'
+#' Constructs a parameter transformation that finds steady states by
+#' integrating the ODE system until the norm of the right-hand side falls below
+#' a tolerance, using \code{CppODE} with \code{rootfunc = "equilibrate"}.
+#'
+#' @description
+#' When \code{trafo} is an \code{\link{eqnlist}}, conserved quantities are
+#' automatically detected. For each conserved quantity involving \code{n}
+#' species, exactly \code{n-1} are placed into \code{parameters} (either
+#' user-supplied or auto-filled). States whose right-hand side evaluates to
+#' zero are also automatically treated as parameters.
+#'
+#' The reduced ODE (only dependent states) is integrated to steady state.
+#' Sensitivities are obtained from the ODE sensitivity integration and
+#' composed via the chain rule when upstream derivatives are present.
+#'
+#' When \code{trafo} is an \code{\link{eqnvec}} or named character vector,
+#' equilibration proceeds without conserved-quantity checks and a warning
+#' is issued.
+#'
+#' @param trafo An \code{\link{eqnlist}} (recommended) or \code{\link{eqnvec}} /
+#'   named character vector. For \code{eqnlist} inputs, conserved quantities
+#'   and constant states are detected automatically. For \code{eqnvec} inputs,
+#'   a warning is issued since independence of equations cannot be verified.
+#' @param parameters Character vector of independent parameters. Species listed
+#'   here are excluded from integration and treated as fixed ODE parameters.
+#'   For systems with conserved quantities, exactly \code{n-1} of the \code{n}
+#'   involved species must appear here (auto-filled if missing).
+#' @param forcings Character vector of forcing names. These symbols are replaced
+#'   by zero in the reaction rates before equilibration. Only used when
+#'   \code{trafo} is an \code{\link{eqnlist}}.
+#' @param condition Character label for which the transformation is generated.
+#' @param attach.input Logical. If \code{TRUE} (default), pass-through
+#'   parameters are appended to the output with identity derivatives.
+#'   If \code{FALSE}, only the equilibrated dependent states are returned.
+#' @param keep.root Logical. If \code{TRUE} (default), the steady state and
+#'   sensitivities are cached for warm-starting subsequent evaluations.
+#'   Improves performance during iterative fitting.
+#' @param controlsODE Named list of ODE solver options passed to
+#'   \code{\link[CppODE]{solveODE}}. Supported entries:
+#'   \code{abstol} (default 1e-6), \code{reltol} (default 1e-6),
+#'   \code{maxsteps} (default 1e7), \code{maxprogress} (default 100),
+#'   \code{hini} (default 0), \code{roottol} (default 1e-6),
+#'   \code{maxroot} (default 1).
+#' @param compile Logical. If \code{TRUE}, compile the C++ ODE model for
+#'   faster evaluation.
+#' @param modelname Character, base name for generated C++ code files.
+#' @param verbose Logical. If \code{TRUE}, print compiler output.
+#'
+#' @return A function of class \code{\link{parfn}}.
+#'
+#' @seealso [Pexpl] for explicit transformations, [Pimpl] for implicit
+#'   (root-finding) transformations, [P] for automatic method selection.
+#'
+#' @import CppODE
+#' @export
+Pequil <- function(trafo, parameters = NULL, forcings = NULL, condition = NULL,
+                   attach.input = TRUE, keep.root = TRUE, controlsODE = list(),
+                   compile = FALSE, modelname = NULL, verbose = FALSE) {
+  
+  if (inherits(trafo, "eqnlist")) {
+    # Exclude forcings
+    if (!is.null(forcings))
+      trafo$rates <- replaceSymbols(forcings, rep("0", length(forcings)), trafo$rates)
+    smatrix <- trafo$smatrix
+    f <- as.eqnvec(trafo)
+  } else if (inherits(trafo, "eqnvec") || is.character(trafo)) {
+    warning("'trafo' is not an eqnlist. Conserved quantities cannot be checked. ",
+            "Consider using an eqnlist for automatic independence validation.",
+            call. = FALSE)
+    smatrix <- NULL
+    f <- as.eqnvec(trafo)
+  } else {
+    stop("'trafo' must be an eqnlist or eqnvec")
+  }
+  
+  states <- names(f)
+  
+  # Auto-detect constant states (rhs == "0") and add to parameters
+  const_states <- states[vapply(unclass(f), function(x) {
+    tryCatch(identical(eval(parse(text = x)), 0), error = function(e) FALSE)
+  }, logical(1))]
+  if (length(const_states)) parameters <- union(parameters %||% character(0), const_states)
+  
+  # Auto-fill parameters from conserved quantities (only if smatrix available)
+  if (!is.null(smatrix)) {
+    cq <- conservedQuantities(smatrix)
+    if (!is.null(cq) && nrow(cq) > 0) {
+      if (is.null(parameters)) parameters <- character(0)
+      for (i in seq_len(nrow(cq))) {
+        cq_species <- intersect(getSymbols(as.character(cq[i, 1])), states)
+        n_need <- length(cq_species) - 1
+        already <- intersect(cq_species, parameters)
+        if (length(already) < n_need) {
+          fill <- setdiff(cq_species, already)[seq_len(n_need - length(already))]
+          parameters <- union(parameters, fill)
+        }
+      }
+    }
+  }
+  
+  # States in parameters are NOT integrated — they become ODE parameters
+  dependent <- setdiff(states, parameters)
+  if (length(dependent) == 0) stop("No dependent states left to equilibrate.")
+  n_dep <- length(dependent)
+  f_red <- f[dependent]
+  
+  if (is.null(parameters)) { parameters <- getSymbols(f_red, exclude = dependent)
+  } else { parameters <- union(getSymbols(f_red, exclude = dependent), parameters) }
+  parms_all <- setdiff(parameters, dependent)
+  
+  if (is.null(modelname)) modelname <- "equil_parfn"
+  if (!is.null(condition)) modelname <- paste(modelname, sanitizeConditions(condition), sep = "_")
+  
+  # Build two models: with and without sensitivities
+  .args <- list(rhs = unclass(f_red), rootfunc = "equilibrate", deriv2 = FALSE, 
+                compile = compile, outdir = getwd(), useDenseOutput = FALSE, verbose = verbose)
+  model   <- do.call(CppODE::CppODE, c(.args, list(deriv = FALSE, modelname = modelname)))
+  model_s <- do.call(CppODE::CppODE, c(.args, list(deriv = TRUE,  modelname = paste0(modelname, "_s"))))
+  dims    <- attr(model_s, "dim_names")
+  all_sens <- dims$sens
+  
+  # Default ODE controls
+  ode_ctrl <- modifyList(list(abstol = 1e-6, reltol = 1e-6, maxsteps = 1e6L, 
+                              maxprogress = 100L, hini = 0, roottol = 1e-5, maxroot = 1L), controlsODE)
+  
+  # Cache for warm-starting
+  cache <- new.env(parent = emptyenv())
+  cache$yini    <- NULL
+  cache$sensini <- NULL
+  
+  # Default sensitivities [n_dep x all_sens]: dx_i/dx_j = delta_ij, rest 0
+  default_sens <- matrix(0, n_dep, length(all_sens), dimnames = list(dependent, all_sens))
+  diag_vars <- intersect(dependent, all_sens)
+  if (length(diag_vars)) default_sens[cbind(diag_vars, diag_vars)] <- 1
+  
+  controls <- list(keep.root = keep.root, attach.input = attach.input)
+  
+  p2p <- function(pars, fixed = NULL, deriv = TRUE) {
+    p <- pars; dP <- attr(p, "deriv")
+    keep.root    <- controls$keep.root
+    attach.input <- controls$attach.input
+    
+    if (!is.null(fixed)) {
+      is.fixed <- names(p) %in% names(fixed)
+      if (any(is.fixed)) p <- p[!is.fixed]
+      p <- c(p, fixed)
+    }
+    emptypars <- names(p)[!names(p) %in% c(dependent, names(fixed))]
+    missing_dep <- setdiff(dependent, names(p))
+    if (length(missing_dep)) p[missing_dep] <- 1
+    
+    # Warm-start from cache
+    if (keep.root && !is.null(cache$yini)) p[dependent] <- cache$yini
+    
+    # Compute active_sens exactly as solveODE does
+    fixed_char <- if (!is.null(fixed)) intersect(names(fixed), all_sens) else NULL
+    if (length(fixed_char)) {
+      active_sens <- all_sens[-match(fixed_char, all_sens)]
+    } else { fixed_char <- NULL; active_sens <- all_sens }
+    n_active <- length(active_sens)
+    
+    # Prepare sens1ini [n_dep x n_active] from cache
+    s1ini <- NULL
+    if (deriv && keep.root && !is.null(cache$sensini)) {
+      s1ini <- cache$sensini[, active_sens, drop = FALSE]
+    } else if (deriv) {
+      s1ini <- default_sens[, active_sens, drop = FALSE]
+    }
+    
+    # Integrate to steady state
+    res <- tryCatch(
+      withCallingHandlers(
+        CppODE::solveODE(
+          if (deriv) model_s else model,
+          times = c(0, 1e100), parms = c(p[dependent], p[parms_all]),
+          sens1ini = s1ini, fixed = fixed_char,
+          roottol = ode_ctrl$roottol, abstol = ode_ctrl$abstol, reltol = ode_ctrl$reltol,
+          maxsteps = as.integer(ode_ctrl$maxsteps), maxprogress = as.integer(ode_ctrl$maxprogress),
+          hini = ode_ctrl$hini, maxroot = as.integer(ode_ctrl$maxroot)),
+        warning = function(w) { warning(w$message, call. = FALSE); invokeRestart("muffleWarning") }),
+      error = function(e) { warning("ODE integration failed: ", e$message, call. = FALSE); NULL })
+    
+    if (is.null(res)) {
+      out <- if (attach.input) c(p[dependent], p[setdiff(names(p), dependent)]) else p[dependent]
+      return(as.parvec(out, deriv = NULL))
+    }
+    
+    last <- length(res$time)
+    if (res$time[last] == 1e15)
+      warning("Steady state not reached within integration time.", call. = FALSE)
+    
+    root <- res$variable[, last]
+    names(root) <- dependent
+    
+    if (attach.input) {
+      out <- c(root, p[setdiff(names(p), dependent)])
+    } else { out <- root }
+    
+    # Update cache
+    if (keep.root) {
+      cache$yini <- root
+      if (!is.null(res$sens1)) {
+        full_new <- default_sens
+        full_new[, active_sens] <- res$sens1[, , last]
+        cache$sensini <- full_new
+      } else { cache$sensini <- NULL }
+    }
+    
+    if (deriv && !is.null(res$sens1)) {
+      sens_final <- matrix(res$sens1[, , last], nrow = n_dep, ncol = n_active,
+                           dimnames = list(dependent, active_sens))
+      input_cols <- setdiff(names(p), c(dependent, names(fixed)))
+      jacobian <- matrix(0, length(out), length(input_cols),
+                         dimnames = list(names(out), input_cols))
+      if (attach.input) {
+        diag_idx <- intersect(emptypars, input_cols)
+        if (length(diag_idx)) jacobian[cbind(diag_idx, diag_idx)] <- 1
+      }
+      sr <- intersect(dependent, rownames(sens_final))
+      sc <- intersect(input_cols, colnames(sens_final))
+      if (length(sr) && length(sc))
+        jacobian[sr, sc] <- sens_final[sr, sc, drop = FALSE]
+      if (!is.null(dP)) jacobian <- jacobian %*% submatrix(dP, rows = input_cols)
+      nonzero <- rowSums(jacobian != 0) > 0
+      as.parvec(out, deriv = jacobian[nonzero, , drop = FALSE])
+    } else { as.parvec(out, deriv = NULL) }
+  }
+  
+  attr(p2p, "equations")  <- as.eqnvec(f)
   attr(p2p, "parameters") <- parameters
   attr(p2p, "modelname")  <- modelname
   parfn(p2p, parameters, condition)

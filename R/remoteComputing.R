@@ -1,27 +1,56 @@
-#' Detect number of free cores (on UNIX)
+#' Detect number of free cores
 #' 
-#' @description Read `/proc/loadavg` and subtract from the number of cores
-#' @param machine character, e.g. "user@@localhost".
-#' @export 
+#' @description Estimates free cores from the 1-min load average.
+#' Supports Linux, macOS, and remote machines via SSH.
+#' On Windows, returns 1 with a warning (no load average available).
+#' @param machine character vector of SSH hosts, e.g. "user@@localhost".
+#' NULL (default) for the local machine.
+#' @return numeric vector of free cores with attributes "ncores" and "used".
+#' @export
 detectFreeCores <- function(machine = NULL) {
-  if (!is.null(machine)) {
-    output <- lapply(machine, function(m) {
-      occupied <- as.numeric(strsplit(system(paste("ssh", m, "cat /proc/loadavg"), intern = TRUE), split = " ", fixed = TRUE)[[1]][1])  
-      nCores <- as.numeric(system(paste("ssh", m, "nproc --all"), intern = TRUE))
-      free <- max(c(0, round(nCores - occupied)))
-      list(free, nCores, occupied)
-    })
-    freeCores <- unlist(lapply(output, function(o) o[[1]]))
-    attr(freeCores, "ncores") <- unlist(lapply(output, function(o) o[[2]]))
-    attr(freeCores, "used") <- unlist(lapply(output, function(o) o[[3]]))
-  } else {
-    occupied <- as.numeric(strsplit(system("cat /proc/loadavg", intern = TRUE), split = " ", fixed = TRUE)[[1]][1])      
-    nCores <- as.numeric(system("nproc --all", intern = TRUE))
-    freeCores <- max(c(0, round(nCores - occupied)))
-    attr(freeCores, "ncores") <- nCores
-    attr(freeCores, "used") <- occupied
+  
+  .getLoadAndCores <- function(prefix = NULL) {
+    cmd <- function(x) {
+      if (!is.null(prefix)) x <- paste("ssh", prefix, x)
+      system(x, intern = TRUE)
+    }
+    
+    # Detect OS: use uname for remote, Sys.info() for local
+    os <- if (!is.null(prefix)) cmd("uname") else Sys.info()[["sysname"]]
+    
+    if (grepl("Windows", os, ignore.case = TRUE)) {
+      # No load average on Windows — return 1 free core as safe default
+      warning("detectFreeCores: load average not available on Windows, returning 1")
+      nCores <- parallel::detectCores()
+      return(list(free = 1, nCores = nCores, occupied = NA_real_))
+    }
+    
+    if (grepl("Darwin", os, ignore.case = TRUE)) {
+      # macOS: sysctl provides load avg as "{ x.xx x.xx x.xx }"
+      occupied <- as.numeric(strsplit(cmd("sysctl -n vm.loadavg"), " ")[[1]][2])
+      nCores <- as.numeric(cmd("sysctl -n hw.ncpu"))
+    } else {
+      # Linux: read 1-min load average from /proc/loadavg
+      occupied <- as.numeric(strsplit(cmd("cat /proc/loadavg"), " ", fixed = TRUE)[[1]][1])
+      nCores <- as.numeric(cmd("nproc --all"))
+    }
+    
+    list(free = max(0, round(nCores - occupied)), nCores = nCores, occupied = occupied)
   }
-  return(freeCores)
+  
+  if (!is.null(machine)) {
+    output <- lapply(machine, .getLoadAndCores)
+    freeCores <- vapply(output, `[[`, numeric(1), "free")
+    attr(freeCores, "ncores") <- vapply(output, `[[`, numeric(1), "nCores")
+    attr(freeCores, "used") <- vapply(output, `[[`, numeric(1), "occupied")
+  } else {
+    res <- .getLoadAndCores()
+    freeCores <- res$free
+    attr(freeCores, "ncores") <- res$nCores
+    attr(freeCores, "used") <- res$occupied
+  }
+  
+  freeCores
 }
 
 

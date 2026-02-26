@@ -8,40 +8,35 @@ P(
   trafo = NULL,
   parameters = NULL,
   condition = NULL,
-  attach.input = FALSE,
-  keep.root = TRUE,
   compile = FALSE,
   modelname = NULL,
-  method = c("explicit", "implicit"),
+  method = NULL,
   cores = detectFreeCores(),
-  verbose = FALSE
+  verbose = FALSE,
+  ...
 )
 }
 \arguments{
-\item{trafo}{object of class \link{eqnvec} or named character or list thereof. In case,
-trafo is a list, \code{\link[=P]{P()}} is called on each element and conditions are assumed to be
-the list names.}
+\item{trafo}{object of class \link{eqnvec}, named character, \link{eqnlist}, or list thereof.}
 
 \item{parameters}{character vector}
 
 \item{condition}{character, the condition for which the transformation is generated}
 
-\item{attach.input}{attach those incoming parameters to output which are not overwritten by
-the parameter transformation.}
-
-\item{keep.root}{logical, applies for \code{method = "implicit"}. The root of the last
-evaluation of the parameter transformation function is saved as guess for the next
-evaluation.}
-
 \item{compile}{logical, compile the function (see \link[CppODE:funCpp]{CppODE::funCpp})}
 
-\item{modelname}{character, see (see \link[CppODE:funCpp]{CppODE::funCpp})}
+\item{modelname}{character, see \link[CppODE:funCpp]{CppODE::funCpp}}
 
-\item{method}{character, either \code{"explicit"} or \code{"implicit"}}
+\item{method}{character, one of \code{"explicit"}, \code{"implicit"}, or \code{"equilibrate"}.
+If \code{NULL} (default), auto-selects \code{"equilibrate"} for \link{eqnlist} entries
+and \code{"explicit"} for all others.}
 
-\item{cores}{Number of cores for parallel method call of \link{Pexpl} or \link{Pimpl} per condtion}
+\item{cores}{Number of cores for parallel method call per condition}
 
 \item{verbose}{Print out information during compilation}
+
+\item{...}{Additional arguments passed to the underlying transformation function
+(\link{Pexpl}, \link{Pimpl}, or \link{Pequil}).}
 }
 \value{
 An object of class \link{parfn}, representing the parameter transformation.
@@ -50,27 +45,17 @@ An object of class \link{parfn}, representing the parameter transformation.
 This function provides a unified interface for generating condition-specific
 parameter transformations, as commonly required in ODE-based modeling workflows.
 
-\code{P()} can operate in two modes:
+\code{P()} can operate in three modes:
 \itemize{
 \item \strong{Explicit mode} (\code{method = "explicit"}, see \link{Pexpl}):
-Inner parameters are directly computed from symbolic expressions,
-for example
-\deqn{p_{\text{inner}} = \mathrm{parfn}(p_{\text{outer}})}
-A common application of the explicit mode is the log-transformation
-\deqn{p_{\text{outer}} \mapsto \exp(p_{\text{outer}})}
-which ensures positive parameters.
+Inner parameters are directly computed from symbolic expressions.
 \item \strong{Implicit mode} (\code{method = "implicit"}, see \link{Pimpl}):
-Typically used to infer initial values \eqn{p_{\text{ini}}} satisfying the
-steady-state condition
-\eqn{f(p_{\text{ini}}, p_{\text{dyn}}) = 0}.
-This yields an overall \strong{partially implicit mapping}
-\deqn{p_{\text{dyn}} \mapsto (p_{\text{ini}}, p_{\text{dyn}})}
-where \eqn{f} usually represents the right-hand side (RHS) of an ODE model.
+Steady states found via nonlinear root finding.
+\item \strong{Equilibrate mode} (\code{method = "equilibrate"}, see \link{Pequil}):
+Steady states found via ODE integration to equilibrium.
+This is used automatically for \link{eqnlist} entries when no method is specified.
 }
-
-Both transformation types can be combined with other mappings via arithmetic
-operators (\code{+} and \code{*}) thanks to the \link{parfn} interface.
 }
 \seealso{
-\link{Pexpl}, \link{Pimpl}, \link{parfn}
+\link{Pexpl}, \link{Pimpl}, \link{Pequil}, \link{parfn}
 }
