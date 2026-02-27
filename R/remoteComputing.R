@@ -148,24 +148,23 @@ detectFreeCores <- function(machine = NULL) {
 #' }
 runbg <- function(..., machine = "localhost", filename = NULL, input = ls(.GlobalEnv), compile = FALSE, link = FALSE, wait = FALSE, recover = FALSE, walltime = NULL) {
   
-  
   expr <- as.expression(substitute(...))
   nmachines <- length(machine)
   
-  # Safety rule: never compile and link at the same time
+  # compile takes precedence over link
   if (compile) link <- FALSE
   
-  # Set file name
+  # Generate a random filename if none is provided
   if (is.null(filename))
     filename <- paste0("tmp_", paste(sample(c(0:9, letters), 5, replace = TRUE), collapse = ""))
   
   filename0 <- filename
   filename <- paste(filename, 1:nmachines, sep = "_")
   
-  # Initialize output
+  # Initialize output list
   out <- structure(vector("list", 4), names = c("check", "get", "purge", "terminate"))
   
-  # Check
+  # Check whether results are ready on all machines
   out[[1]] <- function() {
     
     check.out <- sapply(1:nmachines, function(m) length(suppressWarnings(
@@ -175,19 +174,17 @@ runbg <- function(..., machine = "localhost", filename = NULL, input = ls(.Globa
     if (all(check.out > 0)) {
       cat("Result is ready!\n")
       return(TRUE)
-    }
-    else if (any(check.out > 0)) {
+    } else if (any(check.out > 0)) {
       cat("Result from machines", paste(which(check.out > 0), collapse = ", "), "are ready.")
       return(FALSE)
-    }
-    else {
+    } else {
       cat("Not ready!\n") 
       return(FALSE)
     }
     
   }
   
-  # Get
+  # Fetch result files from remote machines and load into workspace
   out[[2]] <- function() {
     
     result <- structure(vector(mode = "list", length = nmachines), names = machine)
@@ -202,11 +199,10 @@ runbg <- function(..., machine = "localhost", filename = NULL, input = ls(.Globa
     
   }
   
-  # Purge
+  # Remove temporary folders and files on remote machines and locally
   out[[3]] <- function() {
     
     for (m in 1:nmachines) {
-      # Check if folder exists before trying to remove it
       folder_exists <- suppressWarnings(
         system(paste0("ssh ", machine[m], " '[ -d ", filename[m], "_folder ] && echo 1 || echo 0'"), 
                intern = TRUE)
@@ -215,7 +211,6 @@ runbg <- function(..., machine = "localhost", filename = NULL, input = ls(.Globa
         system(paste0("ssh ", machine[m], " rm -r ", filename[m], "_folder"))
       }
       
-      # Check if .Rout file exists before trying to remove it
       rout_exists <- suppressWarnings(
         system(paste0("ssh ", machine[m], " '[ -f ", filename[m], ".Rout ] && echo 1 || echo 0'"), 
                intern = TRUE)
@@ -225,14 +220,13 @@ runbg <- function(..., machine = "localhost", filename = NULL, input = ls(.Globa
       }
     }
     
-    # Check if local files exist before trying to remove them
     local_files <- list.files(pattern = paste0(filename0, ".*"))
     if (length(local_files) > 0) {
       system(paste0("rm ", filename0, "*"))
     }
   }
   
-  # Terminate
+  # Kill all processes associated with this job on the remote machines
   out[[4]] <- function() {
     for (m in 1:nmachines) {
       pids <- suppressWarnings(
@@ -257,13 +251,10 @@ runbg <- function(..., machine = "localhost", filename = NULL, input = ls(.Globa
     }
   }
   
-  
-  # Recover the functions check, get, purge, terminate without re-running the job
+  # Recover control functions without re-submitting the job
   if (recover) return(out)
   
-  
-  
-  # Check if filenames exist and load last result (only if wait == TRUE)
+  # If result files already exist locally and wait = TRUE, load them directly
   resultfile <- paste(filename, "result.RData", sep = "_")
   if (all(file.exists(resultfile)) & wait) {
     
@@ -276,18 +267,17 @@ runbg <- function(..., machine = "localhost", filename = NULL, input = ls(.Globa
     return(out)
   }
   
-  # Save current workspace
+  # Save current workspace to be transferred to remote machines
   save(list = input, file = paste0(filename0, ".RData"), envir = .GlobalEnv)
   
-  # Get loaded packages
+  # Collect currently loaded packages to replicate the library state remotely
   pack <- sapply(strsplit(search(), "package:", fixed = TRUE), function(v) v[2])
   pack <- pack[!is.na(pack)]
   pack <- paste(paste0("try(library(", pack, "))"), collapse = "\n")
   
-  # Define outputs
   output <- ".runbgOutput"
   
-  # --- compile / link: build command to run on remote via SSH before R CMD BATCH ---
+  # Build the remote compile/link shell command
   if (compile) {
     sourcefiles <- paste(
       c(list.files(pattern = glob2rx("*.c")), list.files(pattern = glob2rx("*.cpp"))),
@@ -304,7 +294,7 @@ runbg <- function(..., machine = "localhost", filename = NULL, input = ls(.Globa
   }
   
   if (compile || link) {
-    # R code lines to load the shared object and update modelnames
+    # R code to load the newly built shared object and update modelnames of known function objects
     objfns <- 'obj.fns <- ls()[sapply(ls(), function(nm) inherits(get(nm, envir=.GlobalEnv), c("obsfn", "parfn", "prdfn")))]'
     setmn <- sprintf('for (o in obj.fns) eval(parse(text=paste0("modelname(", o, ") <- \'%s\'")))', paste0(filename0, "_shared_object"))
     load_so <- paste0("dyn.load('", filename0, "_shared_object.so')")
@@ -314,7 +304,7 @@ runbg <- function(..., machine = "localhost", filename = NULL, input = ls(.Globa
     load_so <- NULL
   }
   
-  # Write program into character
+  # Assemble the R script to be executed on each remote machine
   program <- lapply(1:nmachines, function(m) paste(
     c(
       pack,
@@ -340,27 +330,26 @@ runbg <- function(..., machine = "localhost", filename = NULL, input = ls(.Globa
     collapse = "\n"
   ))
   
-  # Copy files to the temporary folder on the remote machine, write code and run
   for (m in 1:nmachines) {
     
-    # Write program code into file
+    # Write the R script for this machine
     cat(program[[m]], file = paste0(filename[m], ".R"))
     
-    # Create a working directory on the remote machine
+    # Create remote working directory
     system(paste0("ssh ", machine[m], " mkdir -p ", filename[m], "_folder/"), 
            ignore.stdout = TRUE, ignore.stderr = TRUE)
     
-    # Remove any old files in the working directory
+    # Clear any leftover files from previous runs
     system(paste0("ssh ", machine[m], " rm -r ", filename[m], "_folder/*"), 
            ignore.stdout = TRUE, ignore.stderr = TRUE)
     
-    # Copy RData files to the working directory on the remote machine
+    # Transfer workspace
     system(paste0("scp ", getwd(), "/", filename0, ".RData* ", machine[m], ":", filename[m], "_folder/"))
     
-    # Copy the R scripts to the working directory on the remote machine
+    # Transfer R script
     system(paste0("scp ", getwd(), "/", filename[m], ".R* ", machine[m], ":", filename[m], "_folder/"))
     
-    # Always copy C/C++ source and object files
+    # Transfer C/C++ source and object files (always; harmless if none exist)
     system(paste0("scp ", getwd(), "/*.c ", machine[m], ":", filename[m], "_folder/"),
            ignore.stdout = TRUE, ignore.stderr = TRUE)
     system(paste0("scp ", getwd(), "/*.cpp ", machine[m], ":", filename[m], "_folder/"),
@@ -368,17 +357,23 @@ runbg <- function(..., machine = "localhost", filename = NULL, input = ls(.Globa
     system(paste0("scp ", getwd(), "/*.o ", machine[m], ":", filename[m], "_folder/"),
            ignore.stdout = TRUE, ignore.stderr = TRUE)
     
+    # Transfer shared objects only when no remote build is requested
     if (!compile && !link) {
-      # Copy existing shared objects only when no remote build is requested
       system(paste0("scp ", getwd(), "/*.so ", machine[m], ":", filename[m], "_folder/"),
              ignore.stdout = TRUE, ignore.stderr = TRUE)
     }
     
-    # Build the compile/link command with the correct folder for this machine
+    # When recompiling, remove stale .o files so R CMD SHLIB starts clean
+    if (compile) {
+      system(paste0("ssh ", machine[m], " 'rm -f ", filename[m], "_folder/*.o'"),
+             ignore.stdout = TRUE, ignore.stderr = TRUE)
+    }
+    
+    # Substitute the placeholder folder name with the machine-specific folder
     compile_cmd <- gsub(paste0(filename0, "_MFOLDER"), paste0(filename[m], "_folder"), compile_remote)
     
-    # Execute: first compile/link (if any), then the R script
-    # OMP_NUM_THREADS=1 & MKL_NUM_THREADS=1 ensure that each job uses only one thread
+    # Execute: compile/link if requested, then run the R script
+    # OMP_NUM_THREADS=1 and MKL_NUM_THREADS=1 ensure single-threaded execution per job
     system(paste0(
       "ssh ", machine[m], 
       " 'export OMP_NUM_THREADS=1 && export MKL_NUM_THREADS=1",
@@ -387,14 +382,12 @@ runbg <- function(..., machine = "localhost", filename = NULL, input = ls(.Globa
     ), intern = FALSE, wait = wait)
   }
   
-  
   if (wait) {
     out$get()
     out$purge()
   } else {
     return(out)
   }
-  
   
 }
 
