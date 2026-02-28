@@ -3,6 +3,14 @@
   
   if (is.loaded("_dMod_has_batch_gemm") && has_batch_gemm()) {
     packageStartupMessage("\nBLAS: ", blas_info)
+    # Set single-threaded BLAS to avoid nested parallelism
+    Sys.setenv(
+      OMP_NUM_THREADS       = "1",
+      MKL_NUM_THREADS       = "1",
+      MKL_THREADING_LAYER   = "SEQUENTIAL",
+      OPENBLAS_NUM_THREADS   = "1",
+      BLIS_NUM_THREADS       = "1"
+    )
   } else {
     packageStartupMessage("\nBLAS: ", blas_info)
     packageStartupMessage("cblas_dgemm_batch not available (using fallback implementation)")
