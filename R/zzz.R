@@ -1,22 +1,32 @@
 .onAttach <- function(libname, pkgname) {
+  blas_info <- extSoftVersion()["BLAS"]
+  
   if (is.loaded("_dMod_has_batch_gemm") && has_batch_gemm()) {
-    packageStartupMessage("\nIntel\u00AE oneAPI Math Kernel Library (oneMKL) available")
-    Sys.setenv(MKL_NUM_THREADS = "1", MKL_THREADING_LAYER = "SEQUENTIAL")
+    packageStartupMessage("\nBLAS: ", blas_info)
   } else {
-    packageStartupMessage("\nIntel\u00AE oneAPI Math Kernel Library (oneMKL) not available")
-    packageStartupMessage("For instructions on enabling the MKL backend for faster batched matrix multiplication, run mklHelp().")
+    packageStartupMessage("\nBLAS: ", blas_info)
+    packageStartupMessage("cblas_dgemm_batch not available (using fallback implementation)")
+    packageStartupMessage("For instructions on enabling optimized batched GEMM, run blasHelp().")
   }
 }
 
+
+#' Display instructions for enabling optimized batched matrix multiplication
+#' Shows platform-specific instructions for installing and configuring a BLAS
+#' library that provides \code{cblas_dgemm_batch}.
+#'
 #' @export
-mklHelp <- function() {
+blasHelp <- function() {
   os <- Sys.info()[["sysname"]]
   if (os == "Windows") {
     cat(
       "  ┌────────────────────────────────────────────────────────────────────────────────────────────┐\n",
-      "  │  For maximum performance of batched matrix multiplication:                                 │\n",
+      "  │  For optimized batched matrix multiplication, a BLAS with cblas_dgemm_batch is needed.     │\n",
       "  │                                                                                            │\n",
-      "  │  1. Install Intel oneAPI Math Kernel Library if not already installed:                     │\n",
+      "  │  Recommended: Intel oneAPI Math Kernel Library (MKL)                                       │\n",
+      "  │    All MKL versions include cblas_dgemm_batch.                                             │\n",
+      "  │                                                                                            │\n",
+      "  │  1. Install Intel oneAPI Math Kernel Library:                                              │\n",
       "  │       https://www.intel.com/content/www/us/en/developer/tools/oneapi/onemkl-download.html  │\n",
       "  │                                                                                            │\n",
       "  │  2. Check if MKLROOT is set:                                                               │\n",
@@ -31,25 +41,64 @@ mklHelp <- function() {
       "  │                                  paste0(Sys.getenv('MKLROOT'), '/redist/intel64'),         │\n",
       "  │                                  sep=.Platform$path.sep))                                  │\n",
       "  │                                                                                            │\n",
-      "  │  4. Reinstall dMod to enable MKL backend.                                                  │\n",
+      "  │  4. Reinstall dMod to enable the optimized backend.                                        │\n",
+      "  └────────────────────────────────────────────────────────────────────────────────────────────┘\n"
+      , sep = "")
+  } else if (os == "Darwin") {
+    cat(
+      "  ┌────────────────────────────────────────────────────────────────────────────────────────────┐\n",
+      "  │  For optimized batched matrix multiplication, a BLAS with cblas_dgemm_batch is needed.     │\n",
+      "  │                                                                                            │\n",
+      "  │  Note: Apple's Accelerate framework does NOT provide cblas_dgemm_batch.                    │\n",
+      "  │                                                                                            │\n",
+      "  │  Recommended: Intel oneAPI Math Kernel Library (MKL)                                       │\n",
+      "  │    All MKL versions include cblas_dgemm_batch.                                             │\n",
+      "  │                                                                                            │\n",
+      "  │       conda install mkl mkl-devel  (in conda env)                                         │\n",
+      "  │                                                                                            │\n",
+      "  │  Alternative: OpenBLAS (>= 0.3.19)                                                         │\n",
+      "  │    NOTE: Homebrew's OpenBLAS may not include cblas_dgemm_batch.                            │\n",
+      "  │    If not, use MKL or build OpenBLAS from source:                                          │\n",
+      "  │    https://github.com/OpenMathLib/OpenBLAS                                                 │\n",
+      "  │                                                                                            │\n",
+      "  │       brew install openblas                                                                │\n",
+      "  │                                                                                            │\n",
+      "  │  R links against the BLAS found at install time. Either reinstall R or set                 │\n",
+      "  │  DYLD_LIBRARY_PATH to point to your preferred BLAS.                                       │\n",
+      "  │                                                                                            │\n",
+      "  │  Reinstall dMod to pick up the optimized backend.                                          │\n",
       "  └────────────────────────────────────────────────────────────────────────────────────────────┘\n"
       , sep = "")
   } else {
     cat(
       "  ┌────────────────────────────────────────────────────────────────────────────────────────────┐\n",
-      "  │  For maximum performance of batched matrix multiplication:                                 │\n",
+      "  │  For optimized batched matrix multiplication, a BLAS with cblas_dgemm_batch is needed.     │\n",
       "  │                                                                                            │\n",
-      "  │  1. Install Intel oneAPI Math Kernel Library if not already installed:                     │\n",
+      "  │  Recommended: Intel oneAPI Math Kernel Library (MKL)                                       │\n",
+      "  │    All MKL versions include cblas_dgemm_batch.                                             │\n",
       "  │                                                                                            │\n",
       "  │       Ubuntu/Debian:  sudo apt install intel-mkl                                           │\n",
       "  │       Fedora/RHEL:    sudo dnf install intel-oneapi-mkl-devel                              │\n",
-      "  │       macOS/conda:    conda install mkl mkl-devel                                          │\n",
       "  │                                                                                            │\n",
-      "  │  2. Make sure, that MKL is set as R's BLAS backend so that R links against it:             │\n",
+      "  │  Alternative: OpenBLAS (>= 0.3.19)                                                         │\n",
+      "  │    NOTE: Some Linux distributions (e.g. Ubuntu) ship OpenBLAS without                      │\n",
+      "  │    cblas_dgemm_batch even in recent versions. In that case, use MKL or                     │\n",
+      "  │    build OpenBLAS from source: https://github.com/OpenMathLib/OpenBLAS                     │\n",
       "  │                                                                                            │\n",
-      "  │       Ubuntu/Debian:  sudo update-alternatives --config libblas.so.3-x86_64-linux-gnu      │\n",
+      "  │       Ubuntu/Debian:  sudo apt install libopenblas-dev                                     │\n",
+      "  │       Fedora/RHEL:    sudo dnf install openblas-devel                                      │\n",
       "  │                                                                                            │\n",
-      "  │  3. Reinstall dMod to pick up the optimized backend.                                       │\n",
+      "  │  IMPORTANT: On Linux, ALL FOUR alternatives must be switched consistently:                 │\n",
+      "  │                                                                                            │\n",
+      "  │       sudo update-alternatives --config libblas.so.3-x86_64-linux-gnu                      │\n",
+      "  │       sudo update-alternatives --config libblas.so-x86_64-linux-gnu                        │\n",
+      "  │       sudo update-alternatives --config liblapack.so.3-x86_64-linux-gnu                    │\n",
+      "  │       sudo update-alternatives --config liblapack.so-x86_64-linux-gnu                      │\n",
+      "  │                                                                                            │\n",
+      "  │  On HPC systems, load the appropriate module (e.g. module load numlib/mkl/2022.2)          │\n",
+      "  │  before running R CMD INSTALL.                                                             │\n",
+      "  │                                                                                            │\n",
+      "  │  Reinstall dMod to pick up the optimized backend.                                          │\n",
       "  └────────────────────────────────────────────────────────────────────────────────────────────┘\n"
       , sep = "")
   }

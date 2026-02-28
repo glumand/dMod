@@ -23,9 +23,6 @@ fi
 echo "* Checking for cblas_dgemm_batch ..."
 
 cat > conftest.c <<'EOF'
-typedef struct { int MajorVersion; int MinorVersion; int UpdateVersion; char ProductStatus[512]; char Build[512]; char Processor[512]; char Platform[512]; } MKLVersion;
-extern void mkl_get_version(MKLVersion *version);
-
 typedef enum { CblasColMajor = 102 } CBLAS_LAYOUT;
 typedef enum { CblasNoTrans = 111 } CBLAS_TRANSPOSE;
 extern void cblas_dgemm_batch(
@@ -40,9 +37,6 @@ extern void cblas_dgemm_batch(
     const int, const int*);
 
 int main(void) {
-    MKLVersion v;
-    mkl_get_version(&v);
-
     double a = 1.0, b = 1.0, c = 0.0;
     const double *a_ptr = &a, *b_ptr = &b;
     double *c_ptr = &c;
@@ -82,22 +76,36 @@ else
     echo "  ✗ cblas_dgemm_batch not found - using fallback implementation"
     echo ""
     echo "  ┌────────────────────────────────────────────────────────────────────────────────────────────┐"
-    echo "  │  For maximum performance of batched matrix multiplication:                                 │"
+    echo "  │  For optimized batched matrix multiplication, a BLAS with cblas_dgemm_batch is needed.     │"
     echo "  │                                                                                            │"
-    echo "  │  1. Install Intel oneAPI Math Kernel Library if not already installed:                     │"
+    echo "  │  Recommended: Intel oneAPI Math Kernel Library (MKL)                                       │"
+    echo "  │    All MKL versions include cblas_dgemm_batch.                                             │"
     echo "  │                                                                                            │"
     echo "  │       Ubuntu/Debian:  sudo apt install intel-mkl                                           │"
     echo "  │       Fedora/RHEL:    sudo dnf install intel-oneapi-mkl-devel                              │"
-    echo "  │       macOS/conda:    conda install mkl mkl-devel                                          │"
+    echo "  │       macOS:          conda install mkl mkl-devel  (in conda env)                          │"
     echo "  │                                                                                            │"
-    echo "  │  2. Make sure that MKL is set as R's BLAS backend so that R links against it:              │"
+    echo "  │  Alternative: OpenBLAS (>= 0.3.19)                                                         │"
+    echo "  │    NOTE: Some Linux distributions (e.g. Ubuntu) ship OpenBLAS without                      │"
+    echo "  │    cblas_dgemm_batch even in recent versions. In that case, use MKL or                     │"
+    echo "  │    build OpenBLAS from source (https://github.com/OpenMathLib/OpenBLAS).                   │"
     echo "  │                                                                                            │"
-    echo "  │       Ubuntu/Debian:  sudo update-alternatives --config libblas.so.3-x86_64-linux-gnu      │"
+    echo "  │  Make sure your chosen BLAS is set as R's backend. On Linux, ALL FOUR                      │"
+    echo "  │  alternatives must be switched consistently:                                               │"
     echo "  │                                                                                            │"
-    echo "  │  3. On HPC systems you must load the MKL module (e.g. module load numlib/mkl/2022.2)       │"
-    echo "  │     before running R CMD INSTALL so that MKL can be found.                                 │"
+    echo "  │       sudo update-alternatives --config libblas.so.3-x86_64-linux-gnu                      │"
+    echo "  │       sudo update-alternatives --config libblas.so-x86_64-linux-gnu                        │"
+    echo "  │       sudo update-alternatives --config liblapack.so.3-x86_64-linux-gnu                    │"
+    echo "  │       sudo update-alternatives --config liblapack.so-x86_64-linux-gnu                      │"
     echo "  │                                                                                            │"
-    echo "  │  4. Reinstall dMod to pick up the optimized backend.                                       │"
+    echo "  │       macOS:   R links against the BLAS found at install time; reinstall R or set          │"
+    echo "  │                DYLD_LIBRARY_PATH to point to your preferred BLAS                           │"
+    echo "  │       Windows: replace Rblas.dll in R_HOME/bin/x64 or adjust PATH                          │"
+    echo "  │                                                                                            │"
+    echo "  │  On HPC systems, load the appropriate module (e.g. module load numlib/mkl/2022.2)          │"
+    echo "  │  before running R CMD INSTALL.                                                             │"
+    echo "  │                                                                                            │"
+    echo "  │  Reinstall this package to pick up the optimized backend.                                  │"
     echo "  └────────────────────────────────────────────────────────────────────────────────────────────┘"
     echo ""
 fi
