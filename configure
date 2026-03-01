@@ -20,17 +20,16 @@ if [ -n "$MKLROOT" ]; then
     MKL_FLAGS="-I${MKLROOT}/include -L${MKLROOT}/lib/intel64 -lmkl_rt -lpthread -lm -ldl"
 fi
 
-echo "* Checking for cblas_dgemm_batch ..."
+echo "* Checking for batched BLAS (cblas_dgemm_batch + cblas_dgemm_batch_strided) ..."
 
 cat > conftest.c <<'EOF'
 #include <stdio.h>
 
-typedef enum { CblasColMajor = 102 } CBLAS_LAYOUT;
-typedef enum { CblasNoTrans = 111 } CBLAS_TRANSPOSE;
+/* Test both cblas_dgemm_batch (pointer API) and cblas_dgemm_batch_strided */
 
 extern void cblas_dgemm_batch(
-    const CBLAS_LAYOUT,
-    const CBLAS_TRANSPOSE*, const CBLAS_TRANSPOSE*,
+    const int,
+    const int*, const int*,
     const int*, const int*, const int*,
     const double*,
     const double* const*, const int*,
@@ -39,22 +38,35 @@ extern void cblas_dgemm_batch(
     double* const*, const int*,
     const int, const int*);
 
+extern void cblas_dgemm_batch_strided(
+    const int,
+    const int, const int,
+    const int, const int, const int,
+    const double,
+    const double*, const int, const int,
+    const double*, const int, const int,
+    const double,
+    double*, const int, const int,
+    const int);
+
 int main(void) {
-    /* Minimal runtime test: 2 batches of 1x1 * 1x1 */
+    /* --- Test cblas_dgemm_batch (pointer API) --- */
+    /* 2 batches of 1x1 * 1x1, B broadcasted */
     double a1 = 2.0, a2 = 3.0;
-    double b1 = 4.0, b2 = 5.0;
+    double b1 = 4.0;
     double c1 = 0.0, c2 = 0.0;
 
     const double *a_ptrs[] = { &a1, &a2 };
-    const double *b_ptrs[] = { &b1, &b2 };
+    const double *b_ptrs[] = { &b1, &b1 };  /* broadcast */
     double *c_ptrs[] = { &c1, &c2 };
 
-    CBLAS_TRANSPOSE ta = CblasNoTrans, tb = CblasNoTrans;
+    int ta = 111, tb = 111;  /* CblasNoTrans */
     int m = 1, n = 1, k = 1, lda = 1, ldb = 1, ldc = 1;
     double alpha = 1.0, beta = 0.0;
     int group_count = 1, group_size = 2;
 
-    cblas_dgemm_batch(CblasColMajor, &ta, &tb,
+    cblas_dgemm_batch(102,  /* CblasColMajor */
+                      &ta, &tb,
                       &m, &n, &k, &alpha,
                       a_ptrs, &lda,
                       b_ptrs, &ldb,
@@ -62,8 +74,26 @@ int main(void) {
                       c_ptrs, &ldc,
                       group_count, &group_size);
 
-    /* Verify results: 2*4=8, 3*5=15 */
-    if (c1 != 8.0 || c2 != 15.0) return 1;
+    /* Verify: 2*4=8, 3*4=12 */
+    if (c1 != 8.0 || c2 != 12.0) return 1;
+
+    /* --- Test cblas_dgemm_batch_strided --- */
+    double A[] = { 2.0, 3.0, 5.0 };
+    double B[] = { 4.0, 7.0, 2.0 };
+    double C[] = { 0.0, 0.0, 0.0 };
+
+    cblas_dgemm_batch_strided(102, 111, 111,
+                              1, 1, 1,
+                              1.0,
+                              A, 1, 1,
+                              B, 1, 1,
+                              0.0,
+                              C, 1, 1,
+                              3);
+
+    /* Verify: 2*4=8, 3*7=21, 5*2=10 */
+    if (C[0] != 8.0 || C[1] != 21.0 || C[2] != 10.0) return 1;
+
     return 0;
 }
 EOF
@@ -80,7 +110,7 @@ for libs in "$PKG_LIBS" "$MKL_FLAGS $PKG_LIBS"; do
             PKG_LIBS="${libs}"
             break
         else
-            echo "  ⚠ cblas_dgemm_batch found but not functional at runtime - skipping"
+            echo "  ⚠ batched BLAS found but not functional at runtime - skipping"
         fi
     fi
 done
@@ -89,25 +119,25 @@ rm -f conftest conftest.c conftest.o
 
 if [ "${have_batch}" = "yes" ]; then
     PKG_CPPFLAGS="${PKG_CPPFLAGS} -DHAVE_BATCH_GEMM"
-    echo "  ✓ cblas_dgemm_batch found and verified"
+    echo "  ✓ cblas_dgemm_batch and cblas_dgemm_batch_strided found and verified"
 else
-    echo "  ✗ cblas_dgemm_batch not available - using fallback implementation"
+    echo "  ✗ batched BLAS not available - using fallback implementation"
     echo ""
     echo "  ┌────────────────────────────────────────────────────────────────────────────────────────────┐"
-    echo "  │  For optimized batched matrix multiplication, a BLAS with cblas_dgemm_batch is needed.     │"
+    echo "  │  For optimized batched matrix multiplication, a BLAS with cblas_dgemm_batch and            │"
+    echo "  │  cblas_dgemm_batch_strided is needed.                                                      │"
     echo "  │                                                                                            │"
     echo "  │  Recommended: Intel oneAPI Math Kernel Library (MKL)                                       │"
-    echo "  │    All MKL versions include cblas_dgemm_batch.                                             │"
+    echo "  │    All MKL versions include both batched BLAS functions.                                   │"
     echo "  │                                                                                            │"
     echo "  │       Ubuntu/Debian:  sudo apt install intel-mkl                                           │"
     echo "  │       Fedora/RHEL:    sudo dnf install intel-oneapi-mkl-devel                              │"
     echo "  │       macOS:          conda install mkl mkl-devel  (in conda env)                          │"
     echo "  │                                                                                            │"
     echo "  │  Alternative: OpenBLAS (>= 0.3.28)                                                         │"
-    echo "  │    NOTE: cblas_dgemm_batch was added in OpenBLAS 0.3.28 and may be unstable in             │"
-    echo "  │    early versions. Some Linux distributions ship OpenBLAS without it or with a             │"
-    echo "  │    non-functional implementation. In that case, use MKL or build OpenBLAS from             │"
-    echo "  │    source (https://github.com/OpenMathLib/OpenBLAS).                                       │"
+    echo "  │    NOTE: Batched BLAS was added in OpenBLAS 0.3.28 and may be unstable in early            │"
+    echo "  │    versions. Some Linux distributions ship OpenBLAS without it or with a                   │"
+    echo "  │    non-functional implementation.                                                          │"
     echo "  │                                                                                            │"
     echo "  │  Make sure your chosen BLAS is set as R's backend. On Linux, ALL FOUR                      │"
     echo "  │  alternatives must be switched consistently:                                               │"
@@ -119,10 +149,6 @@ else
     echo "  │                                                                                            │"
     echo "  │       macOS:   R links against the BLAS found at install time; reinstall R or set          │"
     echo "  │                DYLD_LIBRARY_PATH to point to your preferred BLAS                           │"
-    echo "  │       Windows: replace Rblas.dll in R_HOME/bin/x64 or adjust PATH                          │"
-    echo "  │                                                                                            │"
-    echo "  │  On HPC systems, load the appropriate module (e.g. module load numlib/mkl/2022.2)          │"
-    echo "  │  before running R CMD INSTALL.                                                             │"
     echo "  │                                                                                            │"
     echo "  │  Reinstall this package to pick up the optimized backend.                                  │"
     echo "  └────────────────────────────────────────────────────────────────────────────────────────────┘"

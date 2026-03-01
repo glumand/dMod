@@ -4,12 +4,14 @@
 \alias{blasHelp}
 \title{Display instructions for enabling optimized batched matrix multiplication
 Shows platform-specific instructions for installing and configuring a BLAS
-library that provides \code{cblas_dgemm_batch}.}
+library that provides \code{cblas_dgemm_batch} and
+\code{cblas_dgemm_batch_strided}.}
 \usage{
 blasHelp()
 }
 \description{
 Display instructions for enabling optimized batched matrix multiplication
 Shows platform-specific instructions for installing and configuring a BLAS
-library that provides \code{cblas_dgemm_batch}.
+library that provides \code{cblas_dgemm_batch} and
+\code{cblas_dgemm_batch_strided}.
 }

@@ -31,7 +31,7 @@ reactions <- eqnlist() %>%
 #             TCA_cell = "k_import * TCA_buffer - k_export_sinus * TCA_cell - k_export_cana * TCA_cell")
 
 # Translate reactions into ODE model object
-mymodel <- odemodel(reactions, modelname = "bamodel", compile = F)
+mymodel <- odemodel(reactions, modelname = "bamodel", compile = F, solver = "boost")
 # Generate trajectories for the default condition
 x <- Xs(mymodel)
 
@@ -119,7 +119,7 @@ myfit <- trust(obj, pouter, rinit = 0.1, rmax = 5, iterlim = 500, printIter = T)
 
 outknecht <- runbg({
   mstrust(obj, pouter, sd = 4, studyname = "bamodelms", cores=detectFreeCores(), fits=100, iterlim = 1e3)
-}, machine = "knecht3", filename = "testJoschi", compile = T)
+}, machine = "knecht2", filename = "bamodelms", compile = T)
 outknecht$check()
 outknecht$get()
 

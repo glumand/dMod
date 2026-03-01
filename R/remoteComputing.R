@@ -277,20 +277,22 @@ runbg <- function(..., machine = "localhost", filename = NULL, input = ls(.Globa
   
   output <- ".runbgOutput"
   
-  # Build the remote compile/link shell command
-  if (compile) {
-    sourcefiles <- paste(
-      c(list.files(pattern = glob2rx("*.c")), list.files(pattern = glob2rx("*.cpp"))),
-      collapse = " "
-    )
-    compile_remote <- paste0("cd ", filename0, "_MFOLDER && R CMD SHLIB ", sourcefiles, " -o ", filename0, "_shared_object.so && cd ~")
-  } else if (link) {
-    object_files <- Sys.glob("*.o")
-    if (length(object_files) == 0)
-      stop("No .o files found for linking! You must compile first.")
-    compile_remote <- paste0("cd ", filename0, "_MFOLDER && R CMD SHLIB ", paste(object_files, collapse = " "), " -o ", filename0, "_shared_object.so && cd ~")
-  } else {
-    compile_remote <- ""
+  # Compiler flags mirroring compile() in tools.R
+  # Written into a shell script to avoid quoting issues with nested SSH commands
+  if (compile || link) {
+    
+    if (compile) {
+      sourcefiles <- paste(
+        c(list.files(pattern = glob2rx("*.c")), list.files(pattern = glob2rx("*.cpp"))),
+        collapse = " "
+      )
+    } else {
+      object_files <- Sys.glob("*.o")
+      if (length(object_files) == 0)
+        stop("No .o files found for linking! You must compile first.")
+      sourcefiles <- paste(object_files, collapse = " ")
+    }
+    
   }
   
   if (compile || link) {
@@ -369,8 +371,23 @@ runbg <- function(..., machine = "localhost", filename = NULL, input = ls(.Globa
              ignore.stdout = TRUE, ignore.stderr = TRUE)
     }
     
-    # Substitute the placeholder folder name with the machine-specific folder
-    compile_cmd <- gsub(paste0(filename0, "_MFOLDER"), paste0(filename[m], "_folder"), compile_remote)
+    # Write and transfer compile script per machine, then build the remote command
+    compile_cmd <- ""
+    if (compile || link) {
+      compile_script_content <- paste(
+        "#!/bin/bash",
+        "export PKG_CFLAGS='-O2 -DNDEBUG -w -fPIC'",
+        "export PKG_CXXFLAGS='-O2 -DNDEBUG -w -fPIC'",
+        paste0("export PKG_CPPFLAGS=-I$(Rscript -e ", "'cat(system.file(\"include\", package=\"CppODE\"))'", ")"),
+        paste0("cd ", filename[m], "_folder"),
+        paste0("R CMD SHLIB ", sourcefiles, " -o ", filename0, "_shared_object.so"),
+        sep = "\n"
+      )
+      compile_script_file <- paste0(filename[m], "_compile.sh")
+      cat(compile_script_content, file = compile_script_file)
+      system(paste0("scp ", getwd(), "/", compile_script_file, " ", machine[m], ":", filename[m], "_folder/"))
+      compile_cmd <- paste0("bash ", filename[m], "_folder/", compile_script_file)
+    }
     
     # Execute: compile/link if requested, then run the R script
     # OMP_NUM_THREADS=1 and MKL_NUM_THREADS=1 ensure single-threaded execution per job
@@ -506,9 +523,9 @@ runbg_bwfor <- function(..., machine, filename = NULL, nodes = 1, cores = 1, wal
   
   # Define outputs
   output <- ".runbgOutput"
-
- 
-
+  
+  
+  
   # Write program into character
   program <- lapply(1:nodes, function(m) {
     paste(
@@ -1057,5 +1074,3 @@ runbgInstall <- function(sshtarget, source = NULL, type = "local") {
   }
   
 }
-
-
