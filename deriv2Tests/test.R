@@ -44,10 +44,10 @@ innerpars <- getParameters(x,g)
 trafo <- NULL %>%
   define("x~x", x = innerpars) %>% # identity
   define("TCA_buffer~0") %>%
-  insert("x~10^y", x = .currentSymbols, y = toupper(.currentSymbols))
+  insert("x~exp10(y)", x = .currentSymbols, y = toupper(.currentSymbols))
 
 
-# # # Explicit trafo (this is equivalent to the lines above)
+# # Explicit trafo (this is equivalent to the lines above)
 # trafo <- eqnvec(TCA_buffer = "0",
 #                 TCA_cell = "exp(log(10)*TCA_cell)",
 #                 TCA_cana = "exp(log(10)*TCA_cana)",
@@ -141,19 +141,20 @@ plot(getDerivs((g*x*p)(times, bestfit)))
 profiles_integrate <- profile(obj, bestfit, whichPar = names(bestfit), method = "integrate", cores = 10, limits = c(lower = -5, upper = 5), 
                               stepControl = list(stop = "data"))
 
-profiles_optimize <- profile(obj, bestfit, whichPar = names(bestfit), method = "optimize", cores = 10, limits = c(lower = -5, upper = 5), 
-                             stepControl = list(stepsize = 1e-4, min = 1e-4, max = Inf, atol = 1e-2, rtol = 1e-2, limit = 200, stop = "data"))
+profiles <- profile(obj, bestfit, whichPar = names(bestfit), method = "optimize", cores = 10, limits = c(lower = -5, upper = 5), 
+                    stepControl = list(stepsize = 1e-4, min = 1e-4, max = Inf, atol = 1e-2, rtol = 1e-2, limit = 200, stop = "data"))
 
 proflist <- list(integrate = profiles_integrate, optimize = profiles_optimize) # The best tactic is to use method = "integrate" with reoptimize = TRUE in algoControl
 plotProfile(proflist, mode %in% c("data", "prior"))
 
-# plotProfile(profiles_integrate, mode %in% c("data", "prior"))
-# plotProfile(profiles_optimize, mode %in% c("data", "prior"))
-# plotPaths(profiles, whichPar = "TCA_CANA")
-# plotPaths(profiles, whichPar = "K_EXPORT_CANA")
-# plotPaths(profiles, whichPar = "K_REFLUX_OPEN")
-# plotPaths(profiles, whichPar = "S") # The triple S, TCE_CELL, TCA_CANA compensate by structure of the model
+plotProfile(profiles_integrate, mode %in% c("data", "prior"))
+plotProfile(profiles_optimize, mode %in% c("data", "prior"))
 
+# The triple S, TCE_CELL, TCA_CANA compensate by structure of the model
+plotPaths(profiles, whichPar = "TCA_CANA")
+plotPaths(profiles, whichPar = "K_EXPORT_CANA")
+plotPaths(profiles, whichPar = "K_REFLUX_OPEN")
+plotPaths(profiles, whichPar = "S") 
 
 # Tighten model assumptions with steady state constraint
 mysteadies <- steadyStates(reactions, forcings = "k_import")

@@ -1,8 +1,10 @@
 .onAttach <- function(libname, pkgname) {
   blas_info <- extSoftVersion()["BLAS"]
-  
+  os <- Sys.info()[["sysname"]]
   if (is.loaded("_dMod_has_batch_gemm") && has_batch_gemm()) {
-    packageStartupMessage("\nBLAS: ", blas_info)
+    if (os != "Windows") 
+      packageStartupMessage("\nBLAS: ", blas_info)
+    else packageStartupMessage("\nusing Intel\u00ae oneAPI Math Kernel Library")
     # Set single-threaded BLAS to avoid nested parallelism
     Sys.setenv(
       OMP_NUM_THREADS       = "1",
@@ -12,8 +14,7 @@
       BLIS_NUM_THREADS       = "1"
     )
   } else {
-    packageStartupMessage("\nBLAS: ", blas_info)
-    packageStartupMessage("cblas_dgemm_batch not available (using fallback implementation)")
+    if (os != "Windows") packageStartupMessage("\nBLAS: ", blas_info)
     packageStartupMessage("For instructions on enabling optimized batched GEMM, run blasHelp().")
   }
 }
@@ -44,12 +45,6 @@ blasHelp <- function() {
       "  \u2502       - If it prints a valid path, MKLROOT is set.                                         \u2502\n",
       "  \u2502       - If it is empty or invalid, set it (adapt if necessary):                            \u2502\n",
       "  \u2502             Sys.setenv(MKLROOT='C:/Program Files (x86)/Intel/oneAPI/mkl/latest')           \u2502\n",
-      "  \u2502                                                                                            \u2502\n",
-      "  \u2502  3. Ensure mkl_rt.dll is in your PATH:                                                     \u2502\n",
-      "  \u2502       In R, run:                                                                           \u2502\n",
-      "  \u2502             Sys.setenv(PATH=paste(Sys.getenv('PATH'),                                      \u2502\n",
-      "  \u2502                                  paste0(Sys.getenv('MKLROOT'), '/redist/intel64'),         \u2502\n",
-      "  \u2502                                  sep=.Platform$path.sep))                                  \u2502\n",
       "  \u2502                                                                                            \u2502\n",
       "  \u2502  4. Reinstall dMod to enable the optimized backend.                                        \u2502\n",
       "  \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n"
