@@ -95,6 +95,28 @@ predict_array <- function (prd, times, pars = partable, whichpar = par, keep_nam
 }
 
 
+
+find_empty_corner <- function(x, y) {
+  xmid <- (min(x, na.rm = TRUE) + max(x, na.rm = TRUE)) / 2
+  ymid <- (min(y, na.rm = TRUE) + max(y, na.rm = TRUE)) / 2
+  
+  corners <- list(
+    bottom_left  = c(0.02, 0.02),
+    bottom_right = c(0.98, 0.02),
+    top_left     = c(0.02, 0.98),
+    top_right    = c(0.98, 0.98)
+  )
+  
+  counts <- c(
+    bottom_left  = sum(x <= xmid & y <= ymid, na.rm = TRUE),
+    bottom_right = sum(x >  xmid & y <= ymid, na.rm = TRUE),
+    top_left     = sum(x <= xmid & y >  ymid, na.rm = TRUE),
+    top_right    = sum(x >  xmid & y >  ymid, na.rm = TRUE)
+  )
+  
+  corners[[which.min(counts)]]
+}
+
 #' @keywords internal
 #' @importFrom ggplot2 ggplot
 PlotPaths <- function(profs=myprofiles, ..., whichPar, sort = FALSE, relative = TRUE, scales = "fixed", multi = TRUE, n_pars = 5, normalizePaths = FALSE) {
@@ -187,7 +209,7 @@ PlotPaths <- function(profs=myprofiles, ..., whichPar, sort = FALSE, relative = 
     if(length(removedCombinations)>0) {warning(paste0("The following combinations have been removed due to failed paths:\n\t",paste(str_remove_all(removedCombinations, "\n"), collapse = "\n\t")))}
   }
   
-
+  
   if(multi){
     
     # determine strength of change
@@ -204,16 +226,23 @@ PlotPaths <- function(profs=myprofiles, ..., whichPar, sort = FALSE, relative = 
       "Others" = "gray"
     )
     
+    # Automatically find the corner with the least data density
+    legend_corner <- find_empty_corner(data$x, data$y)
+    
     suppressMessages(
       p <- ggplot2::ggplot(data, aes(x = x, y = y, color = label, group = partner)) + 
-        geom_line() + #geom_point(aes=aes(size=1), alpha=1/3) +
+        geom_line() +
         xlab(whichPar) + ylab("relative change of\n other paramters") +
         scale_linetype_discrete(name = "profile\nlist") +
         scale_color_manual(values = species_colors) + theme_dMod() +
-        theme(legend.position="bottom",
+        theme(legend.position = "inside",
+              legend.position.inside = legend_corner,
+              legend.justification = legend_corner,
               legend.title = element_blank(),
-              legend.box.background = element_rect(colour = "black"),
-              legend.key.size = unit(0.4, "cm"))
+              legend.background = element_rect(fill = alpha("white", 0.85), colour = "black", linewidth = 0.3),
+              legend.key.size = unit(0.4, "cm"),
+              legend.margin = margin(2, 4, 2, 4),
+              legend.text = element_text(size = 7))
     )
   } else {
     suppressMessages(
@@ -279,17 +308,45 @@ expand.grid.alt <- function(seq1, seq2) {
 #' @param ncols Number of columns in the resulting plot grid.
 #' @param normalizePaths Logical indicating whether the paths should be normalized to absolute values of 1.
 #'                       Default `FALSE`.
+#' @param modes Character vector of profile modes to display in the profile plot.
+#'              Default `c("data", "prior")`. Use e.g. `"data"` to show only the data contribution.
 #' @param ... Additional arguments passed to [cowplot::plot_grid()].
 #' 
 #' @return A combined `ggplot` object containing the profiles and paths (no shared legend).
 #' 
 #' @importFrom cowplot align_plots plot_grid
 #' @export
-plotProfilesAndPaths <- function(profs, whichpars, npars = 5, ncols = 3, normalizePaths = FALSE, ...) {
+plotProfilesAndPaths <- function(profs, whichpars, npars = 5, ncols = 3, normalizePaths = FALSE, modes = c("data", "prior"), ...) {
+  
+  # Save original obj.attributes before any subsetting drops them
+  orig_oa <- attr(profs, "obj.attributes")
+  filtered_oa <- if (!is.null(orig_oa)) intersect(orig_oa, modes) else NULL
+  
   profs <- profs[profs$whichPar %in% whichpars]
   
   cleanProfilePlot <- function(prof_sub) {
-    plotProfile(prof_sub, mode %in% c("data", "prior")) +
+    # Remove columns for modes we don't want, so plotProfile can't plot them
+    cols_to_drop <- setdiff(orig_oa, modes)
+    prof_sub <- prof_sub[, !(colnames(prof_sub) %in% cols_to_drop), drop = FALSE]
+    attr(prof_sub, "obj.attributes") <- filtered_oa
+    p <- plotProfile(prof_sub)
+    
+    # plotProfile always adds "total"; filter the underlying data to requested modes
+    pdata <- attr(p, "data")
+    pdata <- pdata[pdata$mode %in% modes, , drop = FALSE]
+    
+    threshold <- c(1, 2.7, 3.84)
+    p_new <- ggplot(pdata, aes(x = par, y = delta, group = interaction(proflist, mode), 
+                               color = proflist, linetype = mode)) +
+      facet_wrap(~name, scales = "free_x") +
+      geom_hline(yintercept = threshold, lty = 2, color = "gray") +
+      geom_line() +
+      geom_point(data = subset(pdata, is.zero)) +
+      ylab(expression(paste("CL /", Delta * chi^2))) +
+      scale_y_continuous(breaks = c(1, 2.7, 3.84), 
+                         labels = c("68% / 1   ", "90% / 2.71", "95% / 3.84"),
+                         limits = c(NA, 5)) +
+      xlab("parameter value") +
       labs(title = NULL, x = NULL, linetype = "contrib") +
       theme(
         strip.text = element_blank(),
@@ -322,4 +379,3 @@ plotProfilesAndPaths <- function(profs, whichpars, npars = 5, ncols = 3, normali
   
   return(body)
 }
-

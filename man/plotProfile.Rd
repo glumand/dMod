@@ -9,7 +9,7 @@
 \usage{
 \method{plotProfile}{tbl_df}(dMod.frame, hypothesis = 1, ...)
 
-\method{plotProfile}{parframe}(profs, ..., maxvalue = 5, parlist = NULL)
+\method{plotProfile}{parframe}(profs, ..., maxvalue = 5, parlist = NULL, ncol = NULL)
 
 \method{plotProfile}{list}(profs, ..., maxvalue = 5, parlist = NULL)
 
@@ -26,6 +26,8 @@ plotProfile(profs, ...)
 
 \item{parlist}{Matrix or data.frame with columns for the parameters to be added to the plot as points.
 If a "value" column is contained, deltas are calculated with respect to lowest chisquare of profiles.}
+
+\item{ncol}{Number of columns in the resulting plot grid.}
 }
 \value{
 A plot object of class \code{ggplot}.

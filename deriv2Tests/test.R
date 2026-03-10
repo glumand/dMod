@@ -114,16 +114,16 @@ system.time({obj(pouter)})
 
 myfit <- trust(obj, pouter, rinit = 0.1, rmax = 5, iterlim = 500, printIter = T)
 
-# Fit 50 times, sample with sd=4 around pouter
+# # Fit 50 times, sample with sd=4 around pouter
 # out_frame <- mstrust(obj, pouter, sd = 4, studyname = "bamodel", cores=detectFreeCores(), fits=100, iterlim = 1e3)
 
 outknecht <- runbg({
   mstrust(obj, pouter, sd = 4, studyname = "bamodelms", cores=detectFreeCores(), fits=100, iterlim = 1e3)
-}, machine = "knecht2", filename = "bamodelms", compile = T)
+}, machine = "knecht1", filename = "bamodelms")
 outknecht$check()
 outknecht$get()
 
-outms <- .runbgOutput$knecht3
+outms <- .runbgOutput$knecht1
 
 out_frame <- as.parframe(outms)
 plotValues(out_frame) # Show "Waterfall" plot
@@ -141,7 +141,7 @@ plot(getDerivs((g*x*p)(times, bestfit)))
 profiles_integrate <- profile(obj, bestfit, whichPar = names(bestfit), method = "integrate", cores = 10, limits = c(lower = -5, upper = 5), 
                               stepControl = list(stop = "data"))
 
-profiles <- profile(obj, bestfit, whichPar = names(bestfit), method = "optimize", cores = 10, limits = c(lower = -5, upper = 5), 
+profiles_optimize <- profile(obj, bestfit, whichPar = names(bestfit), method = "optimize", cores = 10, limits = c(lower = -5, upper = 5), 
                     stepControl = list(stepsize = 1e-4, min = 1e-4, max = Inf, atol = 1e-2, rtol = 1e-2, limit = 200, stop = "data"))
 
 proflist <- list(integrate = profiles_integrate, optimize = profiles_optimize) # The best tactic is to use method = "integrate" with reoptimize = TRUE in algoControl
@@ -151,10 +151,10 @@ plotProfile(profiles_integrate, mode %in% c("data", "prior"))
 plotProfile(profiles_optimize, mode %in% c("data", "prior"))
 
 # The triple S, TCE_CELL, TCA_CANA compensate by structure of the model
-plotPaths(profiles, whichPar = "TCA_CANA")
-plotPaths(profiles, whichPar = "K_EXPORT_CANA")
-plotPaths(profiles, whichPar = "K_REFLUX_OPEN")
-plotPaths(profiles, whichPar = "S") 
+plotPaths(profiles_optimize, whichPar = "TCA_CANA")
+plotPaths(profiles_optimize, whichPar = "K_EXPORT_CANA")
+plotPaths(profiles_optimize, whichPar = "K_REFLUX_OPEN")
+plotPaths(profiles_optimize, whichPar = "S") 
 
 # Tighten model assumptions with steady state constraint
 mysteadies <- steadyStates(reactions, forcings = "k_import")
@@ -235,7 +235,7 @@ confint(validation_profile, val.column = "value")
 # Here we calculate a prediction CI for different timepoints. In the end we interpolate to a "prediction band"
 library(parallel)
 predprofs <- list()
-prediction_band <- do.call(rbind, mclapply(seq(10, 50, 10), function(t) {
+prediction_band <- do.call(rbind, mclapply(seq(10, 50, 5), function(t) {
 
   cat("Computing prediction profile for t =", t, "\n")
 
@@ -275,8 +275,7 @@ prediction_band_spline <- data.frame(
 # Create the ggplot
 ggplot(prediction, aes(x = time, y = value, color = condition)) +
   geom_line() +  # Line connecting the points for each condition
-  geom_ribbon(data = prediction_band_spline, aes(x = time, ymin = lower, ymax = upper, fill = condition),
-              lty = 0, alpha = .3, show.legend = F) +  # Show ribbon in the legend
+  geom_ribbon(data = prediction_band_spline, aes(x = time, ymin = lower, ymax = upper, fill = condition), lty = 0, alpha = .3, show.legend = F) +  # Show ribbon in the legend
   geom_point(data = prediction_band, aes(x = time, y = lower, color = condition), shape = 4, show.legend = F) +
   geom_point(data = prediction_band, aes(x = time, y = upper, color = condition), shape = 4, show.legend = F) +
   facet_wrap(~ name, scales = "free_y") +  # Facet by 'name' column
@@ -287,40 +286,7 @@ ggplot(prediction, aes(x = time, y = value, color = condition)) +
   ) +
   dMod::theme_dMod() +  # Apply dMod theme
   dMod::scale_color_dMod() +  # Apply dMod color scale to lines
-  dMod::scale_fill_dMod()   # Apply the same color scale to the fill
+  dMod::scale_fill_dMod()     # Apply the same color scale to the fill
 
-
-## Alternative implementation of the Steady state via implicit parameter transformation of the steady state  -----------------------------------------------
-
-# Redefine reactions in order to control the standard and open condition by events
-reactions <- eqnlist() %>%
-  addReaction("TCA_buffer", "TCA_cell", rate = "import*TCA_buffer", description = "Uptake")%>%
-  addReaction("TCA_cell", "TCA_buffer", rate = "export_sinus*TCA_cell", description = "Sinusoidal export")%>%
-  addReaction("TCA_cell", "TCA_cana", rate = "export_cana*TCA_cell", description = "Canalicular export")%>%
-  addReaction("TCA_cana", "TCA_buffer", rate = "(reflux*(1-switch) + reflux_open*switch)*TCA_cana", description = "Reflux into the buffer")%>%
-  addReaction("0", "switch", rate = "0", description = "Create a switch")
-
-events <- NULL
-events <- addEvent(events, var = "TCA_buffer", time = 0, value = 0)
-events <- addEvent(events, var = "switch" , time = 0, value = "OnOff")
-mymodel <- odemodel(reactions, modelname = "bamodel2", events = events)
-x <- Xs(mymodel)
-
-
-
-# Replace one reaction with a analytical expression for the conserved quantity: TCR_tot
-f <- as.eqnvec(reactions)[c("TCA_buffer", "TCA_cana", "TCA_cell")]
-f["TCA_cell"] <- "TCA_buffer + TCA_cana + TCA_cell - TCA_tot"
-pSS <- P(f, method = "implicit", compile = TRUE, modelname = "pfn")
-
-observables <- eqnvec(buffer = "s*TCA_buffer", cellular = "s*(TCA_cana + TCA_cell)")
-
-innerpars <- unique(c(getParameters(mymodel), getSymbols(observables), getSymbols(f)))
-trafo <- repar("x~x" , x = innerpars)
-trafo <- repar("x~0" , x = reactions$states, trafo)
-
-trafo <- repar("x~exp(log(10)*x)", x = setdiff(innerpars, "OnOff"), trafo)
-p <- P(repar("OnOff~0", trafo), condition = "closed") + P(repar("OnOff~1", trafo), condition = "open")
-g <- Y(observables, f = x, compile = TRUE, modelname = "obsfn2")
 
 

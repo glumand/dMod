@@ -286,7 +286,7 @@ plotValues.parframe <- function(x, tol = 1, ...) {
 
 #' @export
 #' @rdname plotProfile
-plotProfile.parframe <- function(profs, ..., maxvalue = 5, parlist = NULL) {
+plotProfile.parframe <- function(profs, ..., maxvalue = 5, parlist = NULL, ncol = NULL) {
   
   if("parframe" %in% class(profs)) 
     arglist <- list(profs)
@@ -359,7 +359,7 @@ plotProfile.parframe <- function(profs, ..., maxvalue = 5, parlist = NULL) {
   data <- droplevels.data.frame(subset(data, ...))
 
   
-  p <- ggplot(data, aes(x=par, y=delta, group=interaction(proflist,mode), color=proflist, linetype=mode)) + facet_wrap(~name, scales="free_x") + 
+  p <- ggplot(data, aes(x=par, y=delta, group=interaction(proflist,mode), color=proflist, linetype=mode)) + facet_wrap(~name, scales="free_x", ncol = ncol) + 
     geom_hline(yintercept=threshold, lty=2, color="gray") + 
     geom_line() + #geom_point(aes=aes(size=1), alpha=1/3) +
     geom_point(data = data.zero) +

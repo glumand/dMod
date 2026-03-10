@@ -237,6 +237,7 @@ plotData.data.frame <- function(data, ...) {
 #' @param maxvalue Numeric, the value where profiles are cut off.
 #' @param parlist Matrix or data.frame with columns for the parameters to be added to the plot as points.
 #' If a "value" column is contained, deltas are calculated with respect to lowest chisquare of profiles.
+#' @param ncol Number of columns in the resulting plot grid.
 #' @return A plot object of class `ggplot`.
 #' @details See [profile] for examples.
 #' @export

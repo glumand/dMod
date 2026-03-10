@@ -10,6 +10,7 @@ plotProfilesAndPaths(
   npars = 5,
   ncols = 3,
   normalizePaths = FALSE,
+  modes = c("data", "prior"),
   ...
 )
 }
@@ -24,6 +25,9 @@ plotProfilesAndPaths(
 
 \item{normalizePaths}{Logical indicating whether the paths should be normalized to absolute values of 1.
 Default \code{FALSE}.}
+
+\item{modes}{Character vector of profile modes to display in the profile plot.
+Default \code{c("data", "prior")}. Use e.g. \code{"data"} to show only the data contribution.}
 
 \item{...}{Additional arguments passed to \code{\link[cowplot:plot_grid]{cowplot::plot_grid()}}.}
 }
