@@ -95,16 +95,15 @@ predict_array <- function (prd, times, pars = partable, whichpar = par, keep_nam
 }
 
 
-
 find_empty_corner <- function(x, y) {
   xmid <- (min(x, na.rm = TRUE) + max(x, na.rm = TRUE)) / 2
   ymid <- (min(y, na.rm = TRUE) + max(y, na.rm = TRUE)) / 2
   
   corners <- list(
-    bottom_left  = c(0.02, 0.02),
-    bottom_right = c(0.98, 0.02),
-    top_left     = c(0.02, 0.98),
-    top_right    = c(0.98, 0.98)
+    bottom_left  = c(0.05, 0.05),
+    bottom_right = c(0.95, 0.05),
+    top_left     = c(0.05, 0.95),
+    top_right    = c(0.95, 0.95)
   )
   
   counts <- c(
@@ -151,12 +150,19 @@ PlotPaths <- function(profs=myprofiles, ..., whichPar, sort = FALSE, relative = 
     if (is.numeric(whichPar)) whichPar <- names(proflist)[whichPar]
     
     subdata <- do.call(rbind, lapply(whichPar, function(n) {
-      # matirx
+      # matrix
       paths <- as.matrix(proflist[[n]][, parameters])
       values <- proflist[[n]][, "value"]
       origin <- which.min(abs(proflist[[n]][, "constraint"]))
+      
+      # Save absolute values of profiled parameter before relativizing
+      abs_profiled <- as.numeric(paths[, n])
+      
       if (relative) 
         for(j in 1:ncol(paths)) paths[, j] <- as.numeric(paths[, j]) - as.numeric(paths[origin, j])
+      
+      # Restore absolute values for the profiled parameter (x-axis always absolute)
+      paths[, n] <- abs_profiled
       
       combinations <- dMod:::expand.grid.alt(whichPar, colnames(paths))
       if (sort) combinations <- apply(combinations, 1, sort) else combinations <- apply(combinations, 1, identity)
@@ -189,7 +195,7 @@ PlotPaths <- function(profs=myprofiles, ..., whichPar, sort = FALSE, relative = 
   data$proflist <- as.factor(data$proflist)
   
   if (relative){
-    axis.labels <- c(expression(paste(Delta, "parameter 1")), expression(paste(Delta, "parameter 2")))  
+    axis.labels <- c("parameter 1", expression(Delta ~ p[j]))
   } else {
     axis.labels <- c("parameter 1", "parameter 2")
   }
@@ -232,7 +238,7 @@ PlotPaths <- function(profs=myprofiles, ..., whichPar, sort = FALSE, relative = 
     suppressMessages(
       p <- ggplot2::ggplot(data, aes(x = x, y = y, color = label, group = partner)) + 
         geom_line() +
-        xlab(whichPar) + ylab("relative change of\n other paramters") +
+        xlab(whichPar) + ylab(expression(Delta ~ p[j])) +
         scale_linetype_discrete(name = "profile\nlist") +
         scale_color_manual(values = species_colors) + theme_dMod() +
         theme(legend.position = "inside",
@@ -367,8 +373,7 @@ plotProfilesAndPaths <- function(profs, whichpars, npars = 5, ncols = 3, normali
     p_prof_noleg <- cleanProfilePlot(prof_sub)
     
     p_paths <- plotPathsMulti(prof_sub, whichpars[z], npars, normalizePaths = normalizePaths) +
-      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
-            axis.title.y = element_blank())
+      theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank())
     
     aligned_pair <- cowplot::align_plots(p_prof_noleg, p_paths, align = "v", axis = "tb")
     stacked_list[[z]] <- cowplot::plot_grid(aligned_pair[[1]], aligned_pair[[2]],
