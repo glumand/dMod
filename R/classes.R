@@ -456,8 +456,10 @@ prdfn <- function(P2X, parameters = NULL, condition = NULL) {
     pars <- arglist[[2]]
     
     # yields derivatives for all parameters in pars but not in fixed
-    pars <- as.parvec(pars[setdiff(names(pars), names(fixed))])
-    fixed <- as.parvec(fixed, deriv = FALSE)
+    if (!is.null(fixed)) {
+      pars  <- as.parvec(pars[setdiff(names(pars), names(fixed))])
+      fixed <- as.parvec(fixed, deriv = FALSE)
+    }
     
     overlap <- test_conditions(conditions, condition)
     # NULL if at least one argument is NULL
