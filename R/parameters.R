@@ -832,7 +832,6 @@ branch <- function(
   
   # --- branch trafo -----------------------------------------------------------
   out <- setNames(lapply(conditions, function(x) trafo), conditions)
-  attr(out, "tree") <- table
   
   # --- optional application of table -----------------------------------------
   if (apply == "nothing")
@@ -844,21 +843,24 @@ branch <- function(
     
     for (par in colnames(row)) {
       val <- row[[par]]
-      
-      if (is.na(val))
-        next
+      if (is.na(val)) next
       
       expr <- paste0(par, " ~ ", val)
       
-      if (apply == "insert") {
-        out <- insert(out, expr, conditionMatch = cn)
-      }
+      # Einzelelement mit einzeiliger Dummy-Tree versehen
+      single_trafo <- out[[cn]]
+      attr(single_trafo, "tree") <- row
       
-      if (apply == "define") {
-        out <- define(out, expr, conditionMatch = cn)
+      if (apply == "insert") {
+        out[[cn]] <- insert(single_trafo, expr)
       }
+      if (apply == "define") {
+        out[[cn]] <- define(single_trafo, expr)
+      }
+      attr(out[[cn]], "tree") <- NULL
     }
   }
+  attr(out, "tree") <- table
   
   out
 }
