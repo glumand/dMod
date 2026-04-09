@@ -13,7 +13,7 @@ odemodel(
   fixed = NULL,
   estimate = NULL,
   modelname = "odemodel",
-  solver = c("deSolve", "Sundials", "boost"),
+  solver = c("deSolve", "CppODE"),
   gridpoints = NULL,
   verbose = FALSE,
   ...

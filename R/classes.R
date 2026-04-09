@@ -45,16 +45,13 @@
 #' @example inst/examples/odemodel.R
 #' @export
 odemodel <- function(f, deriv = TRUE, forcings=NULL, events = NULL, outputs = NULL, 
-                     fixed = NULL, estimate = NULL, modelname = "odemodel", solver = c("deSolve", "Sundials", "boost"), 
+                     fixed = NULL, estimate = NULL, modelname = "odemodel", solver = c("deSolve", "CppODE"), 
                      gridpoints = NULL, verbose = FALSE, ...) {
 
   f <- as.eqnvec(f)
   solver <- match.arg(solver)
-
-  if (solver == "Sundials") {
-    stop("Sundials support has been removed. If you were an active user of the Sundials implementation, please get in touch.")
-  } 
-  else if (solver == "deSolve") {
+  
+  if (solver == "deSolve") {
     
     if (is.null(gridpoints)) gridpoints <- 2
     func <- cOde::funC(f, forcings = forcings, events = events, outputs = outputs, fixed = fixed, modelname = modelname , solver = solver, nGridpoints = gridpoints, ...)
@@ -108,8 +105,7 @@ odemodel <- function(f, deriv = TRUE, forcings=NULL, events = NULL, outputs = NU
     out <- list(func = func, extended = extended)
     class(out) <- c("deSolve", "odemodel")
   }
-  else if (solver == "boost") {
-    # Check and warn about unsupported arguments for boost::rosenbrock4
+  else if (solver == "CppODE") {
     unsupported_args <- list(
       outputs = outputs,
       estimate = estimate,
@@ -130,7 +126,7 @@ odemodel <- function(f, deriv = TRUE, forcings=NULL, events = NULL, outputs = NU
       extended <- CppODE::CppODE(f, events = events, fixed = fixed, forcings = forcings, modelname = paste0(modelname, "_s"), outdir = getwd(), deriv = TRUE, verbose = verbose, ...)
     }
     out <- list(func = func, extended = extended)
-    class(out) <- c("boost", "odemodel")
+    class(out) <- c("CppODE", "odemodel")
   }
   return(out)
 }

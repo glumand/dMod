@@ -413,115 +413,123 @@ expand.grid.alt <- function(seq1, seq2) {
 #' Compile model-related C/C++ code
 #'
 #' @description
-#' Compiles one or more model-related objects of class `parfn`, `obsfn`, or
-#' `prdfn` into dynamically loadable shared libraries (`.so` on Unix-alike
-#' systems, `.dll` on Windows).
+#' Compiles model objects ([parfn], [obsfn], [prdfn]) related C/C++ files into shared libraries via `R CMD SHLIB`.
 #'
-#' The function automatically detects C and C++ source files associated
-#' with each object based on its `modelname`, compiles them, and links them
-#' into shared libraries which are loaded into the current R session.
+#' @param ... One or more model objects.
+#' @param output Optional name for a combined shared library.
+#' @param args Additional compiler/linker flags.
+#' @param cores Parallel compilation jobs (Unix only, requires `cores > 1`).
+#' @param verbose If `TRUE`, print compiler commands.
 #'
-#' @param ... One or more objects of class `parfn`, `obsfn`, or `prdfn`.
-#'   Corresponding source files (e.g. `model.c`) are detected
-#'   automatically based on the current `modelname`.
-#' @param output Optional character string. If provided, all detected source
-#'   files are compiled and linked into a single shared library named
-#'   `paste0(output, .Platform$dynlib.ext)`. If `NULL`, each source file is
-#'   compiled and linked into its own shared library.
-#' @param args Optional character string of additional compiler or linker
-#'   flags passed to `R CMD SHLIB`. If `NULL` or empty, compilation defaults
-#'   to `-O3 -DNDEBUG`.
-#' @param cores Integer specifying the number of CPU cores used for parallel
-#'   compilation of individual source files. Parallel compilation is enabled
-#'   when `cores > 1`.
-#' @param verbose Logical. If `TRUE`, compiler and linker output is printed
-#'   to the R console.
-#'
-#' @details
-#' Any previously loaded shared libraries with matching names are unloaded
-#' prior to linking. Successfully linked libraries are loaded automatically.
-#'
-#' When `output` is specified, the `modelname` of each input object is
-#' overwritten with `output` to ensure consistent symbol naming across all
-#' compiled routines. In addition, the attributes `sourcefiles` (C/C++
-#' source files) and `objfiles` (corresponding object files) are added to
-#' each object for diagnostic purposes.
-#'
-#' @return
-#' Invisibly returns `TRUE` if compilation and linking succeed.
-#'
+#' @return Invisibly `TRUE` on success.
 #' @export
-compile <- function(..., output=NULL, args=NULL, cores=1, verbose=FALSE){
+compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE) {
   
   ## save & restore env
-  old <- Sys.getenv(c("PKG_CFLAGS","PKG_CXXFLAGS","PKG_CPPFLAGS"), unset=NA)
+  old <- Sys.getenv(c("PKG_CFLAGS","PKG_CXXFLAGS","PKG_CPPFLAGS","PKG_LIBS"), unset = NA)
   on.exit({
-    for(n in names(old))
-      if(is.na(old[n])) Sys.unsetenv(n) else Sys.setenv(structure(old[n],names=n))
-  }, add=TRUE)
+    for (n in names(old))
+      if (is.na(old[n])) Sys.unsetenv(n) else Sys.setenv(structure(old[n], names = n))
+  }, add = TRUE)
   
-  objs <- list(...); if(!length(objs)) stop("No objects")
+  objs <- list(...)
+  if (!length(objs)) stop("No objects")
   obj.names <- as.character(substitute(list(...)))[-1]
-  Rbin <- shQuote(file.path(R.home("bin"),"R"))
-  so   <- .Platform$dynlib.ext
+  Rbin  <- shQuote(file.path(R.home("bin"), "R"))
+  so    <- .Platform$dynlib.ext
+  cfg   <- function(x) trimws(system(paste(Rbin, "CMD config", x), intern = TRUE))
+  strip <- function(x) trimws(gsub("(^| )-std=[^ ]+", "", x))
   
-  files <- unique(unlist(lapply(objs, function(o){
-    if(!inherits(o,c("obsfn","parfn","prdfn"))) return(NULL)
-    b <- outer(modelname(o),
-               c("","_deriv","_s","_s2","_sdcv","_dfdx","_dfdp"),
-               paste0)
-    f <- c(paste0(b,".c"),paste0(b,".cpp"))
-    f[file.exists(f)]
+  ## classify objects
+  is_dmod <- vapply(objs, inherits, logical(1), c("obsfn","parfn","prdfn"))
+  is_cpp  <- vapply(objs, function(o) !is.null(attr(o, "srcfile")), logical(1))
+  
+  ## collect source files — dMod/cOde path
+  dmod_f <- character(0)
+  if (any(is_dmod)) {
+    dmod_f <- unique(unlist(lapply(objs[is_dmod], function(o) {
+      b <- outer(modelname(o), c("","_deriv","_s","_s2","_sdcv","_dfdx","_dfdp"), paste0)
+      f <- c(paste0(b, ".c"), paste0(b, ".cpp"))
+      f[file.exists(f)]
+    })))
+  }
+  
+  ## collect source files — CppODE path
+  cpp_f <- character(0)
+  if (any(is_cpp)) {
+    cpp_f <- unique(Filter(file.exists,
+                           vapply(objs[is_cpp], function(o) attr(o, "srcfile") %||% "", character(1))))
+  }
+  
+  files <- normalizePath(unique(c(dmod_f, cpp_f)), winslash = "/", mustWork = TRUE)
+  if (!length(files)) stop("No source files found")
+  roots      <- sub("\\.[^.]+$", "", basename(files))
+  roots_full <- sub("\\.[^.]+$", "", files)
+  
+  ## merge compileArgs from CppODE objects + explicit args
+  obj_args <- unique(unlist(lapply(objs[is_cpp], function(o) {
+    a <- attr(o, "compileArgs"); if (!is.null(a) && nzchar(a)) a
   })))
-  if(!length(files)) stop("No source files found")
+  extra <- paste(c(obj_args, args), collapse = " ")
   
-  files <- normalizePath(files, winslash="/", mustWork=TRUE)
-  roots <- sub("\\.(c|cpp)$","",basename(files))
-  
-  pic <- if(.Platform$OS.type=="windows") "" else "-fPIC"
+  ## compiler flags
+  if (.Platform$OS.type == "windows") cores <- 1
+  pic  <- if (.Platform$OS.type == "windows") "" else "-fPIC"
   base <- paste("-O2 -DNDEBUG -w", pic)
-  if(!is.null(args) && nzchar(args)) base <- paste(base, args)
+  
+  ## KLU detection
+  uses_klu <- any(vapply(objs, function(o) isTRUE(attr(o, "sparse")), logical(1)))
+  klu_flag <- ""; klu_lib <- ""
+  if (uses_klu) {
+    sd <- if (nzchar(.Platform$r_arch)) file.path("lib", .Platform$r_arch) else "lib"
+    lp <- system.file(sd, "libcppode_ss.a", package = "CppODE")
+    if (file.exists(lp)) { klu_flag <- "-DKLU"; klu_lib <- shQuote(lp) }
+  }
+  
+  ## assemble PKG_* variables
+  cxx <- paste(base, klu_flag)
+  if (nzchar(extra)) { base <- paste(base, extra); cxx <- paste(cxx, extra) }
+  
+  libs <- paste(klu_lib, cfg("LAPACK_LIBS"), cfg("BLAS_LIBS"))
   
   Sys.setenv(
     PKG_CFLAGS   = base,
-    PKG_CXXFLAGS = base,
-    PKG_CPPFLAGS = paste0("-I", shQuote(system.file("include",package="CppODE")))
+    PKG_CXXFLAGS = cxx,
+    PKG_CPPFLAGS = paste0("-I", system.file("include", package = "CppODE")),
+    PKG_LIBS     = libs
   )
   
-  ## toolchain report (truthful)
-  cfg <- function(x) system(paste(shQuote(file.path(R.home("bin"),"R")),"CMD config",x),intern=TRUE)
-  strip <- function(x) trimws(gsub("(^| )-std=[^ ]+","",x))
+  ## toolchain report
+  if (any(grepl("\\.c$",   files))) cat(sprintf("using C compiler:   %s [%s]\n", strip(cfg("CC")),  trimws(Sys.getenv("PKG_CFLAGS"))))
+  if (any(grepl("\\.cpp$", files))) cat(sprintf("using C++ compiler: %s [%s]\n", strip(cfg("CXX")), trimws(Sys.getenv("PKG_CXXFLAGS"))))
   
-  if(any(grepl("\\.c$",files)))
-    cat(sprintf("using C compiler:   %s [%s]\n",
-                strip(cfg("CC")), trimws(Sys.getenv("PKG_CFLAGS"))))
+  ## unload stale DLLs
+  loaded <- getLoadedDLLs()
+  for (i in seq_along(roots))
+    if (roots[i] %in% names(loaded)) try(dyn.unload(loaded[[roots[i]]][["path"]]), silent = TRUE)
+  if (!is.null(output)) try(dyn.unload(paste0(output, so)), silent = TRUE)
   
-  if(any(grepl("\\.cpp$",files)))
-    cat(sprintf("using C++ compiler: %s [%s]\n",
-                strip(cfg("CXX")), trimws(Sys.getenv("PKG_CXXFLAGS"))))
-  
-  
-  invisible(lapply(c(roots,output),function(x)
-                   if(!is.null(x)) try(dyn.unload(paste0(x,so)),silent=TRUE)))
-  
-  run <- function(cmd){
-    if(verbose) cat(cmd,"\n")
-    if(system(cmd,ignore.stdout=!verbose,ignore.stderr=!verbose)!=0)
+  ## compile & link
+  run <- function(cmd) {
+    if (verbose) cat(cmd, "\n")
+    if (system(cmd, ignore.stdout = !verbose, ignore.stderr = !verbose) != 0)
       stop("Compilation failed")
   }
   
-  if(is.null(output)){
-    if(.Platform$OS.type=="unix" && cores>1)
-      parallel::mclapply(files, function(f) run(paste(Rbin,"CMD SHLIB",shQuote(f))), mc.cores=cores)
-    else
-      for(f in files) run(paste(Rbin,"CMD SHLIB",shQuote(f)))
-    for(r in roots) dyn.load(paste0(r,so))
+  if (is.null(output)) {
+    if (.Platform$OS.type == "unix" && cores > 1)
+      parallel::mclapply(files, function(f) run(paste(Rbin, "CMD SHLIB", shQuote(f))), mc.cores = cores)
+    else for (f in files) run(paste(Rbin, "CMD SHLIB", shQuote(f)))
+    for (r in roots_full) dyn.load(paste0(r, so))
   } else {
-    out <- paste0(dirname(files[1]),"/",output,so)
-    run(paste(Rbin,"CMD SHLIB",paste(shQuote(files),collapse=" "),"-o",shQuote(out)))
+    output <- sub(paste0("\\", so, "$"), "", output)
+    out <- file.path(dirname(files[1]), paste0(output, so))
+    try(dyn.unload(out), silent = TRUE)
+    if (file.exists(out)) unlink(out)
+    run(paste(Rbin, "CMD SHLIB", paste(shQuote(files), collapse = " "), "-o", shQuote(out)))
     dyn.load(out)
-    for(nm in obj.names)
-      eval.parent(parse(text=paste0("modelname(",nm,") <- '",output,"'")))
+    for (i in which(is_dmod))
+      eval.parent(parse(text = paste0("modelname(", obj.names[i], ") <- '", output, "'")))
   }
   
   invisible(TRUE)

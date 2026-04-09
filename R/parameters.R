@@ -832,6 +832,7 @@ branch <- function(
   
   # --- branch trafo -----------------------------------------------------------
   out <- setNames(lapply(conditions, function(x) trafo), conditions)
+  attr(out, "tree") <- table
   
   # --- optional application of table -----------------------------------------
   if (apply == "nothing")
@@ -860,7 +861,6 @@ branch <- function(
       attr(out[[cn]], "tree") <- NULL
     }
   }
-  attr(out, "tree") <- table
   
   out
 }

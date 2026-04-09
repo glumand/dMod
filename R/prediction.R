@@ -156,8 +156,8 @@ Xs.deSolve <- function(odemodel, forcings = NULL, events = NULL, names = NULL, c
 }
 
 #' @export
-Xs.boost <- function(odemodel, forcings = NULL, events = NULL, names = NULL, condition = NULL, 
-                     optionsOde = list(), optionsSens = list()) {
+Xs.CppODE <- function(odemodel, forcings = NULL, events = NULL, names = NULL, condition = NULL, 
+                      optionsOde = list(), optionsSens = list()) {
   
   if (!is.null(forcings)) {
     if (!inherits(forcings, "data.frame")) {
@@ -184,8 +184,8 @@ Xs.boost <- function(odemodel, forcings = NULL, events = NULL, names = NULL, con
     stop("Events should be passed to odemodel() when using solver = 'boost'")
   }
   
-  optionsDefault <- list(atol = 1e-6, rtol = 1e-6, maxattemps = 100, maxsteps = 1e6, 
-                         hini = 0, roottol = 1e-6, maxroot = 1)
+  optionsDefault <- list(atol = 1e-6, rtol = 1e-6, maxattemps = 10L, maxsteps = 1e6L, 
+                         hini = 0L, roottol = 1e-6, maxroot = 1)
   
   # Warn about unknown options
   warn_unknown <- function(user, defaults, label) {

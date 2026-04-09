@@ -7,45 +7,19 @@
 compile(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
 }
 \arguments{
-\item{...}{One or more objects of class \code{parfn}, \code{obsfn}, or \code{prdfn}.
-Corresponding source files (e.g. \code{model.c}) are detected
-automatically based on the current \code{modelname}.}
+\item{...}{One or more model objects.}
 
-\item{output}{Optional character string. If provided, all detected source
-files are compiled and linked into a single shared library named
-\code{paste0(output, .Platform$dynlib.ext)}. If \code{NULL}, each source file is
-compiled and linked into its own shared library.}
+\item{output}{Optional name for a combined shared library.}
 
-\item{args}{Optional character string of additional compiler or linker
-flags passed to \verb{R CMD SHLIB}. If \code{NULL} or empty, compilation defaults
-to \code{-O3 -DNDEBUG}.}
+\item{args}{Additional compiler/linker flags.}
 
-\item{cores}{Integer specifying the number of CPU cores used for parallel
-compilation of individual source files. Parallel compilation is enabled
-when \code{cores > 1}.}
+\item{cores}{Parallel compilation jobs (Unix only, requires \code{cores > 1}).}
 
-\item{verbose}{Logical. If \code{TRUE}, compiler and linker output is printed
-to the R console.}
+\item{verbose}{If \code{TRUE}, print compiler commands.}
 }
 \value{
-Invisibly returns \code{TRUE} if compilation and linking succeed.
+Invisibly \code{TRUE} on success.
 }
 \description{
-Compiles one or more model-related objects of class \code{parfn}, \code{obsfn}, or
-\code{prdfn} into dynamically loadable shared libraries (\code{.so} on Unix-alike
-systems, \code{.dll} on Windows).
-
-The function automatically detects C and C++ source files associated
-with each object based on its \code{modelname}, compiles them, and links them
-into shared libraries which are loaded into the current R session.
-}
-\details{
-Any previously loaded shared libraries with matching names are unloaded
-prior to linking. Successfully linked libraries are loaded automatically.
-
-When \code{output} is specified, the \code{modelname} of each input object is
-overwritten with \code{output} to ensure consistent symbol naming across all
-compiled routines. In addition, the attributes \code{sourcefiles} (C/C++
-source files) and \code{objfiles} (corresponding object files) are added to
-each object for diagnostic purposes.
+Compiles model objects (\link{parfn}, \link{obsfn}, \link{prdfn}) related C/C++ files into shared libraries via \verb{R CMD SHLIB}.
 }

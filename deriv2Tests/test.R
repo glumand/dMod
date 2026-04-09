@@ -31,10 +31,11 @@ reactions <- eqnlist() %>%
 #             TCA_cell = "k_import * TCA_buffer - k_export_sinus * TCA_cell - k_export_cana * TCA_cell")
 
 # Translate reactions into ODE model object
-mymodel <- odemodel(reactions, modelname = "bamodel", compile = F, solver = "boost")
+mymodel <- odemodel(reactions, modelname = "bamodel", compile = F, solver = "CppODE", method = "bdf")
+mymodel_ds <- odemodel(reactions, modelname = "bamodel_deSolve", compile = F, solver = "deSolve")
 # Generate trajectories for the default condition
 x <- Xs(mymodel)
-
+x_ds <- Xs(mymodel_ds)
 # Define observables buffer and cellular
 observables <- eqnvec(buffer = "s*TCA_buffer", cellular = "s*(TCA_cana + TCA_cell)")
 g <- Y(observables, f = x, condition = NULL, compile = F, modelname = "obsfn_bamodel", attach.input = T)
@@ -61,13 +62,14 @@ p <- P(trafo, condition = "closed", compile = F)
 
 
 # Compile the objects
-compile(g, x, p, cores = 8) # Compile C/C++ output of odemodel in parallel
+compile(g, x, x_ds, p, cores = 8) # Compile C/C++ output of odemodel in parallel
 
 ## Use simulate data to calibrate outer model parameters ---
 outerpars <- getParameters(p)
 pouter <- structure(rep(-1,length(outerpars)), names = outerpars)
 
 prd <- g*x*p
+prd_ds <- g*x_ds*p
 # debugonce(x)
 times <- seq(0, 45, len = 300)
 # debugonce(g)
@@ -78,10 +80,10 @@ out %>% getDerivs() %>% plot()
 myderivs <- attr(out$closed, "deriv")
 # Define objective function
 obj <- normL2(data, g * x * p)
-
+obj_ds <- normL2(data, g * x_ds * p)
 # Test objective function with and without explicit calculation of second derivatives
 obj(pouter)
-
+obj_ds(pouter)
 # Fit on time (starting from pouter)
 myfit <- trust(obj, pouter, rinit = 0.1, rmax = 10, iterlim = 500, printIter = T)
 times <- seq(0, 45, len = 300)
@@ -91,6 +93,7 @@ plot(mypred, data)
 obj(myfit$argument)
 
 system.time({obj(myfit$argument)})
+system.time({obj_ds(myfit$argument)})
 ## Handling different experimental conditions
 
 # Parameter Trafo, usage of "+" operator for trafo functions (output of P())
@@ -108,22 +111,22 @@ p(pouter)
 
 # Objective function
 obj <- normL2(data, g * x * p) + constraintL2(pouter, sigma = 4)
-
+obj_ds <- normL2(data, g * x_ds * p) + constraintL2(pouter, sigma = 4)
 # Evaluation of obj at pouter
 system.time({obj(pouter)})
-
+system.time({obj_ds(pouter)})
 myfit <- trust(obj, pouter, rinit = 0.1, rmax = 5, iterlim = 500, printIter = T)
 
 # # Fit 50 times, sample with sd=4 around pouter
-# out_frame <- mstrust(obj, pouter, sd = 4, studyname = "bamodel", cores=detectFreeCores(), fits=100, iterlim = 1e3)
+outms <- mstrust(obj, pouter, sd = 4, studyname = "bamodel", cores=detectFreeCores(), fits=100, iterlim = 5e2)
 
-outknecht <- runbg({
-  mstrust(obj, pouter, sd = 4, studyname = "bamodelms", cores=detectFreeCores(), fits=100, iterlim = 1e3)
-}, machine = "knecht1", filename = "bamodelms")
-outknecht$check()
-outknecht$get()
+# outknecht <- runbg({
+#   mstrust(obj, pouter, sd = 4, studyname = "bamodelms", cores=detectFreeCores(), fits=100, iterlim = 1e3)
+# }, machine = "knecht1", filename = "bamodelms")
+# outknecht$check()
+# outknecht$get()
 
-outms <- .runbgOutput$knecht1
+# outms <- .runbgOutput$knecht1
 
 out_frame <- as.parframe(outms)
 plotValues(out_frame) # Show "Waterfall" plot
@@ -135,7 +138,7 @@ bestfit <- as.parvec(out_frame)
 plot((g*x*p)(times, bestfit), data)
 # 
 # # Plot sensis
-plot(getDerivs((g*x*p)(times, bestfit)))
+plot(getDerivs((g*x_ds*p)(times, bestfit)))
 # 
 # Calculate Parameter Profiles and plot different contributions (for identifiablility only "data" is of interest)
 profiles_integrate <- profile(obj, bestfit, whichPar = names(bestfit), method = "integrate", cores = 10, limits = c(lower = -5, upper = 5), 
@@ -216,10 +219,11 @@ obj.validation(c(v = 180, bestfit))
 myfit <- trust(obj.validation, parinit = c(v = 190, bestfit), rinit = 1, rmax = 10, iterlim = 1000)
 
 # Calculate profile
-validation_profile <- profile(obj.validation, myfit$argument, "v", cores = 4, method = "integrate",
-                              stepControl = list(stop = "data"),
-                              algoControl = list(gamma = 1, reoptimize = T),
-                              optControl = list(rinit = .1, rmax = 10, iterlim = 100, fterm = 1e-5, mterm = 1e-5))
+validation_profile <- profile(obj.validation, myfit$argument, "v", cores = 4, method = "optimize",
+                              stepControl = list(stepsize = 1e-4, min = 1e-5, max = 1e3, atol = 1e-2, rtol = 1e-2, limit = 500, stop = "data"),
+                              algoControl = list(reoptimize = T),
+                              optControl = list(rinit = .1, rmax = 5, iterlim = 200, fterm = 1e-5, mterm = 1e-5),
+                              cautiousMode = TRUE)
 
 
 # plotProfile(validation_profile) # This also plos the prediction colums, which is a bug in the code.
