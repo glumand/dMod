@@ -2,98 +2,52 @@
 % Please edit documentation in R/parameters.R
 \name{Pimpl}
 \alias{Pimpl}
-\title{Parameter transformation (implicit)}
+\title{Parameter transformation (implicit, root-finding)}
 \usage{
 Pimpl(
   trafo,
   parameters = NULL,
+  forcings = NULL,
   condition = NULL,
   keep.root = TRUE,
   positive = TRUE,
   compile = FALSE,
   modelname = NULL,
-  verbose = FALSE
+  verbose = FALSE,
+  controlsNleqslv = list()
 )
 }
 \arguments{
-\item{trafo}{Named character vector defining the equations to be set to zero.
-Names correspond to dependent variables.}
+\item{trafo}{Named character vector, \code{\link{eqnvec}}, or
+\code{\link{eqnlist}} defining the equations to be set to zero.
+For \code{eqnlist} inputs, conserved quantities are detected and
+eliminated species are substituted automatically. The user then
+provides \code{total_*} parameters instead of the eliminated species.}
 
 \item{parameters}{Character vector, the independent variables.}
 
-\item{condition}{character, the condition for which the transformation is generated}
+\item{forcings}{Character vector of forcing/dummy state names.}
 
-\item{keep.root}{logical, The root of the last evaluation of the parameter transformation
-function is saved as guess for the next evaluation.}
+\item{condition}{Character, the condition label.}
 
-\item{positive}{logical, if \code{TRUE} the implicit variables are solved in log-space to
-enforce strict positivity of the solution.}
+\item{keep.root}{Logical, cache the root for warm-starting.}
 
-\item{compile}{Logical, compile the C++ code containing the function and jacobian (see \link{funCpp})}
+\item{positive}{Logical, solve in log-space for positivity.}
 
-\item{modelname}{Character, sets a fixed filename for the C++ file.}
+\item{compile}{Logical, compile C++ code.}
 
-\item{verbose}{Print compiler output to R command line.}
+\item{modelname}{Character, base filename for C++ code.}
+
+\item{verbose}{Logical, print compiler output.}
+
+\item{controlsNleqslv}{Named list of solver controls.}
 }
 \value{
-a function \code{p2p(p, fixed = NULL, deriv = TRUE)} representing the parameter
-transformation. Here, \code{p} is a named numeric vector with the values of the outer parameters,
-\code{fixed} is a named numeric vector with values of the outer parameters being considered
-as fixed (no derivatives returned) and \code{deriv} is a logical determining whether the Jacobian
-of the parameter transformation is returned as attribute "deriv".
+A function of class \code{\link{parfn}}.
 }
 \description{
-Parameter transformation (implicit)
-}
-\details{
-Usually, the equations contain the dependent variables, the independent variables and
-other parameters. The argument \code{p} of \code{p2p} must provide values for the independent
-variables and the parameters but ALSO FOR THE DEPENDENT VARIABLES. Those serve as initial guess
-for the dependent variables. The dependent variables are then numerically computed by
-\link[nleqslv]{nleqslv}. The Jacobian of the solution with respect to dependent variables
-and parameters is computed by the implicit function theorem. The function \code{p2p} returns
-all parameters as they are with corresponding 1-entries in the Jacobian.
-
-When \code{positive = TRUE}, the solver works in log-space internally: the substitution
-\code{x = exp(logx)} is applied, so \code{f(exp(logx), p) = 0} is solved for \code{logx}.
-This guarantees \code{x > 0} by construction. The analytic Jacobian for the nonlinear solver
-is transformed via the chain rule: \code{df/d(logx) = df/dx * diag(x)}.
-}
-\examples{
-########################################################################
-## Example 1: Steady-state trafo
-########################################################################
-f <- c(A = "-k1*A + k2*B",
-       B = "k1*A - k2*B")
-P.steadyState <- Pimpl(f, "A")
-
-p.outerValues <- c(k1 = 1, k2 = 0.1, A = 10, B = 1)
-P.steadyState(p.outerValues)
-
-########################################################################
-## Example 2: Steady-state trafo combined with log-transform
-########################################################################
-f <- c(A = "-k1*A + k2*B",
-       B = "k1*A - k2*B")
-P.steadyState <- Pimpl(f, "A")
-
-logtrafo <- c(k1 = "exp(logk1)", k2 = "exp(logk2)", A = "exp(logA)", B = "exp(logB)")
-P.log <- P(logtrafo)
-
-p.outerValue <- c(logk1 = 1, logk2 = -1, logA = 0, logB = 0)
-(P.log)(p.outerValue)
-(P.steadyState * P.log)(p.outerValue)
-
-########################################################################
-## Example 3: Steady-states with conserved quantitites
-########################################################################
-f <- c(A = "-k1*A + k2*B", B = "k1*A - k2*B")
-replacement <- c(B = "A + B - total")
-f[names(replacement)] <- replacement
-
-pSS <- Pimpl(f, "total")
-pSS(c(k1 = 1, k2 = 2, A = 5, B = 5, total = 3))
+Parameter transformation (implicit, root-finding)
 }
 \seealso{
-\link{Pexpl} for explicit parameter transformations
+\link{Pexpl}, \link{Pequil}, \link{P}
 }

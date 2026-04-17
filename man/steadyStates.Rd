@@ -12,9 +12,11 @@ steadyStates(
   givenCQs = NULL,
   neglect = NULL,
   sparsifyLevel = 2,
-  maxPolyDegree = 2L,
   outputFormat = "R",
-  testSteady = "T"
+  testSteady = "T",
+  walltime = 0L,
+  simplify = TRUE,
+  version = "1.2"
 )
 }
 \arguments{
@@ -36,29 +38,29 @@ not be used for solving the steady-state equations}
 \item{sparsifyLevel}{numeric, Upper bound for length of linear combinations
 used for simplifying the stoichiometric matrix}
 
-\item{maxPolyDegree}{integer, Maximum polynomial degree for which closed-form
-solutions of FVS species are attempted. Default 2. Degrees 3-4 are
-supported but computationally expensive.}
-
 \item{outputFormat}{Define the output format. By default "R" generating dMod
 compatible output. To obtain an output appropriate for d2d [3] "M" must be
 selected.}
 
-\item{testSteady}{Boolean, if "T" the correctness of the obtained steady
+\item{testSteady}{Character, if "T" the correctness of the obtained steady
 states is numerically checked (this can be very time intensive). If "F" this
-is skipped.}
+is skipped. Ignored for version "1.0" (always tests).}
+
+\item{walltime}{integer, total wall-clock time budget in seconds for the
+solver (default 0 = unlimited). Used for version "1.2".}
+
+\item{simplify}{Logical, if \code{TRUE} (default) each final steady-state
+expression is passed through \code{sympy.simplify} once, at the end of the
+pipeline. Simplification is never applied inside the solve loop (which was
+the main bottleneck in previous releases). Set to \code{FALSE} to skip the
+final simplification entirely — faster, but output may be bulkier. Used
+for version "1.2" only.}
+
+\item{version}{Character, which AlyssaPetit backend to use. One of
+\code{"1.0"}, \code{"1.1"}, or \code{"1.2"} (default).}
 }
 \value{
-List with components:
-\describe{
-\item{equations}{Named character vector of steady-state equations (dMod compatible).}
-\item{fvs_species}{Character vector of FVS species names (empty if no FVS needed).}
-\item{fvs_results}{Character vector of FVS solution details.}
-\item{fvs_unsolved}{Character vector of FVS species that could not be solved in closed form.}
-\item{convergence_conditions}{Character vector of symbolic stability conditions (only for unsolved FVS with n <= 2).}
-}
-For backward compatibility, if no FVS species are present, returns only the
-named character vector of equations (as in v1.x).
+Named character vector of steady-state equations (dMod compatible).
 }
 \description{
 This function follows the method published in [1]. Find the
@@ -71,11 +73,18 @@ the solution.
 The function calls a python script via the reticulate package.
 Use python3.x
 
-Since v2.0 the tool handles cycles that cannot be removed
-analytically by computing a minimal Feedback Vertex Set (FVS), attempting
-polynomial solving for any symbol in the FVS equations (preferring the
-lowest polynomial degree), and providing symbolic global stability
-conditions (1D/2D) when closed-form solutions are not available.
+Three versions of the AlyssaPetit backend are available:
+\itemize{
+\item \code{"1.0"}: Original version. No steady-state test toggle.
+\item \code{"1.1"}: Adds the \code{testSteady} option to skip
+verification.
+\item \code{"1.2"} (default): Like v1.1 with numpy fast-path
+sparsification, optional \code{walltime}, structural sink-cluster
+detection (states without a protected mass source are set to 0 a
+priori), direct linear solves instead of \code{sympy.solve()} in the
+remaining-equations phase, and an end-of-pipeline \code{simplify}
+toggle.
+}
 }
 \examples{
 

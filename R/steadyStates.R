@@ -1,5 +1,5 @@
 #' Calculate analytical steady states.
-#' 
+#'
 #' @description This function follows the method published in \[1\]. Find the
 #'   latest version of the tool and some examples under \[2\]. The determined
 #'   steady-state solution is tailored to parameter estimation. Please note that
@@ -8,11 +8,18 @@
 #'   the solution.
 #' @description The function calls a python script via the reticulate package.
 #'   Use python3.x
-#' @description Since v2.0 the tool handles cycles that cannot be removed
-#'   analytically by computing a minimal Feedback Vertex Set (FVS), attempting
-#'   polynomial solving for any symbol in the FVS equations (preferring the
-#'   lowest polynomial degree), and providing symbolic global stability
-#'   conditions (1D/2D) when closed-form solutions are not available.
+#' @description Three versions of the AlyssaPetit backend are available:
+#'   \itemize{
+#'     \item \code{"1.0"}: Original version. No steady-state test toggle.
+#'     \item \code{"1.1"}: Adds the \code{testSteady} option to skip
+#'       verification.
+#'     \item \code{"1.2"} (default): Like v1.1 with numpy fast-path
+#'       sparsification, optional \code{walltime}, structural sink-cluster
+#'       detection (states without a protected mass source are set to 0 a
+#'       priori), direct linear solves instead of \code{sympy.solve()} in the
+#'       remaining-equations phase, and an end-of-pipeline \code{simplify}
+#'       toggle.
+#'   }
 #'
 #' @param model Either name of the csv-file or the eqnlist of the model.
 #' @param file Name of the file to which the steady-state equations are saved.
@@ -25,26 +32,24 @@
 #'   not be used for solving the steady-state equations
 #' @param sparsifyLevel numeric, Upper bound for length of linear combinations
 #'   used for simplifying the stoichiometric matrix
-#' @param maxPolyDegree integer, Maximum polynomial degree for which closed-form
-#'   solutions of FVS species are attempted. Default 2. Degrees 3-4 are
-#'   supported but computationally expensive.
 #' @param outputFormat Define the output format. By default "R" generating dMod
 #'   compatible output. To obtain an output appropriate for d2d \[3\] "M" must be
 #'   selected.
-#' @param testSteady Boolean, if "T" the correctness of the obtained steady
+#' @param testSteady Character, if "T" the correctness of the obtained steady
 #'   states is numerically checked (this can be very time intensive). If "F" this
-#'   is skipped.
+#'   is skipped. Ignored for version "1.0" (always tests).
+#' @param walltime integer, total wall-clock time budget in seconds for the
+#'   solver (default 0 = unlimited). Used for version "1.2".
+#' @param simplify Logical, if \code{TRUE} (default) each final steady-state
+#'   expression is passed through \code{sympy.simplify} once, at the end of the
+#'   pipeline. Simplification is never applied inside the solve loop (which was
+#'   the main bottleneck in previous releases). Set to \code{FALSE} to skip the
+#'   final simplification entirely — faster, but output may be bulkier. Used
+#'   for version "1.2" only.
+#' @param version Character, which AlyssaPetit backend to use. One of
+#'   \code{"1.0"}, \code{"1.1"}, or \code{"1.2"} (default).
 #'
-#' @return List with components:
-#'   \describe{
-#'     \item{equations}{Named character vector of steady-state equations (dMod compatible).}
-#'     \item{fvs_species}{Character vector of FVS species names (empty if no FVS needed).}
-#'     \item{fvs_results}{Character vector of FVS solution details.}
-#'     \item{fvs_unsolved}{Character vector of FVS species that could not be solved in closed form.}
-#'     \item{convergence_conditions}{Character vector of symbolic stability conditions (only for unsolved FVS with n <= 2).}
-#'   }
-#'   For backward compatibility, if no FVS species are present, returns only the
-#'   named character vector of equations (as in v1.x).
+#' @return Named character vector of steady-state equations (dMod compatible).
 #'
 #' @references \[1\]
 #' <https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4863410/>
@@ -61,9 +66,12 @@
 #' @example inst/examples/steadystates.R
 steadyStates <- function(model, file = NULL, rates = NULL, forcings = NULL,
                          givenCQs = NULL, neglect = NULL, sparsifyLevel = 2,
-                         maxPolyDegree = 2L, outputFormat = "R",
-                         testSteady = "T") {
-  
+                         outputFormat = "R", testSteady = "T",
+                         walltime = 0L, simplify = TRUE, version = "1.2") {
+
+  # Validate version
+  version <- match.arg(version, choices = c("1.0", "1.1", "1.2"))
+
   # Check if model is an equation list
   if (inherits(model, "eqnlist")) {
     if (is.null(file)) file <- "reactions_for_Alyssa"
@@ -72,52 +80,63 @@ steadyStates <- function(model, file = NULL, rates = NULL, forcings = NULL,
   }
   if (!is.null(givenCQs) && length(names(givenCQs)) > 0)
     stop("givenCQs must not have names. Please unname() them.")
-  
+
   # Ensure Python dependencies are available
   reticulate::py_require("numpy")
   reticulate::py_require("sympy")
-  
-  # Calculate steady states via AlyssaPetit v2.0
-  ap <- reticulate::import_from_path("AlyssaPetit_ver2_0",
+  # v1.2 uses scipy.optimize.linprog for structural sink-cluster detection
+  # (states whose combined mass leaks monotonically and must therefore be 0).
+  # Older versions don't need scipy.
+  if (version == "1.2") reticulate::py_require("scipy")
+
+  pymodule <- paste0("AlyssaPetit_ver", gsub("\\.", "_", version))
+  ap <- reticulate::import_from_path(pymodule,
                                      path = system.file("code", package = "dMod"))
-  m_ss <- ap$Alyssa(model, as.list(forcings), as.list(givenCQs), as.list(neglect),
-                    sparsifyLevel, as.integer(maxPolyDegree), outputFormat)
-  
-  if (is.null(m_ss) || identical(m_ss, 0L)) return(0)
-  
-  # v2.0 returns a dict; extract components
-  equations     <- m_ss$equations
-  fvs_species   <- m_ss$fvs_species
-  fvs_results   <- m_ss$fvs_results
-  fvs_unsolved  <- m_ss$fvs_unsolved
-  conv_conds    <- m_ss$convergence_conditions
-  
-  # Parse equations into named character vector (dMod format)
-  if (length(equations) > 0) {
-    m_ssChar <- do.call(c, lapply(strsplit(equations, "="), function(eq) {
-      out <- trimws(eq[2])
-      names(out) <- trimws(eq[1])
-      return(out)
-    }))
+
+  # Version-specific Python signatures:
+  #   v1.0: Alyssa(filename, injections, givenCQs, neglect, sparsifyLevel, outputFormat)
+  #   v1.1: Alyssa(filename, injections, givenCQs, neglect, sparsifyLevel, outputFormat, testSteady)
+  #   v1.2: Alyssa(filename, injections, givenCQs, neglect, sparsifyLevel, outputFormat, testSteady, walltime, simplify)
+  #        — v1.2 additionally runs structural sink-cluster detection a priori.
+  if (version == "1.0") {
+    if (testSteady == "F")
+      message("Note: version 1.0 does not support testSteady='F', test will always run.")
+    m_ss <- ap$Alyssa(model, as.list(forcings), as.list(givenCQs),
+                      as.list(neglect), sparsifyLevel, outputFormat)
+
+  } else if (version == "1.1") {
+    m_ss <- ap$Alyssa(model, as.list(forcings), as.list(givenCQs),
+                      as.list(neglect), sparsifyLevel, outputFormat,
+                      testSteady)
+
   } else {
-    return(0)
+    # v1.2
+    m_ss <- ap$Alyssa(model,
+                      injections    = as.list(forcings),
+                      givenCQs      = as.list(givenCQs),
+                      neglect       = as.list(neglect),
+                      sparsifyLevel = as.integer(sparsifyLevel),
+                      outputFormat  = outputFormat,
+                      testSteady    = testSteady,
+                      walltime      = as.integer(walltime),
+                      simplify      = as.logical(simplify))
   }
-  
+
+  if (is.null(m_ss) || identical(m_ss, 0L)) return(0)
+
+  # All versions return a list of "lhs=rhs" strings.
+  # Parse into named character vector (dMod format).
+  m_ssChar <- do.call(c, lapply(strsplit(m_ss, "="), function(eq) {
+    out <- trimws(eq[2])
+    names(out) <- trimws(eq[1])
+    return(out)
+  }))
+
+  if (length(m_ssChar) == 0) return(0)
+
   # Write steady states to disk
   if (!is.null(file) && is.character(file))
     saveRDS(object = m_ssChar, file = file)
-  
-  # return
-  if (length(fvs_species) == 0) {
-    return(m_ssChar)
-  } else {
-    return(list(
-      equations              = m_ssChar,
-      fvs_species            = fvs_species,
-      fvs_results            = fvs_results,
-      fvs_unsolved           = fvs_unsolved,
-      convergence_conditions = conv_conds
-    ))
-  }
-}
 
+  return(m_ssChar)
+}

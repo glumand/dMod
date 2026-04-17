@@ -10,76 +10,50 @@ Pequil(
   forcings = NULL,
   condition = NULL,
   attach.input = TRUE,
+  start.time = -1e+07,
+  end.time = 0,
   keep.root = TRUE,
   controlsODE = list(),
   compile = FALSE,
   modelname = NULL,
-  verbose = FALSE
+  verbose = FALSE,
+  ...
 )
 }
 \arguments{
-\item{trafo}{An \code{\link{eqnlist}} (recommended) or \code{\link{eqnvec}} /
-named character vector. For \code{eqnlist} inputs, conserved quantities
-and constant states are detected automatically. For \code{eqnvec} inputs,
-a warning is issued since independence of equations cannot be verified.}
+\item{trafo}{An \code{\link{eqnlist}}, \code{\link{eqnvec}},
+or named character vector.}
 
-\item{parameters}{Character vector of independent parameters. Species listed
-here are excluded from integration and treated as fixed ODE parameters.
-For systems with conserved quantities, exactly \code{n-1} of the \code{n}
-involved species must appear here (auto-filled if missing).}
+\item{parameters}{Character vector of independent parameters.}
 
-\item{forcings}{Character vector of forcing names. These symbols are replaced
-by zero in the reaction rates before equilibration. Only used when
-\code{trafo} is an \code{\link{eqnlist}}.}
+\item{forcings}{Character vector of forcing names replaced by zero.}
 
-\item{condition}{Character label for which the transformation is generated.}
+\item{condition}{Character label for the condition.}
 
-\item{attach.input}{Logical. If \code{TRUE} (default), pass-through
-parameters are appended to the output with identity derivatives.
-If \code{FALSE}, only the equilibrated dependent states are returned.}
+\item{attach.input}{Logical. Append pass-through parameters to output.}
 
-\item{keep.root}{Logical. If \code{TRUE} (default), the steady state and
-sensitivities are cached for warm-starting subsequent evaluations.
-Improves performance during iterative fitting.}
+\item{keep.root}{Logical. Cache steady state for warm-starting.}
 
-\item{controlsODE}{Named list of ODE solver options passed to
-\code{\link[CppODE]{solveODE}}. Supported entries:
-\code{abstol} (default 1e-6), \code{reltol} (default 1e-6),
-\code{maxsteps} (default 1e7), \code{maxprogress} (default 100),
-\code{hini} (default 0), \code{roottol} (default 1e-6),
-\code{maxroot} (default 1).}
+\item{controlsODE}{Named list of ODE solver options, accessible via
+\code{\link{controls}()}.}
 
-\item{compile}{Logical. If \code{TRUE}, compile the C++ ODE model for
-faster evaluation.}
+\item{compile}{Logical. Compile the C++ ODE model.}
 
-\item{modelname}{Character, base name for generated C++ code files.}
+\item{modelname}{Character, base name for C++ code files.}
 
-\item{verbose}{Logical. If \code{TRUE}, print compiler output.}
+\item{verbose}{Logical. Print compiler output.}
+
+\item{...}{Additional arguments passed to \code{\link[CppODE]{CppODE}}.}
 }
 \value{
 A function of class \code{\link{parfn}}.
 }
 \description{
-When \code{trafo} is an \code{\link{eqnlist}}, conserved quantities are
-automatically detected. For each conserved quantity involving \code{n}
-species, exactly \code{n-1} are placed into \code{parameters} (either
-user-supplied or auto-filled). States whose right-hand side evaluates to
-zero are also automatically treated as parameters.
-
-The reduced ODE (only dependent states) is integrated to steady state.
-Sensitivities are obtained from the ODE sensitivity integration and
-composed via the chain rule when upstream derivatives are present.
-
-When \code{trafo} is an \code{\link{eqnvec}} or named character vector,
-equilibration proceeds without conserved-quantity checks and a warning
-is issued.
-}
-\details{
-Constructs a parameter transformation that finds steady states by
-integrating the ODE system until the norm of the right-hand side falls below
-a tolerance, using \code{CppODE} with \code{rootfunc = "equilibrate"}.
+Finds steady states by integrating the ODE to equilibrium.
+All states are integrated directly without conserved-quantity
+elimination. Initial values for each state are taken from the
+input parameter vector.
 }
 \seealso{
-\link{Pexpl} for explicit transformations, \link{Pimpl} for implicit
-(root-finding) transformations, \link{P} for automatic method selection.
+\link{Pexpl}, \link{Pimpl}, \link{P}
 }
