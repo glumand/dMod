@@ -7,9 +7,8 @@
 
 import numpy
 import sympy
-from sympy import Matrix, simplify as _simplify, expand, solve, cancel
+from sympy import Matrix, simplify as _simplify, expand, solve, cancel, posify, factor, fraction, oo
 from numpy import shape, zeros, concatenate
-from numpy.linalg import matrix_rank
 from sympy.parsing.sympy_parser import parse_expr
 from sympy.matrices import *
 from sympy.matrices import matrix_multiply_elementwise
@@ -244,6 +243,85 @@ def _zero_out_state(row_idx, SM, F, X, zeroStates):
     X.row_del(row_idx)
     SM.row_del(row_idx)
 
+def _sign_class(expr):
+    # Classify a polynomial (after expand) by its term coefficients.
+    # Assumes all free symbols are positive (rate constants, concentrations,
+    # r_* helpers). Returns '+' if every monomial has a positive rational
+    # coefficient, '-' if every coefficient is negative, '0' for the zero
+    # polynomial, '±' for mixed or symbolic-coefficient cases.
+    expr=sympy.expand(expr)
+    if expr==0:
+        return '0'
+    has_pos=False
+    has_neg=False
+    for t in sympy.Add.make_args(expr):
+        coeff=t.as_coeff_Mul()[0]
+        if coeff.is_negative:
+            has_neg=True
+        elif coeff.is_positive:
+            has_pos=True
+        else:
+            return '±'
+    if has_pos and has_neg:
+        return '±'
+    if has_pos:
+        return '+'
+    if has_neg:
+        return '-'
+    return '0'
+
+def _rational_sign_class(expr):
+    # Sign classification for a rational function. We cancel first so a
+    # spurious (a-a)/a does not look mixed, then split into numerator and
+    # denominator and check each independently. Assumes free symbols are
+    # positive; returns '+'/'-'/'±'/'0' with the obvious combination rule.
+    expr=cancel(expr)
+    numer, denom=sympy.fraction(expr)
+    ns=_sign_class(numer)
+    ds=_sign_class(denom)
+    if ns=='0':
+        return '0'
+    if ns=='±' or ds=='±':
+        return '±'
+    if (ns=='+' and ds=='+') or (ns=='-' and ds=='-'):
+        return '+'
+    if (ns=='+' and ds=='-') or (ns=='-' and ds=='+'):
+        return '-'
+    return '±'
+
+def _try_positive_direct_solve(SM, F, X):
+    # Find a state y whose own ODE is (a) linear in y and (b) has a
+    # structurally positive closed-form steady-state solution y = -In/Out,
+    # assuming all free symbols are positive. Returns (row_idx, y, sol) or
+    # None. Used BEFORE cycle breaking to resolve the parts of the network
+    # that don't actually need an r_* helper — this avoids leaking negative
+    # r_* contributions into downstream states whose own ODE would otherwise
+    # have been positive by construction.
+    for i in range(len(X)):
+        y=X[i]
+        eq=sympy.S.Zero
+        row=SM.row(i)
+        for k in range(SM.cols):
+            if row[k]!=0:
+                eq=eq+row[k]*F[k]
+        if eq==0:
+            continue
+        In=eq.subs(y, 0)
+        Out=sympy.diff(eq, y)
+        if Out==0:
+            continue
+        residual=cancel(eq-In-y*Out)
+        if residual!=0:
+            continue
+        In_cls=_rational_sign_class(In)
+        Out_cls=_rational_sign_class(Out)
+        if In_cls=='0' or Out_cls=='0':
+            continue
+        if (In_cls=='+' and Out_cls=='-') or (In_cls=='-' and Out_cls=='+'):
+            sol=cancel(-In/Out)
+            return (i, y, sol)
+    return None
+
 def checkNegRows(M):
     NegRows=[]
     if((M==Matrix(0,0,[])) | (M==Matrix(0,1,[])) | (M==Matrix(1,0,[]))):
@@ -338,7 +416,7 @@ def find_cycle(graph, start, end, path=[]):
                 return newpath
     return None
     
-def GetBestPair(cycle, SM, fluxpars, X, LCLs, neglect):    
+def GetBestPair(cycle, SM, fluxpars, X, LCLs, neglect):
     for state in cycle:
         for LCL in LCLs:
             ls=parse_expr(LCL.split(' = ')[0])
@@ -402,8 +480,243 @@ def GetBestPair(cycle, SM, fluxpars, X, LCLs, neglect):
                     else:
                         besttype=3
     return(besttype, beststate, bestflux, signChanged)
-    
-       
+
+
+def find_all_simple_cycles(graph, max_cycles=20000):
+    """Enumerate all simple directed cycles in `graph`.
+
+    `graph` is a dict {node_name: [successor_names]}. Each returned cycle is
+    a list of node names (not closed). A Johnson-style DFS that restricts
+    paths to the start node's index-subgraph, so every cycle is emitted
+    exactly once.
+
+    Caps at `max_cycles` to guard against pathological enumerations. For the
+    AlyssaPetit pipeline the practical bound is the graph size after
+    cycle-breaking (e.g. TGFb with 24 states).
+    """
+    cycles=[]
+    nodes=list(graph.keys())
+    index={n: i for i, n in enumerate(nodes)}
+    def backtrack(start, current, visited, path):
+        for nxt in graph.get(current, []):
+            if nxt == start:
+                cycles.append(list(path))
+                if len(cycles) >= max_cycles:
+                    return True
+            elif nxt in index and index[nxt] > index[start] and nxt not in visited:
+                visited.add(nxt)
+                path.append(nxt)
+                if backtrack(start, nxt, visited, path):
+                    return True
+                path.pop()
+                visited.remove(nxt)
+        return False
+    for s in nodes:
+        if backtrack(s, s, {s}, [s]):
+            print(f'   Warning: cycle enumeration capped at {max_cycles}.', flush=True)
+            break
+    return cycles
+
+
+def _side_type(flux_col_counts):
+    """Classify one flux side using the global column-nonzero counts.
+
+    Mirrors `getType` from Severin Bang's Julia port (helperFunctions.jl:947).
+    `flux_col_counts[i]` is the number of ODEs in which flux `i` occurs
+    (i.e. the count of nonzero entries in its SM column). Returns:
+
+      1 = single flux on this side, appears only in this ODE (safe).
+      2 = multiple fluxes on this side, each only in its own ODE (safe).
+      3 = otherwise — resolving this side may create new cycles.
+      None = no fluxes on this side (caller marks dontUseThisSide=1).
+    """
+    if len(flux_col_counts) == 0:
+        return None
+    if len(flux_col_counts) == 1:
+        return 1 if flux_col_counts[0] == 1 else 3
+    if all(c == 1 for c in flux_col_counts):
+        return 2
+    return 3
+
+
+def genPriorityTable(SM, F, fluxpars, X, LCLs, SSgraph, neglect, locked_fluxpars=None):
+    """Global priority table for cycle breaking / state resolution.
+
+    Idea and sort criteria ported from Severin Bang's Julia reimplementation
+    of AlyssaPetit (`helperFunctions.jl::genPriorityTable`). Instead of
+    picking the best pair from the FIRST found cycle (as `GetBestPair` does),
+    this builds a global table over ALL remaining states x both flux sides,
+    then sorts by six keys so the truly best resolution is always on top:
+
+        (dontUseThisSide asc, OccInCycles desc, type asc,
+         fluxLength asc, NoCycleOccur desc, OccInRhs asc)
+
+    Each row represents one resolvable state/side combination and carries:
+      - spIndex, species   : which state this row is about
+      - isOutflux          : True = outflux side, False = influx side,
+                             None = CQ-type (no flux side involved)
+      - type               : 0 CQ / 1 safe-single / 2 safe-multi / 3 may
+                             create new cycles (see _side_type)
+      - fluxLength         : number of fluxes on the chosen side
+      - fluxParIDs, fluxPars: per-side flux indices and their flux parameters
+      - dontUseThisSide    : 1 if any flux parameter is in `neglect` or the
+                             side has no flux — the side is unusable
+      - OccInCycles        : 1 if the state is in any simple cycle, else 0
+      - NoCycleOccur       : number of simple cycles containing the state
+      - OccInRhs           : number of OTHER ODE equations whose RHS
+                             contains this species
+
+    Returns `(rows, cycles)` where rows is the sorted list of candidate
+    dicts and cycles is the list of simple cycles used to compute the
+    OccInCycles / NoCycleOccur columns.
+    """
+    n = len(X)
+    X_names = [str(X[i]) for i in range(n)]
+    name_to_index = {nm: i for i, nm in enumerate(X_names)}
+
+    # Simple-cycle enumeration on the steady-state dependency graph.
+    cycles = find_all_simple_cycles(SSgraph)
+    noCycleOccur = [0]*n
+    for cyc in cycles:
+        for nm in cyc:
+            if nm in name_to_index:
+                noCycleOccur[name_to_index[nm]] += 1
+    occInCycles = [1 if c > 0 else 0 for c in noCycleOccur]
+
+    # occInRhs[i] = number of ODE rows that mention species i on their RHS,
+    # derived directly from SSgraph to avoid re-traversing symbolic flux
+    # expressions (matches giveFluxesAndSteadyStates in the Julia port).
+    occInRhs = [0]*n
+    for _src, deps in SSgraph.items():
+        for dep in deps:
+            if dep in name_to_index:
+                occInRhs[name_to_index[dep]] += 1
+
+    # Global column-nonzero counts for all fluxes (how many ODEs each flux
+    # participates in). Used by _side_type to distinguish safe from cycle-
+    # creating resolutions.
+    col_counts = [CountNZE(SM.col(c)) for c in range(SM.cols)]
+
+    neglect_set = set(str(x) for x in neglect)
+    # Flux parameters that were consumed by a direct-positive-solve earlier
+    # and therefore must not be reparameterized by cycle-breaking — doing so
+    # would create a self-referential substitution (the fp's new expression
+    # is derived from an F already containing a state solution that itself
+    # contains fp). See the "Direct positive-solve pass" block in Alyssa()
+    # for why.
+    locked_set = set(str(x) for x in (locked_fluxpars or set()))
+
+    def _state_in_active_cq(nm):
+        parsed = parse_expr(nm)
+        for lcl in LCLs:
+            lhs = parse_expr(lcl.split(' = ')[0])
+            if lhs.subs(parsed, 1) != lhs:
+                return True
+        return False
+
+    rows = []
+    for i in range(n):
+        nm = X_names[i]
+
+        # CQ-type row: the state is in an active conservation law — we can
+        # drop its ODE entirely and recover the state via the CQ later.
+        # Only emit when the state is actually in a cycle, otherwise we'd
+        # eagerly consume LCLs that aren't blocking progress.
+        if occInCycles[i] and _state_in_active_cq(nm):
+            rows.append({
+                'spIndex': i, 'species': nm, 'isOutflux': None,
+                'type': 0, 'fluxLength': 0,
+                'fluxParIDs': [], 'fluxPars': [],
+                'dontUseThisSide': 0,
+                'OccInCycles': occInCycles[i],
+                'NoCycleOccur': noCycleOccur[i],
+                'OccInRhs': occInRhs[i],
+                'propagationRisk': 0,
+            })
+            continue
+
+        row_SM = SM.row(i)
+        for is_out in (False, True):
+            flux_ids = []
+            for c in range(SM.cols):
+                v = row_SM[c]
+                if is_out and v < 0:
+                    flux_ids.append(c)
+                elif (not is_out) and v > 0:
+                    flux_ids.append(c)
+            # Drop locked flux parameters: cycle-breaking isn't allowed to
+            # pick them as the pivot, but they still contribute to the
+            # state's ODE structurally.
+            flux_ids = [c for c in flux_ids if str(fluxpars[c]) not in locked_set]
+            flux_pars = [fluxpars[c] for c in flux_ids]
+            fc_counts = [col_counts[c] for c in flux_ids]
+            typ = _side_type(fc_counts)
+            dont = 0
+            if typ is None:
+                typ = 3
+                dont = 1
+            if any(str(fp) in neglect_set for fp in flux_pars):
+                dont = 1
+            # Propagation risk (Python-only extension, see sort comment):
+            # sum over pivot-side flux columns of (col_count - 1), i.e.
+            # the number of OTHER ODEs whose flux expressions get rewired
+            # by this pivot's trafo. A zero-risk pivot (all col_counts==1)
+            # is either type 1 or type 2 — by construction it cannot
+            # introduce sign conflicts downstream because each substituted
+            # flux parameter only appears in the pivot's own ODE.
+            prop_risk = sum(max(c - 1, 0) for c in fc_counts)
+            rows.append({
+                'spIndex': i, 'species': nm, 'isOutflux': is_out,
+                'type': typ, 'fluxLength': len(flux_ids),
+                'fluxParIDs': flux_ids, 'fluxPars': flux_pars,
+                'dontUseThisSide': dont,
+                'OccInCycles': occInCycles[i],
+                'NoCycleOccur': noCycleOccur[i],
+                'OccInRhs': occInRhs[i],
+                'propagationRisk': prop_risk,
+            })
+
+    # Sort key extensions over Severin Bang's 6-key Julia ranking
+    # (helperFunctions.jl::genPriorityTable). The Julia ranking has:
+    #   (dontUseThisSide, -OccInCycles, type, fluxLength,
+    #    -NoCycleOccur, OccInRhs).
+    # We insert two extra keys to preserve dMod's manifestly-positive
+    # rational output contract, which Julia's pipeline does not need:
+    #
+    #  (a) propagationRisk — sum of (col_count - 1) over the chosen
+    #      side's flux columns, i.e. how many OTHER ODEs get rewired by
+    #      the trafo. A zero-risk side is exactly type 1 or type 2, in
+    #      which case every substituted flux parameter appears only in
+    #      the pivot's ODE and no sign mixing can occur downstream. Type
+    #      3 sides always have propagationRisk >= 1; among them we
+    #      prefer the smallest risk.
+    #
+    #  (b) rowop_penalty — a binary flag that demotes type-3 anz==1
+    #      pivots. Those take the direct-solve + SM row-manipulation
+    #      path, which INSERTS new flux terms (with inherited negative
+    #      stoichiometry) into other ODEs. That is strictly worse than
+    #      the type-3 anz>1 ratio-parameter trafo, which only REPLACES
+    #      existing flux terms with positive rational substitutes.
+    #
+    # These keys are Python-side additions; neither appears in Severin
+    # Bang's Julia port (the Julia output format and solver semantics
+    # don't carry a positivity contract, so the original 6-key ranking
+    # is sufficient there).
+    def _rowop_penalty(r):
+        return 1 if (r['type'] == 3 and r['fluxLength'] == 1) else 0
+    rows.sort(key=lambda r: (
+        r['dontUseThisSide'],
+        -r['OccInCycles'],
+        r['type'],
+        r['propagationRisk'],
+        _rowop_penalty(r),
+        r['fluxLength'],
+        -r['NoCycleOccur'],
+        r['OccInRhs'],
+    ))
+    return rows, cycles
+
+
 def GetNegFluxParameters(SM, fluxpars, X, node):
     row=list(X).index(parse_expr(node))
     liste=[]
@@ -516,180 +829,6 @@ def CountNZE(V):
         if(v!=0):
             counter=counter+1
     return(counter)
-    
-def _sympy_matrix_to_numpy(M):
-    try:
-        rows, cols = M.rows, M.cols
-        arr = numpy.zeros((rows, cols), dtype=numpy.int64)
-        for i in range(rows):
-            for j in range(cols):
-                v = M[i, j]
-                if v == 0: continue
-                if v.is_Integer: arr[i, j] = int(v)
-                elif v.is_Rational:
-                    fv = float(v)
-                    if fv == int(fv): arr[i, j] = int(fv)
-                    else: return None, False
-                else: return None, False
-        return arr, True
-    except: return None, False
-
-def _numpy_to_sympy_matrix(arr):
-    rows, cols = arr.shape
-    return Matrix(rows, cols, [int(arr[i, j]) for i in range(rows) for j in range(cols)])
-
-def _np_count_nze(col):
-    return int(numpy.count_nonzero(col))
-
-def _np_rank(arr, tol=1e-9):
-    if arr.size == 0: return 0
-    return int(numpy.linalg.matrix_rank(arr.astype(numpy.float64), tol=tol))
-
-def _sparsify_numpy(arr, level):
-    factors = [1, 2, -1, -2, 0]
-    ncol = arr.shape[1]
-    target_rank = _np_rank(arr)
-    changed = True
-    iteration = 0
-    while changed and iteration < 10:
-        changed = False
-        iteration += 1
-        for i in range(ncol):
-            tobeat = _np_count_nze(arr[:, i])
-            if tobeat <= 1: continue
-            best_test = None
-            best_count = tobeat
-            if level >= 1:
-                for j in range(i+1, ncol):
-                    if _np_count_nze(arr[:, j]) == 0: continue
-                    for fj in factors:
-                        if fj == 0: continue
-                        test = arr[:, i] + fj * arr[:, j]
-                        cnt = _np_count_nze(test)
-                        if cnt > 0 and cnt < best_count:
-                            saved = arr[:, i].copy()
-                            arr[:, i] = test
-                            if _np_rank(arr) == target_rank:
-                                best_count = cnt; best_test = test.copy(); changed = True
-                            arr[:, i] = saved
-            if level >= 2:
-                for j in range(i+1, ncol):
-                    if _np_count_nze(arr[:, j]) == 0: continue
-                    for k in range(j+1, ncol):
-                        if _np_count_nze(arr[:, k]) == 0: continue
-                        for fj in factors:
-                            for fk in factors:
-                                if fj == 0 and fk == 0: continue
-                                test = arr[:, i] + fj * arr[:, j] + fk * arr[:, k]
-                                cnt = _np_count_nze(test)
-                                if cnt > 0 and cnt < best_count:
-                                    saved = arr[:, i].copy()
-                                    arr[:, i] = test
-                                    if _np_rank(arr) == target_rank:
-                                        best_count = cnt; best_test = test.copy(); changed = True
-                                    arr[:, i] = saved
-            if level >= 3:
-                for j in range(i+1, ncol):
-                    if _np_count_nze(arr[:, j]) == 0: continue
-                    for k in range(j+1, ncol):
-                        if _np_count_nze(arr[:, k]) == 0: continue
-                        for l in range(k+1, ncol):
-                            if _np_count_nze(arr[:, l]) == 0: continue
-                            for fj in factors:
-                                for fk in factors:
-                                    for fl in factors:
-                                        if fj == 0 and fk == 0 and fl == 0: continue
-                                        test = arr[:, i] + fj*arr[:, j] + fk*arr[:, k] + fl*arr[:, l]
-                                        cnt = _np_count_nze(test)
-                                        if cnt > 0 and cnt < best_count:
-                                            saved = arr[:, i].copy()
-                                            arr[:, i] = test
-                                            if _np_rank(arr) == target_rank:
-                                                best_count = cnt; best_test = test.copy(); changed = True
-                                            arr[:, i] = saved
-            if best_test is not None:
-                arr[:, i] = best_test
-    return arr
-
-def Sparsify(M, level, sparseIter):
-    arr, ok = _sympy_matrix_to_numpy(M)
-    if ok:
-        _t = time.time()
-        new_arr = _sparsify_numpy(arr, level)
-        if not numpy.array_equal(new_arr, arr):
-            print("Sparsified (numpy, level %d, %.1fs)" % (level, time.time()-_t), flush=True)
-        else:
-            print("No sparsification possible (numpy, level %d, %.1fs)" % (level, time.time()-_t), flush=True)
-        return _numpy_to_sympy_matrix(new_arr)
-    # Sympy fallback for symbolic entries
-    print("Using sympy sparsification (slow)", flush=True)
-    return _sparsify_sympy(M, level, sparseIter)
-
-def _sparsify_sympy(M, level, sparseIter):
-    oldM=M.copy()
-    if(level==3):
-        ncol=len(M.row(0))
-        for i in range(ncol):
-            icol=M.col(i)
-            tobeat=CountNZE(M.col(i))
-            for j in range(ncol):
-                if(i<j):
-                    for factor_j in [1,2,-1,-2,0]:
-                        for k in range(ncol):
-                            if(i<k and j<k):
-                                for factor_k in [1,2,-1,-2,0]:
-                                    for l in range(ncol):
-                                        if(i<l and j<l and k<l):
-                                            for factor_l in [1,2,-1,-2,0]:
-                                                test=icol+factor_j*M.col(j)+factor_k*M.col(k)+factor_l*M.col(l)
-                                                if(tobeat > CountNZE(test)):
-                                                    Mtest=M.copy()
-                                                    Mtest.col_del(i)
-                                                    Mtest=Mtest.col_insert(i,test)
-                                                    if(CountNZE(test)!=0 and M.rank()==Mtest.rank()):
-                                                        M=Mtest.copy()
-                                                        tobeat=CountNZE(test)
-    if(level==2):
-        ncol=len(M.row(0))
-        for i in range(ncol):
-            icol=M.col(i)
-            tobeat=CountNZE(M.col(i))
-            for j in range(ncol):
-                if(i<j):
-                    for factor_j in [1,2,-1,-2,0]:
-                        for k in range(ncol):
-                            if(i<k and j<k):
-                                for factor_k in [1,2,-1,-2,0]:
-                                    test=icol+factor_j*M.col(j)+factor_k*M.col(k)
-                                    if(tobeat > CountNZE(test)):
-                                        Mtest=M.copy()
-                                        Mtest.col_del(i)
-                                        Mtest=Mtest.col_insert(i,test)
-                                        if(CountNZE(test)!=0 and M.rank()==Mtest.rank()):
-                                            M=Mtest.copy()
-                                            tobeat=CountNZE(test)
-    if(level==1):
-        ncol=len(M.row(0))
-        for i in range(ncol):
-            icol=M.col(i)
-            tobeat=CountNZE(M.col(i))
-            for j in range(ncol):
-                if(i<j):
-                    for factor_j in [1,2,-1,-2,0]:
-                        test=icol+factor_j*M.col(j)
-                        if(tobeat > CountNZE(test)):
-                            Mtest=M.copy()
-                            Mtest.col_del(i)
-                            Mtest=Mtest.col_insert(i,test)
-                            if(CountNZE(test)!=0 and M.rank()==Mtest.rank()):
-                                M=Mtest.copy()
-                                tobeat=CountNZE(test)
-    if(oldM!=M and sparseIter<10):
-        oldM=M.copy()
-        print("Sparsify with level", level,", Iteration ",sparseIter, " of maximal 10",flush=True)
-        return(_sparsify_sympy(M,level, sparseIter=sparseIter+1))
-    else:
-        return(M)
     
 def Alyssa(filename,
           injections=[],
@@ -837,9 +976,6 @@ def Alyssa(filename,
         sink=FindSinkCluster(SM)
         if not sink:
             break
-        sink_names=[X[j] for j in sink]
-        print('   Sink cluster (structural mass loss) -> zero: '
-              +', '.join(str(s) for s in sink_names), flush=True)
         for row_idx in sorted(sink, reverse=True):
             _zero_out_state(row_idx, SM, F, X, zeroStates)
         NegRows=checkNegRows(SM)
@@ -994,17 +1130,10 @@ def Alyssa(filename,
         else:
             fluxpars.append(flux)
 
-##### Increase Sparsity of stoichiometry matrix SM
-    print('Sparsify stoichiometry matrix with sparsify-level '+str(sparsifyLevel)+'!',flush=True)
-    newSM=(Sparsify(SM.T, level=sparsifyLevel, sparseIter=1)).T
-    if(newSM!=SM):
-        print("Sparsified!",flush=True)
-        SM=newSM
-    
 #### Find conserved quantities
-    
-    #printmatrix(CMbig)
-    #print(X)
+    # Computed before sparsification so we can protect CQ-involved state rows
+    # during sparsification (see below). FindLCL consumes CMbig, built from
+    # the un-sparsified SM*F decomposition above — independent of sparsify.
     if(givenCQs==[]):
         print('\nFinding conserved quantities ...',flush=True)
         LCLs, rowsToDel=FindLCL(CMbig.transpose(), X)
@@ -1016,28 +1145,137 @@ def Alyssa(filename,
         print(LCLs,flush=True)
     else:
         print('System has no conserved quantities!',flush=True)
+
+##### Sparsification disabled (see Severin Bang's Julia reimplementation)
+    # v1.2 used to call Sparsify() here to combine rows of the stoichiometric
+    # matrix (rank-preserving) to shorten each ODE. That was removed when we
+    # adopted the priority-table-based selection from the Julia port: the
+    # priority table's `type` classification (see genPriorityTable) relies on
+    # the untouched in/out-flux sign structure of each row, and sparsify can
+    # destroy that invariant for states not protected by the CQ-exemption. The
+    # sparsifyLevel parameter is kept in the signature for R-side
+    # backward-compatibility and is silently ignored.
+    if sparsifyLevel != 0:
+        print('Note: sparsifyLevel='+str(sparsifyLevel)+' is ignored — sparsification '
+              'was removed in favour of the priority-table cycle-breaking heuristic.',
+              flush=True)
 #### Define graph structure
     print('\nDefine graph structure ...\n',flush=True)
     
     SSgraph=DetermineGraphStructure(SM, F, X, neglect)    
     #printgraph(SSgraph)
     #print(fluxpars)
-#### Check for Cycles
-    cycle=FindCycle(SSgraph, X)
+#### Priority-table cycle breaking (ported from Severin Bang's Julia
+#### reimplementation, helperFunctions.jl::genPriorityTable).
+####
+#### Each iteration builds a global priority table over all remaining states
+#### and both flux sides, sorts by (dontUseThisSide, OccInCycles desc, type,
+#### fluxLength, NoCycleOccur desc, OccInRhs), and resolves the top-ranked
+#### candidate. This replaces the old FindCycle+GetBestPair pair, which
+#### picked the best pair from the FIRST found cycle only — the global
+#### ranking avoids locally-good-but-globally-poor choices and is also what
+#### makes the removal of the sparsify step tolerable (the table's `type`
+#### classification implicitly penalises sides whose resolution would create
+#### new cycles, so the algorithm no longer depends on an a-priori compacted
+#### stoichiometry).
+    # Track flux parameters that must not be reparameterized by cycle
+    # breaking (because an earlier direct-positive-solve already baked them
+    # into a state's final expression — reparameterizing them now would
+    # create self-referential eqOut entries, see _try_positive_direct_solve).
+    locked_fluxpars=set()
+    fluxpar_str_to_sym={str(fp): fp for fp in fluxpars}
+    priority_rows, cycles_list = genPriorityTable(SM, F, fluxpars, X, LCLs, SSgraph, neglect, locked_fluxpars)
 #### Remove cycles step by step
     gesnew=0
     eqOut=[]
-    while(cycle!=None):
+
+    def _do_direct_positive_solve():
+        # Run one sweep of direct-positive-solves until no more applicable
+        # states remain, updating F, SM, X, SSgraph, and locked_fluxpars.
+        # Returns True if at least one state was solved this sweep.
+        found=False
+        while True:
+            direct=_try_positive_direct_solve(SM, F, X)
+            if direct is None:
+                break
+            row_idx, y, sol = direct
+            # Back-substitute any state that was direct-solved earlier but
+            # still appears as a symbol in `sol` (this can happen when the
+            # greedy direct-solve picks a later state first). Without this,
+            # sol would reference a state name that dMod's P() treats as
+            # its init-default parameter instead of the SS expression —
+            # producing initial conditions that are not actually at steady
+            # state (drift in the simulation).
+            for prev_eq in eqOut:
+                lhs_str, rhs_str = prev_eq.split(' = ', 1)
+                lhs_sym=parse_expr(lhs_str)
+                if sol.has(lhs_sym):
+                    sol=cancel(sol.subs(lhs_sym, parse_expr(rhs_str)))
+            eqOut.append(str(y)+' = '+str(sol))
+            print('   Solved directly (positive): '+str(y),flush=True)
+            # Record which flux parameters got baked into `sol`; they must
+            # not be reparameterized by any later cycle-break step.
+            sol_sym_names={str(s) for s in sol.free_symbols}
+            for nm, sym in fluxpar_str_to_sym.items():
+                if nm in sol_sym_names:
+                    locked_fluxpars.add(sym)
+            # Forward-substitute: solving y may unblock a cleaner form for
+            # previously-solved states whose expression still referenced y.
+            for i in range(len(eqOut)):
+                lhs_str, rhs_str = eqOut[i].split(' = ', 1)
+                rhs_expr=parse_expr(rhs_str)
+                if rhs_expr.has(y):
+                    rhs_expr=cancel(rhs_expr.subs(y, sol))
+                    eqOut[i]=lhs_str+' = '+str(rhs_expr)
+            # Substitute y in every flux expression and drop its row/state.
+            for k in range(len(F)):
+                F[k]=cancel(F[k].subs(y, sol))
+            X.row_del(row_idx)
+            SM.row_del(row_idx)
+            found=True
+        return found
+
+    if cycles_list:
+        print('\nDirect positive-solve pass ...',flush=True)
+        if _do_direct_positive_solve():
+            SSgraph=DetermineGraphStructure(SM, F, X, neglect)
+            priority_rows, cycles_list = genPriorityTable(SM, F, fluxpars, X, LCLs, SSgraph, neglect, locked_fluxpars)
+        else:
+            print('   (nothing resolvable positively up-front)',flush=True)
+
+    while cycles_list:
+        # Re-check direct-positive-solve before every cycle-break: an earlier
+        # pivot's substitution may have turned a previously-nonlinear state
+        # into a linear-in-itself, positive-solvable one.
+        if _do_direct_positive_solve():
+            SSgraph=DetermineGraphStructure(SM, F, X, neglect)
+            priority_rows, cycles_list = genPriorityTable(SM, F, fluxpars, X, LCLs, SSgraph, neglect, locked_fluxpars)
+            if not cycles_list:
+                break
+        row = priority_rows[0]
+        minType  = row['type']
+        state2Rem = row['species']
+        index    = row['spIndex']
+        isOutflux = row['isOutflux']
+        anz      = row['fluxLength']
+        # Map priority-row's side selection onto the (sign, signChanged)
+        # flags the existing type-2/3 bodies already consume — they branch
+        # on `(sign=="minus") XOR signChanged`, so setting signChanged=False
+        # and sign from isOutflux gives the body the right branch directly.
+        sign = "minus" if isOutflux else ("plus" if isOutflux is not None else None)
+        signChanged = False
+        fp2Rem = row['fluxPars'][0] if (minType == 1 and row['fluxPars']) else None
+
         print('Removing cycle '+str(counter),flush=True)
-        #printmatrix(SM)
-        #print(F)
-        minType, state2Rem, fp2Rem, signChanged = GetBestPair(cycle, SM, fluxpars, X, LCLs, neglect)
-        #print(cycle,flush=True)
-        #print(state2Rem)
-        #print(fp2Rem)
-        #print(minType)
-        if(minType==-1):
-            unique_nodes=list(dict.fromkeys(cycle))
+        # Unresolvable candidate: no usable side for the top priority row.
+        if row['dontUseThisSide'] and minType != 0:
+            # Take any simple cycle the state participates in for the
+            # diagnostic. Falls back to a single-node "cycle" if the table
+            # picked a non-cycle state (shouldn't happen when cycles_list is
+            # non-empty but keeps the error path robust).
+            diag_cycle = next((c for c in cycles_list if state2Rem in c),
+                              [state2Rem])
+            unique_nodes=list(dict.fromkeys(diag_cycle))
             print("",flush=True)
             print("    ======================================================",flush=True)
             print("    CYCLE CANNOT BE REMOVED",flush=True)
@@ -1108,9 +1346,24 @@ def Alyssa(filename,
                 print(f"         Example: givenCQs = c(\"{unique_nodes[0]} + ... = total{unique_nodes[0]}\")",flush=True)
             if(has_blocked):
                 print(f"      {'2' if has_absorbed else '1'}. Remove blocked parameters from 'neglect'.",flush=True)
-            print(f"      {'3' if has_absorbed and has_blocked else '2' if has_absorbed or has_blocked else '1'}. Review the model reactions involving {nodes_str}:",flush=True)
+            nxt='3' if has_absorbed and has_blocked else '2' if has_absorbed or has_blocked else '1'
+            print(f"      {nxt}. Review the model reactions involving {nodes_str}:",flush=True)
             print(f"         Does {nodes_str} participate in enough independent reactions?",flush=True)
             print(f"         A state needs both production and consumption to be solvable.",flush=True)
+            # Extra note when the model has CQ-involved bilinear coupling that
+            # the sign-preserving sparsify protection cannot resolve — this is
+            # the failure mode of models like TGFb (pSmad2/pSmad3/Smad4 linked
+            # by k_form*pSmad2*pSmad3*Smad4 → C3).
+            cq_related = any(
+                any(str(parse_expr(lcl.split(' = ')[0]).subs(parse_expr(n),1))
+                    != lcl.split(' = ')[0] for lcl in LCLs_original)
+                for n in unique_nodes
+            )
+            if cq_related:
+                nxt2=str(int(nxt)+1)
+                print(f"      {nxt2}. This model has bilinear coupling between conservation-law states.",flush=True)
+                print(f"         AlyssaPetit cannot express the steady state as manifestly positive",flush=True)
+                print(f"         rational functions for this class. Consider MiraHendrix for this model.",flush=True)
             print("    ======================================================",flush=True)
             return(0)
         if(minType==0):
@@ -1119,18 +1372,14 @@ def Alyssa(filename,
                 if(ls.subs(parse_expr(state2Rem),1)!=ls):
                     LCL2Rem=LCL
             LCLs.remove(LCL2Rem)
-            index=list(X).index(parse_expr(state2Rem))
             eqOut.append(state2Rem+' = '+state2Rem)
             print('   '+str(state2Rem)+' --> '+'Done by CQ',flush=True)
         if(minType==1):
-            index=list(X).index(parse_expr(state2Rem))
             eq=(SM*F)[index]
             sol=solve(eq, fp2Rem, simplify=False)[0]
             eqOut.append(str(fp2Rem)+' = '+str(sol))
             print('   '+str(state2Rem)+' --> '+str(fp2Rem),flush=True)
         if(minType==2):
-            anz, sign=GetDimension(state2Rem, X, SM, getSign=True)
-            index=list(X).index(parse_expr(state2Rem))            
             negs, sumnegs, negfps=GetOutfluxes(state2Rem, X, SM, F, fluxpars)
             poss, sumposs, posfps=GetInfluxes(state2Rem, X, SM, F, fluxpars)
             if(anz==1):
@@ -1168,8 +1417,6 @@ def Alyssa(filename,
                 for eq in trafoList:
                     eqOut.append(eq)
         if(minType==3):
-            anz, sign=GetDimension(state2Rem, X, SM, getSign=True)
-            index=list(X).index(parse_expr(state2Rem))            
             negs, sumnegs, negfps=GetOutfluxes(state2Rem, X, SM, F, fluxpars)
             poss, sumposs, posfps=GetInfluxes(state2Rem, X, SM, F, fluxpars)
             if(anz==1):
@@ -1195,6 +1442,20 @@ def Alyssa(filename,
                     if(j>0):
                         nenner=nenner+parse_expr('r_'+state2Rem+'_'+str(j))
                 trafoList=[]
+                # Each substituted flux parameter on the chosen side becomes
+                # sum_opp * r_j / nenner (r_0=1, r_j for j>0). After the
+                # substitution, the RAW flux F[j] (i.e. flux/fp_j rescaled)
+                # equals sum_opp * r_j / (nenner * |SM[pivot,j]|) — the
+                # stoichiometric multiplier is absorbed by the prefactor.
+                # When we split the pivot-side column into len(opp_fps) new
+                # columns (one per opposite-side flux), each new raw flux
+                # must therefore carry r_j / |SM[pivot,j]|, not just r_j.
+                # The pre-priority-table code dropped BOTH the r_j weight
+                # (masked when only ±1 stoichiometries were involved) and
+                # the stoichiometry division (masked further because
+                # sparsify tended to produce ±1 rows). Both factors are
+                # needed for the pivot and non-pivot rows to stay
+                # consistent.
                 if((sign=="minus" and not signChanged) or (sign=="plus" and signChanged)):
                     for j in range(len(negs)):
                         flux=negs[j]
@@ -1202,15 +1463,18 @@ def Alyssa(filename,
                         prefactor=flux/fp
                         if(j==0):
                             trafoList.append(str(fp)+' = ('+str(sumposs)+')*1/('+str(nenner)+')*1/('+str(prefactor)+')')
+                            r_weight = parse_expr('1')
                         else:
                             gesnew=gesnew+1
                             trafoList.append(str(fp)+' = ('+str(sumposs)+')*'+'r_'+state2Rem+'_'+str(j)+'/('+str(nenner)+')*1/('+str(prefactor)+')')
-                        
+                            r_weight = parse_expr('r_'+state2Rem+'_'+str(j))
+
                         FsearchFlux = matrix_multiply_elementwise(abs(SM[index,:]),F.T)
                         colindex=list(FsearchFlux).index(flux)
+                        s_abs = abs(SM[index, colindex])
                         for k in range(len(posfps)):
                             SM=SM.col_insert(len(SM.row(0)),SM.col(colindex))
-                            F=F.row_insert(len(F),Matrix(1,1,[cancel(poss[k]/nenner)]))
+                            F=F.row_insert(len(F),Matrix(1,1,[cancel(poss[k]*r_weight/(nenner*s_abs))]))
                             fluxpars.append(posfps[k])
                         SM.col_del(colindex)
                         F.row_del(colindex)
@@ -1224,14 +1488,17 @@ def Alyssa(filename,
                         prefactor=flux/fp
                         if(j==0):
                             trafoList.append(str(fp)+' = ('+str(sumnegs)+')*1/('+str(nenner)+')*1/('+str(prefactor)+')')
+                            r_weight = parse_expr('1')
                         else:
                             gesnew=gesnew+1
                             trafoList.append(str(fp)+' = ('+str(sumnegs)+')*'+'r_'+state2Rem+'_'+str(j)+'/('+str(nenner)+')*1/('+str(prefactor)+')')
+                            r_weight = parse_expr('r_'+state2Rem+'_'+str(j))
                         FsearchFlux = matrix_multiply_elementwise(abs(SM[index,:]),F.T)
                         colindex=list(FsearchFlux).index(flux)
+                        s_abs = abs(SM[index, colindex])
                         for k in range(len(negfps)):
                             SM=SM.col_insert(len(SM.row(0)),SM.col(colindex))
-                            F=F.row_insert(len(F),Matrix(1,1,[cancel(negs[k]/nenner)]))
+                            F=F.row_insert(len(F),Matrix(1,1,[cancel(negs[k]*r_weight/(nenner*s_abs))]))
                             fluxpars.append(negfps[k])
                         SM.col_del(colindex)
                         F.row_del(colindex)
@@ -1242,11 +1509,9 @@ def Alyssa(filename,
         X.row_del(index)
         SM.row_del(index)
         SSgraph=DetermineGraphStructure(SM, F, X, neglect)
-        #print(X)
-        #printgraph(SSgraph)
-        cycle=FindCycle(SSgraph, X)
-        counter=counter+1       
-    print('There is no cycle in the system!\n',flush=True)              
+        priority_rows, cycles_list = genPriorityTable(SM, F, fluxpars, X, LCLs, SSgraph, neglect, locked_fluxpars)
+        counter=counter+1
+    print('There is no cycle in the system!\n',flush=True)
     
 #### Solve remaining equations
     eqOut.reverse()
@@ -1271,7 +1536,14 @@ def Alyssa(filename,
         # No sympy.solve(), no simplify — cancel keeps the result compact.
         In=expr.subs(xi, 0)
         Out=expr.diff(xi)
-        sol=cancel(-In/Out)
+        if cancel(Out)==0:
+            # The ODE has collapsed into a 0=0 identity after upstream
+            # substitutions — typically because the state is constrained by
+            # a conservation law whose other members have already been
+            # resolved. Keep `xi` as a free parameter.
+            sol=xi
+        else:
+            sol=cancel(-In/Out)
         eqOut.insert(0,node+' = '+str(sol))
         for f in range(len(F)):
             F[f]=cancel(F[f].subs(xi, sol))
@@ -1288,12 +1560,38 @@ def Alyssa(filename,
         print(f'   Solved {node} ({_solve_count}/{_total_nodes}, {time.time()-_t_solve:.1f}s)',flush=True)
 
 #### Optional final simplification (applied once per expression, after the loop)
+    # simplify:
+    #   True   -> sympy.simplify once per expression (default, heuristic)
+    #   'full' -> aggressive pipeline: cancel + posify + simplify(ratio=oo)
+    #            + separate factor of numerator and denominator. Slower,
+    #            but often gives noticeably more compact formulas.
+    #   False  -> skip entirely (expressions stay in cancel() normal form)
+    _full=(isinstance(simplify, str) and simplify.lower()=='full')
     if(simplify):
-        print('Simplifying final expressions ...',flush=True)
+        print(('Full-simplifying' if _full else 'Simplifying')+
+              ' final expressions ...',flush=True)
+        _simplify_aborted=False
         for i in range(len(eqOut)):
+            if _check_walltime():
+                # Budget exhausted — leave the remaining expressions in
+                # their cancelled-but-not-simplified form. They're still
+                # correct (cancel() kept them in rational normal form),
+                # just bulkier than they could be.
+                print(f'   Walltime exceeded after simplifying {i}/{len(eqOut)} '
+                      f'expressions — leaving the rest un-simplified.',flush=True)
+                _simplify_aborted=True
+                break
             _t_simp=time.time()
             ls, rs = eqOut[i].split(' = ', 1)
-            rs_simp=str(_simplify(parse_expr(rs)))
+            if _full:
+                e=cancel(parse_expr(rs))
+                e_pos, reps=posify(e)
+                e_pos=_simplify(e_pos, ratio=oo, rational=True)
+                n, d=fraction(e_pos)
+                e_pos=factor(n)/factor(d)
+                rs_simp=str(e_pos.subs(reps))
+            else:
+                rs_simp=str(_simplify(parse_expr(rs)))
             eqOut[i]=ls+' = '+rs_simp
             print(f'   Simplified {ls} ({i+1}/{len(eqOut)}, {time.time()-_t_simp:.1f}s)',flush=True)
     
@@ -1330,9 +1628,10 @@ def Alyssa(filename,
 #### Print Equations
     print('I obtained the following equations:\n',flush=True)
     if(outputFormat=='M'):
+        eqOutReturn=[]
         for state in zeroStates:
             print('\tinit_'+str(state)+'  "0"'+'\n',flush=True)
-        eqOutReturn=[]
+            eqOutReturn.append('init_'+str(state)+'  "0"')
         for i in range(len(eqOut)):
             ls, rs = eqOut[i].split('=')
             ls=parse_expr(ls)
@@ -1355,10 +1654,11 @@ def Alyssa(filename,
             eqOutReturn.append(eq)            
         
     else:
+        eqOutReturn=[]
         for state in zeroStates:
             print('\t'+str(state)+' = 0'+'\n',flush=True)
-        eqOutReturn=[]
-        for eq in eqOut:            
+            eqOutReturn.append(str(state)+'=0')
+        for eq in eqOut:
             ls, rs = eq.split(' = ')
             print('\t'+ls+' = "'+rs+'",'+'\n',flush=True)
             eqOutReturn.append(ls+'='+rs)

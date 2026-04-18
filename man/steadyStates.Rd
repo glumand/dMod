@@ -11,7 +11,7 @@ steadyStates(
   forcings = NULL,
   givenCQs = NULL,
   neglect = NULL,
-  sparsifyLevel = 2,
+  sparsifyLevel = NULL,
   outputFormat = "R",
   testSteady = "T",
   walltime = 0L,
@@ -36,7 +36,10 @@ pB") works also. If NULL, conserved quantities are automatically calculated.}
 not be used for solving the steady-state equations}
 
 \item{sparsifyLevel}{numeric, Upper bound for length of linear combinations
-used for simplifying the stoichiometric matrix}
+used for simplifying the stoichiometric matrix. Only used for versions
+\code{"1.0"} and \code{"1.1"}. Ignored (no-op) in \code{"1.2"}, which
+relies on the priority-table cycle-breaking heuristic instead — kept for
+signature compatibility. Default changed to \code{0} for v1.2.}
 
 \item{outputFormat}{Define the output format. By default "R" generating dMod
 compatible output. To obtain an output appropriate for d2d [3] "M" must be
@@ -47,14 +50,31 @@ states is numerically checked (this can be very time intensive). If "F" this
 is skipped. Ignored for version "1.0" (always tests).}
 
 \item{walltime}{integer, total wall-clock time budget in seconds for the
-solver (default 0 = unlimited). Used for version "1.2".}
+solver (default 0 = unlimited). Used for version "1.2". When the budget
+is reached during the final simplification pass, any remaining
+expressions are left in their cancelled-but-not-simplified form (still
+mathematically correct, just bulkier).}
 
-\item{simplify}{Logical, if \code{TRUE} (default) each final steady-state
-expression is passed through \code{sympy.simplify} once, at the end of the
-pipeline. Simplification is never applied inside the solve loop (which was
-the main bottleneck in previous releases). Set to \code{FALSE} to skip the
-final simplification entirely — faster, but output may be bulkier. Used
-for version "1.2" only.}
+\item{simplify}{Controls the final simplification pass. One of:
+\itemize{
+\item \code{TRUE} (default): each final steady-state expression is
+passed through \code{sympy.simplify} once, at the end of the
+pipeline.
+\item \code{FALSE}: skip the final simplification entirely — fastest,
+but output may be bulkier (expressions stay in \code{cancel()}
+normal form).
+\item \code{"full"}: aggressive pipeline per expression —
+\code{cancel} then \code{posify} then
+\code{simplify(ratio = oo, rational = TRUE)} then separate
+\code{factor} of numerator and denominator. Noticeably slower,
+but often yields more compact formulas (especially when
+positivity of rate constants enables further cancellation).
+}
+Simplification is never applied inside the solve loop (which was the
+main bottleneck in previous releases). Used for version "1.2" only.
+For very large models prefer \code{simplify = FALSE} up-front, or
+rely on \code{walltime} to abort the simplify pass gracefully once
+enough expressions have been processed.}
 
 \item{version}{Character, which AlyssaPetit backend to use. One of
 \code{"1.0"}, \code{"1.1"}, or \code{"1.2"} (default).}
@@ -78,12 +98,17 @@ Three versions of the AlyssaPetit backend are available:
 \item \code{"1.0"}: Original version. No steady-state test toggle.
 \item \code{"1.1"}: Adds the \code{testSteady} option to skip
 verification.
-\item \code{"1.2"} (default): Like v1.1 with numpy fast-path
-sparsification, optional \code{walltime}, structural sink-cluster
+\item \code{"1.2"} (default): Like v1.1 with structural sink-cluster
 detection (states without a protected mass source are set to 0 a
-priori), direct linear solves instead of \code{sympy.solve()} in the
-remaining-equations phase, and an end-of-pipeline \code{simplify}
-toggle.
+priori), optional \code{walltime}, direct linear solves instead of
+\code{sympy.solve()} in the remaining-equations phase, and an
+end-of-pipeline \code{simplify} toggle. Cycle breaking uses a
+global priority table (idea and sort criteria ported from Severin
+Bang's Julia reimplementation) which replaces the previous
+first-cycle \code{GetBestPair} heuristic AND the numpy
+sparsification step — the table's \code{type} classification
+implicitly penalises cycle-creating resolutions, so an a-priori
+compacted stoichiometry is no longer needed.
 }
 }
 \examples{
