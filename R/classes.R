@@ -1,5 +1,57 @@
 ## ODE model class -------------------------------------------------------------------
 
+## Collect per-sub-object build info from ODE model pieces.
+## Each backend (cOde::funC, CppODE::CppODE, CppODE::CVODE) may attach
+## `srcfile`, `compileArgs`, and `linkArgs` to its func/extended result. For
+## backends that don't (cOde), we fall back to modelname-based file discovery
+## in the current working directory. The resulting list is the single
+## authoritative source consulted by `compile()` when given dMod fn objects.
+## Merge two compileInfo lists, deduplicating by srcfile (per file, the first
+## occurrence wins — that keeps the originating compile/link flags). Returns
+## NULL when both inputs are empty so the attribute stays absent on objects
+## that never had native code to begin with.
+mergeCompileInfo <- function(a, b) {
+  all <- c(a, b)
+  if (!length(all)) return(NULL)
+  seen <- character(0)
+  out <- list()
+  for (e in all) {
+    if (is.null(e$srcfile) || !length(e$srcfile)) next
+    key <- paste(e$srcfile, collapse = "\x1f")
+    if (key %in% seen) next
+    seen <- c(seen, key)
+    out[[length(out) + 1]] <- e
+  }
+  if (!length(out)) return(NULL)
+  out
+}
+
+collectCompileInfo <- function(...) {
+  objs <- list(...)
+  objs <- objs[!vapply(objs, is.null, logical(1))]
+  out <- list()
+  for (o in objs) {
+    src <- attr(o, "srcfile")
+    if (is.null(src) || !length(src) || !nzchar(src)) {
+      mname <- attr(o, "modelname") %||% unname(o[1])
+      if (is.null(mname) || !nzchar(mname)) next
+      b <- outer(mname, c("", "_deriv", "_s", "_s2", "_sdcv", "_dfdx", "_dfdp"), paste0)
+      cand <- c(paste0(b, ".c"), paste0(b, ".cpp"))
+      src <- cand[file.exists(cand)]
+      if (!length(src)) next
+      src <- normalizePath(src, winslash = "/", mustWork = FALSE)
+    } else {
+      src <- normalizePath(src, winslash = "/", mustWork = FALSE)
+    }
+    out[[length(out) + 1]] <- list(
+      srcfile     = src,
+      compileArgs = attr(o, "compileArgs") %||% "",
+      linkArgs    = attr(o, "linkArgs")    %||% ""
+    )
+  }
+  out
+}
+
 
 #' Generate model objects for use in Xs (models with sensitivities)
 #'
@@ -31,21 +83,26 @@
 #'   for which sensitivities are returned. If specified, `estimate` overwrites `fixed`.
 #' @param modelname Character. The base name of the generated C/C++ file.
 #' @param solver Character string specifying the solver backend.
-#'   One of `"deSolve"`, `"Sundials"` (deprecated), or `"boost"`.
+#'   One of `"deSolve"`, `"CppODE"` or `"Sundials"`.
 #' @param gridpoints Integer specifying the minimum number of internal time points
 #'   where the ODE is evaluated.
 #' @param verbose Logical. If `TRUE`, print compiler output to the R console.
 #' @param ... Additional arguments passed to [cOde::funC()] or
 #'   [CppODE::CppODE()].
 #'
-#' @return list with \code{func} (ODE object) and \code{extended} (ODE+Sensitivities object)
+#' @return list with \code{func} (ODE object) and \code{extended} (ODE+Sensitivities object).
+#'   Carries a \code{"compileInfo"} attribute listing source files and per-file
+#'   compile/link flags collected from \code{func} and \code{extended}. This is
+#'   consumed by [compile()] when the model is later compiled via a prediction
+#'   function, so solver-specific linker requirements (e.g. Sundials libraries
+#'   for \code{solver = "Sundials"}) are applied to the right files only.
 #'
 #' @seealso [cOde::funC()], [CppODE::CppODE()]
 #'
 #' @example inst/examples/odemodel.R
 #' @export
 odemodel <- function(f, deriv = TRUE, forcings=NULL, events = NULL, outputs = NULL, 
-                     fixed = NULL, estimate = NULL, modelname = "odemodel", solver = c("deSolve", "CppODE"), 
+                     fixed = NULL, estimate = NULL, modelname = "odemodel", solver = c("deSolve", "CppODE", "Sundials"), 
                      gridpoints = NULL, verbose = FALSE, ...) {
 
   f <- as.eqnvec(f)
@@ -105,7 +162,7 @@ odemodel <- function(f, deriv = TRUE, forcings=NULL, events = NULL, outputs = NU
     out <- list(func = func, extended = extended)
     class(out) <- c("deSolve", "odemodel")
   }
-  else if (solver == "CppODE") {
+  else {
     unsupported_args <- list(
       outputs = outputs,
       estimate = estimate,
@@ -118,16 +175,27 @@ odemodel <- function(f, deriv = TRUE, forcings=NULL, events = NULL, outputs = NU
     ]
     
     if (length(unsupported) > 0) {
-      warning(sprintf("The following arguments are not (yet) supported by CppODE() and will be ignored: %s", paste(unsupported, collapse = ", ")), call. = FALSE)
+      warning(sprintf("The following arguments are not (yet) supported by CppODE and will be ignored: %s", paste(unsupported, collapse = ", ")), call. = FALSE)
     }
-    func <- CppODE::CppODE(f, events = events, fixed = fixed, modelname = modelname, outdir = getwd(), deriv = FALSE, verbose = verbose, ...)
-    extended <- NULL
-    if (deriv) {
-      extended <- CppODE::CppODE(f, events = events, fixed = fixed, forcings = forcings, modelname = paste0(modelname, "_s"), outdir = getwd(), deriv = TRUE, verbose = verbose, ...)
-    }
-    out <- list(func = func, extended = extended)
-    class(out) <- c("CppODE", "odemodel")
+    if (solver == "CppODE") {
+      func <- CppODE::CppODE(f, events = events, fixed = fixed, modelname = modelname, outdir = getwd(), deriv = FALSE, verbose = verbose, ...)
+      extended <- NULL
+      if (deriv) {
+        extended <- CppODE::CppODE(f, events = events, fixed = fixed, forcings = forcings, modelname = paste0(modelname, "_s"), outdir = getwd(), deriv = TRUE, verbose = verbose, ...)
+      }
+      out <- list(func = func, extended = extended)
+      class(out) <- c("CppODE", "odemodel")
+    } else if (solver == "Sundials") {
+      func <- CppODE::CVODE(f, events = events, fixed = fixed, modelname = modelname, outdir = getwd(), deriv = FALSE, verbose = verbose, ...)
+      extended <- NULL
+      if (deriv) {
+        extended <- CppODE::CVODE(f, events = events, fixed = fixed, forcings = forcings, modelname = paste0(modelname, "_s"), outdir = getwd(), deriv = TRUE, verbose = verbose, ...)
+      }
+      out <- list(func = func, extended = extended)
+      class(out) <- c("CppODE", "odemodel")
+      }
   }
+  attr(out, "compileInfo") <- collectCompileInfo(out$func, out$extended)
   return(out)
 }
 
@@ -309,10 +377,11 @@ parfn <- function(p2p, parameters = NULL, condition = NULL) {
   attr(outfn, "mappings") <- mappings
   attr(outfn, "parameters") <- parameters
   attr(outfn, "conditions") <- condition
+  attr(outfn, "compileInfo") <- attr(p2p, "compileInfo")
   class(outfn) <- c("parfn", "fn")
   return(outfn)
-  
-  
+
+
 }
 
 
@@ -482,9 +551,10 @@ prdfn <- function(P2X, parameters = NULL, condition = NULL) {
   attr(outfn, "mappings") <- mappings
   attr(outfn, "parameters") <- parameters
   attr(outfn, "conditions") <- mycondition
+  attr(outfn, "compileInfo") <- attr(P2X, "compileInfo")
   class(outfn) <- c("prdfn", "fn")
   return(outfn)
-  
+
 }
 
 #' Observation function
@@ -563,6 +633,7 @@ obsfn <- function(X2Y, parameters = NULL, condition = NULL) {
   attr(outfn, "mappings") <- mappings
   attr(outfn, "parameters") <- parameters
   attr(outfn, "conditions") <- mycondition
+  attr(outfn, "compileInfo") <- attr(X2Y, "compileInfo")
   class(outfn) <- c("obsfn", "fn")
   return(outfn)
 
@@ -987,6 +1058,7 @@ objframe <- function(mydata, deriv = NULL, deriv.err = NULL) {
 
   attr(outfn, "mappings") <- mappings
   attr(outfn, "parameters") <- union(attr(x1, "parameters"), attr(x2, "parameters"))
+  attr(outfn, "compileInfo") <- mergeCompileInfo(attr(x1, "compileInfo"), attr(x2, "compileInfo"))
   attr(outfn, "conditions") <- conditions.x12
   attr(outfn, "forcings") <- do.call(c, list(attr(x1, "forcings"), attr(x2, "forcings")))
 
@@ -1148,6 +1220,7 @@ test_conditions <- function(c1, c2) {
 
     attr(outfn, "parameters") <- attr(p2, "parameters")
     attr(outfn, "conditions") <- conditions.out
+    attr(outfn, "compileInfo") <- mergeCompileInfo(attr(p1, "compileInfo"), attr(p2, "compileInfo"))
     class(outfn) <- c("obsfn", "fn", "composed")
 
     return(outfn)
@@ -1196,6 +1269,7 @@ test_conditions <- function(c1, c2) {
 
     attr(outfn, "parameters") <- attr(p2, "parameters")
     attr(outfn, "conditions") <- conditions.out
+    attr(outfn, "compileInfo") <- mergeCompileInfo(attr(p1, "compileInfo"), attr(p2, "compileInfo"))
     class(outfn) <- c("obsfn", "fn", "composed")
 
     return(outfn)
@@ -1253,6 +1327,7 @@ test_conditions <- function(c1, c2) {
 
     attr(outfn, "parameters") <- attr(p2, "parameters")
     attr(outfn, "conditions") <- conditions.out
+    attr(outfn, "compileInfo") <- mergeCompileInfo(attr(p1, "compileInfo"), attr(p2, "compileInfo"))
     class(outfn) <- c("prdfn", "fn", "composed")
 
     return(outfn)
@@ -1309,6 +1384,7 @@ test_conditions <- function(c1, c2) {
 
     attr(outfn, "conditions") <- conditions.out
     attr(outfn, "parameters") <- attr(p2, "parameters")
+    attr(outfn, "compileInfo") <- mergeCompileInfo(attr(p1, "compileInfo"), attr(p2, "compileInfo"))
     class(outfn) <- c("prdfn", "fn", "composed")
 
     return(outfn)
@@ -1357,6 +1433,7 @@ test_conditions <- function(c1, c2) {
 
     attr(outfn, "parameters") <- attr(p2, "parameters")
     attr(outfn, "conditions") <- conditions.out
+    attr(outfn, "compileInfo") <- mergeCompileInfo(attr(p1, "compileInfo"), attr(p2, "compileInfo"))
     class(outfn) <- c("parfn", "fn", "composed")
 
     return(outfn)
@@ -1385,6 +1462,7 @@ test_conditions <- function(c1, c2) {
     }
 
     attr(outfn, "conditions") <- conditions.out
+    attr(outfn, "compileInfo") <- mergeCompileInfo(attr(p1, "compileInfo"), attr(p2, "compileInfo"))
     class(outfn) <- c("objfn", "fn", "composed")
 
     return(outfn)

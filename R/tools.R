@@ -415,23 +415,35 @@ expand.grid.alt <- function(seq1, seq2) {
 #' @description
 #' Compiles model objects ([parfn], [obsfn], [prdfn]) related C/C++ files into shared libraries via `R CMD SHLIB`.
 #'
+#' @details
+#' Per-file compile and link flags are taken from the `"compileInfo"`
+#' attribute that [odemodel()], [Xs()], [Xf()], [Y()] and [P()] attach to
+#' their return values. Each entry carries the source file together with the
+#' `compileArgs` and `linkArgs` reported by the backend that produced it
+#' (`cOde::funC`, `CppODE::CppODE`, `CppODE::CVODE`, ...), so solver-specific
+#' libraries reach only the files that need them. Objects without
+#' `compileInfo` fall back to modelname-based file discovery in the current
+#' working directory.
+#'
 #' @param ... One or more model objects.
-#' @param output Optional name for a combined shared library.
-#' @param args Additional compiler/linker flags.
+#' @param output Optional name for a combined shared library. When set, all
+#'   files are linked into one object and the union of their `linkArgs` is
+#'   applied.
+#' @param args Additional compiler/linker flags applied to every file.
 #' @param cores Parallel compilation jobs (Unix only, requires `cores > 1`).
 #' @param verbose If `TRUE`, print compiler commands.
 #'
 #' @return Invisibly `TRUE` on success.
 #' @export
 compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE) {
-  
+
   ## save & restore env
   old <- Sys.getenv(c("PKG_CFLAGS","PKG_CXXFLAGS","PKG_CPPFLAGS","PKG_LIBS"), unset = NA)
   on.exit({
     for (n in names(old))
       if (is.na(old[n])) Sys.unsetenv(n) else Sys.setenv(structure(old[n], names = n))
   }, add = TRUE)
-  
+
   objs <- list(...)
   if (!length(objs)) stop("No objects")
   obj.names <- as.character(substitute(list(...)))[-1]
@@ -439,44 +451,72 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
   so    <- .Platform$dynlib.ext
   cfg   <- function(x) trimws(system(paste(Rbin, "CMD config", x), intern = TRUE))
   strip <- function(x) trimws(gsub("(^| )-std=[^ ]+", "", x))
-  
+
   ## classify objects
   is_dmod <- vapply(objs, inherits, logical(1), c("obsfn","parfn","prdfn"))
   is_cpp  <- vapply(objs, function(o) !is.null(attr(o, "srcfile")), logical(1))
-  
-  ## collect source files — dMod/cOde path
-  dmod_f <- character(0)
-  if (any(is_dmod)) {
-    dmod_f <- unique(unlist(lapply(objs[is_dmod], function(o) {
+
+  ## Collect per-file build info.
+  ## Primary source is `attr(o, "compileInfo")` which flows through from
+  ## odemodel()/Xs()/Y()/P() and carries (srcfile, compileArgs, linkArgs) as
+  ## reported by cOde/CppODE/CVODE. Falls back to modelname-based file
+  ## discovery for legacy objects that were built before compileInfo existed,
+  ## and to the bare `srcfile` attribute for raw CppODE objects.
+  info_from_compileInfo <- unlist(
+    lapply(objs, function(o) attr(o, "compileInfo")),
+    recursive = FALSE
+  )
+
+  info_fallback <- list()
+  for (i in seq_along(objs)) {
+    o <- objs[[i]]
+    if (!is.null(attr(o, "compileInfo"))) next
+    if (is_dmod[i]) {
       b <- outer(modelname(o), c("","_deriv","_s","_s2","_sdcv","_dfdx","_dfdp"), paste0)
-      f <- c(paste0(b, ".c"), paste0(b, ".cpp"))
-      f[file.exists(f)]
-    })))
+      cand <- c(paste0(b, ".c"), paste0(b, ".cpp"))
+      src <- cand[file.exists(cand)]
+      for (s in src)
+        info_fallback[[length(info_fallback) + 1]] <-
+          list(srcfile = normalizePath(s, winslash = "/", mustWork = TRUE),
+               compileArgs = "", linkArgs = "")
+    } else if (is_cpp[i]) {
+      s <- attr(o, "srcfile")
+      if (length(s) && nzchar(s) && file.exists(s))
+        info_fallback[[length(info_fallback) + 1]] <- list(
+          srcfile     = normalizePath(s, winslash = "/", mustWork = TRUE),
+          compileArgs = attr(o, "compileArgs") %||% "",
+          linkArgs    = attr(o, "linkArgs")    %||% "")
+    }
   }
-  
-  ## collect source files — CppODE path
-  cpp_f <- character(0)
-  if (any(is_cpp)) {
-    cpp_f <- unique(Filter(file.exists,
-                           vapply(objs[is_cpp], function(o) attr(o, "srcfile") %||% "", character(1))))
-  }
-  
-  files <- normalizePath(unique(c(dmod_f, cpp_f)), winslash = "/", mustWork = TRUE)
-  if (!length(files)) stop("No source files found")
+
+  info <- c(info_from_compileInfo, info_fallback)
+
+  ## Expand entries with multiple srcfiles (e.g. cOde spills _deriv.c
+  ## alongside the main .c) into one entry per file.
+  info <- unlist(lapply(info, function(e) {
+    if (!length(e$srcfile)) return(list())
+    if (length(e$srcfile) == 1L) return(list(e))
+    lapply(e$srcfile, function(s) list(srcfile = s, compileArgs = e$compileArgs, linkArgs = e$linkArgs))
+  }), recursive = FALSE)
+
+  info <- Filter(function(e) length(e$srcfile) == 1L && nzchar(e$srcfile) && file.exists(e$srcfile), info)
+  if (!length(info)) stop("No source files found")
+
+  ## Deduplicate by srcfile, keeping the first (non-empty) flags we saw.
+  ord <- order(vapply(info, function(e) e$srcfile, character(1)))
+  info <- info[ord]
+  keep <- !duplicated(vapply(info, function(e) e$srcfile, character(1)))
+  info <- info[keep]
+
+  files      <- vapply(info, function(e) e$srcfile, character(1))
   roots      <- sub("\\.[^.]+$", "", basename(files))
   roots_full <- sub("\\.[^.]+$", "", files)
-  
-  ## merge compileArgs from CppODE objects + explicit args
-  obj_args <- unique(unlist(lapply(objs[is_cpp], function(o) {
-    a <- attr(o, "compileArgs"); if (!is.null(a) && nzchar(a)) a
-  })))
-  extra <- paste(c(obj_args, args), collapse = " ")
-  
+
   ## compiler flags
   if (.Platform$OS.type == "windows") cores <- 1
   pic  <- if (.Platform$OS.type == "windows") "" else "-fPIC"
   base <- paste("-O2 -DNDEBUG -w", pic)
-  
+
   ## KLU detection
   uses_klu <- any(vapply(objs, function(o) isTRUE(attr(o, "sparse")), logical(1)))
   klu_flag <- ""; klu_lib <- ""
@@ -485,53 +525,79 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
     lp <- system.file(sd, "libcppode_ss.a", package = "CppODE")
     if (file.exists(lp)) { klu_flag <- "-DKLU"; klu_lib <- shQuote(lp) }
   }
-  
-  ## assemble PKG_* variables
-  cxx <- paste(base, klu_flag)
-  if (nzchar(extra)) { base <- paste(base, extra); cxx <- paste(cxx, extra) }
-  
-  libs <- paste(klu_lib, cfg("LAPACK_LIBS"), cfg("BLAS_LIBS"))
-  
-  Sys.setenv(
-    PKG_CFLAGS   = base,
-    PKG_CXXFLAGS = cxx,
-    PKG_CPPFLAGS = paste0("-I", system.file("include", package = "CppODE")),
-    PKG_LIBS     = libs
-  )
-  
-  ## toolchain report
-  if (any(grepl("\\.c$",   files))) cat(sprintf("using C compiler:   %s [%s]\n", strip(cfg("CC")),  trimws(Sys.getenv("PKG_CFLAGS"))))
-  if (any(grepl("\\.cpp$", files))) cat(sprintf("using C++ compiler: %s [%s]\n", strip(cfg("CXX")), trimws(Sys.getenv("PKG_CXXFLAGS"))))
-  
+
+  ## shared pieces (compiler/linker) that apply to every file
+  cxx_base <- paste(base, klu_flag)
+  extra_args <- paste(c(args), collapse = " ")
+  if (nzchar(extra_args)) {
+    base     <- paste(base,     extra_args)
+    cxx_base <- paste(cxx_base, extra_args)
+  }
+  base_libs <- paste(klu_lib, cfg("LAPACK_LIBS"), cfg("BLAS_LIBS"))
+  cppflags  <- paste0("-I", system.file("include", package = "CppODE"))
+
+  ## toolchain report (use a representative entry for display)
+  if (any(grepl("\\.c$",   files))) cat(sprintf("using C compiler:   %s [%s]\n", strip(cfg("CC")),  trimws(base)))
+  if (any(grepl("\\.cpp$", files))) cat(sprintf("using C++ compiler: %s [%s]\n", strip(cfg("CXX")), trimws(cxx_base)))
+
   ## unload stale DLLs
   loaded <- getLoadedDLLs()
   for (i in seq_along(roots))
     if (roots[i] %in% names(loaded)) try(dyn.unload(loaded[[roots[i]]][["path"]]), silent = TRUE)
   if (!is.null(output)) try(dyn.unload(paste0(output, so)), silent = TRUE)
-  
-  ## compile & link
-  run <- function(cmd) {
+
+  ## Compile one file with its own compile/link flags applied via PKG_*.
+  ## Each invocation sets the env just before shelling out to R CMD SHLIB,
+  ## so per-file linkArgs (e.g. Sundials libs for CVODE) reach only the
+  ## files that need them. Works inside mclapply because each fork has its
+  ## own env.
+  compile_one <- function(entry) {
+    extra_c <- entry$compileArgs %||% ""
+    Sys.setenv(
+      PKG_CFLAGS   = trimws(paste(base,     extra_c)),
+      PKG_CXXFLAGS = trimws(paste(cxx_base, extra_c)),
+      PKG_CPPFLAGS = cppflags,
+      PKG_LIBS     = trimws(paste(base_libs, entry$linkArgs %||% ""))
+    )
+    cmd <- paste(Rbin, "CMD SHLIB", shQuote(entry$srcfile))
     if (verbose) cat(cmd, "\n")
     if (system(cmd, ignore.stdout = !verbose, ignore.stderr = !verbose) != 0)
-      stop("Compilation failed")
+      stop("Compilation failed: ", entry$srcfile)
   }
-  
+
   if (is.null(output)) {
     if (.Platform$OS.type == "unix" && cores > 1)
-      parallel::mclapply(files, function(f) run(paste(Rbin, "CMD SHLIB", shQuote(f))), mc.cores = cores)
-    else for (f in files) run(paste(Rbin, "CMD SHLIB", shQuote(f)))
+      parallel::mclapply(info, compile_one, mc.cores = cores)
+    else for (e in info) compile_one(e)
     for (r in roots_full) dyn.load(paste0(r, so))
   } else {
+    ## Combined output: link all files together. Union of every entry's
+    ## linkArgs (dedup) so Sundials-dependent files still pull their libs.
+    all_link <- unique(unlist(lapply(info, function(e) strsplit(trimws(e$linkArgs %||% ""), "\\s+")[[1]])))
+    all_link <- all_link[nzchar(all_link)]
+    all_compile <- unique(unlist(lapply(info, function(e) strsplit(trimws(e$compileArgs %||% ""), "\\s+")[[1]])))
+    all_compile <- all_compile[nzchar(all_compile)]
+
+    Sys.setenv(
+      PKG_CFLAGS   = trimws(paste(base,     paste(all_compile, collapse = " "))),
+      PKG_CXXFLAGS = trimws(paste(cxx_base, paste(all_compile, collapse = " "))),
+      PKG_CPPFLAGS = cppflags,
+      PKG_LIBS     = trimws(paste(base_libs, paste(all_link, collapse = " ")))
+    )
+
     output <- sub(paste0("\\", so, "$"), "", output)
     out <- file.path(dirname(files[1]), paste0(output, so))
     try(dyn.unload(out), silent = TRUE)
     if (file.exists(out)) unlink(out)
-    run(paste(Rbin, "CMD SHLIB", paste(shQuote(files), collapse = " "), "-o", shQuote(out)))
+    cmd <- paste(Rbin, "CMD SHLIB", paste(shQuote(files), collapse = " "), "-o", shQuote(out))
+    if (verbose) cat(cmd, "\n")
+    if (system(cmd, ignore.stdout = !verbose, ignore.stderr = !verbose) != 0)
+      stop("Compilation failed")
     dyn.load(out)
     for (i in which(is_dmod))
       eval.parent(parse(text = paste0("modelname(", obj.names[i], ") <- '", output, "'")))
   }
-  
+
   invisible(TRUE)
 }
 

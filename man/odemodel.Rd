@@ -13,7 +13,7 @@ odemodel(
   fixed = NULL,
   estimate = NULL,
   modelname = "odemodel",
-  solver = c("deSolve", "CppODE"),
+  solver = c("deSolve", "CppODE", "Sundials"),
   gridpoints = NULL,
   verbose = FALSE,
   ...
@@ -51,7 +51,7 @@ for which sensitivities are returned. If specified, \code{estimate} overwrites \
 \item{modelname}{Character. The base name of the generated C/C++ file.}
 
 \item{solver}{Character string specifying the solver backend.
-One of \code{"deSolve"}, \code{"Sundials"} (deprecated), or \code{"boost"}.}
+One of \code{"deSolve"}, \code{"CppODE"} or \code{"Sundials"}.}
 
 \item{gridpoints}{Integer specifying the minimum number of internal time points
 where the ODE is evaluated.}
@@ -62,7 +62,12 @@ where the ODE is evaluated.}
 \code{\link[CppODE:CppODE]{CppODE::CppODE()}}.}
 }
 \value{
-list with \code{func} (ODE object) and \code{extended} (ODE+Sensitivities object)
+list with \code{func} (ODE object) and \code{extended} (ODE+Sensitivities object).
+Carries a \code{"compileInfo"} attribute listing source files and per-file
+compile/link flags collected from \code{func} and \code{extended}. This is
+consumed by \code{\link[=compile]{compile()}} when the model is later compiled via a prediction
+function, so solver-specific linker requirements (e.g. Sundials libraries
+for \code{solver = "Sundials"}) are applied to the right files only.
 }
 \description{
 Creates and compiles model objects for systems of ordinary differential equations (ODEs)

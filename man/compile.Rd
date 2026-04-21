@@ -9,9 +9,11 @@ compile(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
 \arguments{
 \item{...}{One or more model objects.}
 
-\item{output}{Optional name for a combined shared library.}
+\item{output}{Optional name for a combined shared library. When set, all
+files are linked into one object and the union of their \code{linkArgs} is
+applied.}
 
-\item{args}{Additional compiler/linker flags.}
+\item{args}{Additional compiler/linker flags applied to every file.}
 
 \item{cores}{Parallel compilation jobs (Unix only, requires \code{cores > 1}).}
 
@@ -22,4 +24,14 @@ Invisibly \code{TRUE} on success.
 }
 \description{
 Compiles model objects (\link{parfn}, \link{obsfn}, \link{prdfn}) related C/C++ files into shared libraries via \verb{R CMD SHLIB}.
+}
+\details{
+Per-file compile and link flags are taken from the \code{"compileInfo"}
+attribute that \code{\link[=odemodel]{odemodel()}}, \code{\link[=Xs]{Xs()}}, \code{\link[=Xf]{Xf()}}, \code{\link[=Y]{Y()}} and \code{\link[=P]{P()}} attach to
+their return values. Each entry carries the source file together with the
+\code{compileArgs} and \code{linkArgs} reported by the backend that produced it
+(\code{cOde::funC}, \code{CppODE::CppODE}, \code{CppODE::CVODE}, ...), so solver-specific
+libraries reach only the files that need them. Objects without
+\code{compileInfo} fall back to modelname-based file discovery in the current
+working directory.
 }

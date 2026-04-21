@@ -150,13 +150,14 @@ Xs.deSolve <- function(odemodel, forcings = NULL, events = NULL, names = NULL, c
   attr(P2X, "forcings") <- forcings
   attr(P2X, "events") <- events
   attr(P2X, "modelname") <- func[1]
-  
-  prdfn(P2X, c(variables, parameters), condition) 
-  
+  attr(P2X, "compileInfo") <- attr(odemodel, "compileInfo")
+
+  prdfn(P2X, c(variables, parameters), condition)
+
 }
 
 #' @export
-Xs.CppODE <- function(odemodel, forcings = NULL, events = NULL, names = NULL, condition = NULL, 
+Xs.CppODE <- function(odemodel, forcings = NULL, events = NULL, names = NULL, condition = NULL,
                       optionsOde = list(), optionsSens = list()) {
   
   if (!is.null(forcings)) {
@@ -285,8 +286,9 @@ Xs.CppODE <- function(odemodel, forcings = NULL, events = NULL, names = NULL, co
   attr(P2X, "forcings") <- forcings
   attr(P2X, "events") <- events
   attr(P2X, "modelname") <- func[1]
-  
-  prdfn(P2X, paramNames, condition) 
+  attr(P2X, "compileInfo") <- attr(odemodel, "compileInfo")
+
+  prdfn(P2X, paramNames, condition)
 }
 
 
@@ -357,10 +359,11 @@ Xf <- function(odemodel, forcings = NULL, events = NULL, condition = NULL, optio
   attr(P2X, "forcings") <- forcings
   attr(P2X, "events") <- events
   attr(P2X, "modelname") <- func[1]
-  
-  
-  prdfn(P2X, c(variables, parameters), condition) 
-  
+  attr(P2X, "compileInfo") <- attr(odemodel, "compileInfo")
+
+
+  prdfn(P2X, c(variables, parameters), condition)
+
 }
 
 
@@ -652,7 +655,8 @@ Y <- function(g, f = NULL, states = NULL, parameters = NULL,
   attr(X2Y, "parameters") <- parameters
   attr(X2Y, "states")     <- states
   attr(X2Y, "modelname")  <- modelname
-  
+  attr(X2Y, "compileInfo") <- collectCompileInfo(gfun, gjac)
+
   obsfn(X2Y, parameters, condition)
 }
 

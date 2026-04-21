@@ -198,7 +198,8 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
   attr(p2p, "equations")  <- as.eqnvec(trafo)
   attr(p2p, "parameters") <- parameters
   attr(p2p, "modelname")  <- modelname
-  
+  attr(p2p, "compileInfo") <- collectCompileInfo(fun, jac)
+
   parfn(p2p, parameters, condition)
 }
 
@@ -709,6 +710,7 @@ Pimpl <- function(trafo, parameters = NULL, forcings = NULL, condition = NULL, k
   attr(p2p, "equations")  <- as.eqnvec(trafo)
   attr(p2p, "parameters") <- parameters
   attr(p2p, "modelname")  <- modelname
+  attr(p2p, "compileInfo") <- collectCompileInfo(PEval$func, PEval$jac)
   parfn(p2p, parameters, condition)
 }
 
@@ -924,6 +926,7 @@ Pequil <- function(trafo, parameters = NULL, forcings = NULL, condition = NULL, 
   attr(p2p, "equations")  <- as.eqnvec(f)
   attr(p2p, "parameters") <- parameters
   attr(p2p, "modelname")  <- modelname
+  attr(p2p, "compileInfo") <- collectCompileInfo(model, model_s)
   parfn(p2p, parameters, condition)
 }
 
