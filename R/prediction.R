@@ -185,8 +185,9 @@ Xs.CppODE <- function(odemodel, forcings = NULL, events = NULL, names = NULL, co
     stop("Events should be passed to odemodel() when using solver = 'boost'")
   }
   
-  optionsDefault <- list(atol = 1e-6, rtol = 1e-6, maxattemps = 10L, maxsteps = 1e6L, 
-                         hini = 0L, roottol = 1e-6, maxroot = 1)
+  optionsDefault <- list(atol = 1e-6, rtol = 1e-6, maxWithoutProgress = 50L, maxsteps = 1e6L,
+                         hini = 0, roottol = 1e-6, maxroot = 1L,
+                         usePID = "none", onFailure = "stop", traceFile = NULL)
   
   # Warn about unknown options
   warn_unknown <- function(user, defaults, label) {
@@ -238,25 +239,38 @@ Xs.CppODE <- function(odemodel, forcings = NULL, events = NULL, names = NULL, co
     if (!deriv) {
       
       # Evaluate model without sensitivities
-      out <- suppressWarnings(
-        CppODE::solveODE(func, times, params, NULL, NULL, NULL, forcings, 
-                         optionsOde$atol, optionsOde$rtol,
-                         optionsOde$maxattemps, optionsOde$maxsteps, optionsOde$hini,
-                         optionsOde$roottol, optionsOde$maxroot)
-      )
-      
+      out <- CppODE::solveODE(func, times, params,
+                              sens1ini = NULL, sens2ini = NULL, fixed = NULL,
+                              forcings = forcings,
+                              abstol = optionsOde$atol, reltol = optionsOde$rtol,
+                              maxprogress = optionsOde$maxWithoutProgress,
+                              maxsteps = optionsOde$maxsteps,
+                              hini = optionsOde$hini,
+                              roottol = optionsOde$roottol,
+                              maxroot = optionsOde$maxroot,
+                              usePID = optionsOde$usePID,
+                              onFailure = optionsOde$onFailure,
+                              traceFile = optionsOde$traceFile)
+
       out <- cbind(out$time, submatrix(t(out$variable), cols = names))
       colnames(out)[1] <- "time"
-      
+
     } else {
-      
+
       # Evaluate model with sensitivities
-      outSens <- suppressWarnings(
-        CppODE::solveODE(extended, times, params, NULL, NULL, fixedNames, forcings, 
-                         optionsSens$atol, optionsSens$rtol,
-                         optionsSens$maxattemps, optionsSens$maxsteps, optionsSens$hini,
-                         optionsSens$roottol, optionsSens$maxroot)
-      )
+      outSens <- CppODE::solveODE(extended, times, params,
+                                  sens1ini = NULL, sens2ini = NULL,
+                                  fixed = fixedNames,
+                                  forcings = forcings,
+                                  abstol = optionsSens$atol, reltol = optionsSens$rtol,
+                                  maxprogress = optionsSens$maxWithoutProgress,
+                                  maxsteps = optionsSens$maxsteps,
+                                  hini = optionsSens$hini,
+                                  roottol = optionsSens$roottol,
+                                  maxroot = optionsSens$maxroot,
+                                  usePID = optionsSens$usePID,
+                                  onFailure = optionsSens$onFailure,
+                                  traceFile = optionsSens$traceFile)
       
       out <- cbind(outSens$time, submatrix(t(outSens$variable), cols = names))
       colnames(out)[1] <- "time"
