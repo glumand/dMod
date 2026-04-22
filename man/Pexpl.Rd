@@ -11,7 +11,8 @@ Pexpl(
   condition = NULL,
   compile = FALSE,
   modelname = NULL,
-  verbose = FALSE
+  verbose = FALSE,
+  derivMode = c("symbolic", "ad", "none")
 )
 }
 \arguments{
@@ -33,6 +34,12 @@ for faster evaluation.}
 \item{modelname}{Base name for generated C++ code if \code{compile = TRUE}.}
 
 \item{verbose}{Logical. Print compiler messages.}
+
+\item{derivMode}{Character. Selects the derivative backend used by \link[CppODE:funCpp]{CppODE::funCpp}
+to evaluate the transformation Jacobian. One of \code{"symbolic"} (default,
+classical SymPy Jacobian — appropriate for the typically small parameter
+transformations), \code{"ad"} (forward-mode automatic differentiation via
+\code{jac_chain}; requires \code{compile = TRUE}), or \code{"none"} (no derivatives).}
 }
 \value{
 A function of class \link{parfn}.

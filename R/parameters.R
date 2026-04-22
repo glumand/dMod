@@ -107,6 +107,11 @@ P <- function(trafo = NULL, parameters = NULL, condition = NULL,
 #' for faster evaluation.
 #' @param modelname Base name for generated C++ code if `compile = TRUE`.
 #' @param verbose Logical. Print compiler messages.
+#' @param derivMode Character. Selects the derivative backend used by [funCpp]
+#'   to evaluate the transformation Jacobian. One of `"symbolic"` (default,
+#'   classical SymPy Jacobian — appropriate for the typically small parameter
+#'   transformations), `"ad"` (forward-mode automatic differentiation via
+#'   `jac_chain`; requires `compile = TRUE`), or `"none"` (no derivatives).
 #'
 #' @return
 #' A function of class [parfn].
@@ -117,9 +122,12 @@ P <- function(trafo = NULL, parameters = NULL, condition = NULL,
 #'
 #' @importFrom CppODE funCpp
 #' @export
-Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NULL, 
-                  compile = FALSE, modelname = NULL, verbose = FALSE) {
-  
+Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NULL,
+                  compile = FALSE, modelname = NULL, verbose = FALSE,
+                  derivMode = c("symbolic", "ad", "none")) {
+
+  derivMode <- match.arg(derivMode)
+
   # Determine parameter sets
   if (is.null(parameters)) {
     parameters <- getSymbols(trafo)
@@ -129,11 +137,11 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
     trafo <- c(trafo, identity)
     parameters <- getSymbols(trafo)
   }
-  
+
   # Model name with condition label
   if (is.null(modelname)) modelname <- "expl_parfn"
   if (!is.null(condition)) modelname <- paste(modelname, sanitizeConditions(condition), sep = "_")
-  
+
   # Build compiled (or fallback R) evaluator for transformation
   PEval <- suppressWarnings(
     CppODE::funCpp(
@@ -145,23 +153,45 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
       modelname  = modelname,
       outdir     = getwd(),
       verbose    = verbose,
-      convenient = FALSE
+      convenient = FALSE,
+      derivMode  = derivMode
     )
   )
-  
-  fun <- PEval$func
-  jac <- PEval$jac
-  
-  
+
+  fun       <- PEval$func
+  jac       <- PEval$jac
+  jac_chain <- PEval$jac_chain
+  use_ad    <- derivMode == "ad"
+
   # Define returned parameter transformation function
   p2p <- function(pars, fixed = NULL, deriv = TRUE) {
-    
+
     # Prepare pars
     p <- c(pars, fixed)
-    
-    # Evaluate inner parameters
-    pinnerVal <- fun(NULL, p, attach.input = attach.input, fixed = names(fixed))[,]
-    
+
+    Jac <- NULL
+    if (use_ad && deriv && !is.null(jac_chain)) {
+      # AD path: jac_chain returns y and dy already chain-ruled w.r.t. theta.
+      out <- jac_chain(NULL, p, dX = NULL, dP = attr(pars, "deriv"),
+                       attach.input = attach.input, fixed = names(fixed))
+      pinnerVal <- out$y[, 1]
+      if (!is.null(out$dy)) {
+        Jac <- matrix(out$dy, dim(out$dy)[1], dim(out$dy)[2],
+                      dimnames = list(dimnames(out$dy)[[1]], dimnames(out$dy)[[2]]))
+      }
+    } else {
+      # Symbolic path (also serves "both" and "none" via NULL jac).
+      pinnerVal <- fun(NULL, p, attach.input = attach.input, fixed = names(fixed))[,]
+      if (deriv && !is.null(jac)) {
+        Jac <- as.matrix(jac(NULL, p, attach.input = attach.input, fixed = names(fixed))[,,1])
+        dP <- attr(pars, "deriv")
+        if (!is.null(dP)) {
+          Jac <- Jac %*% dP[colnames(Jac), , drop = FALSE]
+          dimnames(Jac) <- list(names(pinnerVal), colnames(dP))
+        }
+      }
+    }
+
     if (any(is.nan(pinnerVal))) {
       stop(
         paste0(
@@ -171,34 +201,23 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
         )
       )
     }
-    
-    # Apply chain rule for derivatives
-    Jac <- NULL
-    if (deriv && !is.null(jac)) {
-      Jac <- as.matrix(jac(NULL, p, attach.input = attach.input, fixed = names(fixed))[,,1])
-      dP <- attr(pars, "deriv")
-      if (!is.null(dP)) {
-        Jac <- Jac %*% dP[colnames(Jac), , drop = FALSE]
-        dimnames(Jac) <- list(names(pinnerVal), colnames(dP))
-      }
-    }
-    
+
     # Assemble result
-    pinner <- as.parvec(pinnerVal, deriv = if (deriv) Jac[rowSums(Jac != 0) > 0, , drop = FALSE] else FALSE)
-    
+    pinner <- as.parvec(pinnerVal, deriv = if (deriv && !is.null(Jac)) Jac[rowSums(Jac != 0) > 0, , drop = FALSE] else FALSE)
+
     if (attach.input && !all(names(pars) %in% names(pinnerVal))) {
       pinner <- c(pinner,
                   as.parvec(pars[setdiff(names(pars), names(pinnerVal))],
                             deriv = if (deriv) NULL else FALSE))
     }
-    
+
     pinner
   }
-  
+
   attr(p2p, "equations")  <- as.eqnvec(trafo)
   attr(p2p, "parameters") <- parameters
   attr(p2p, "modelname")  <- modelname
-  attr(p2p, "compileInfo") <- collectCompileInfo(fun, jac)
+  attr(p2p, "compileInfo") <- collectCompileInfo(fun, jac, jac_chain)
 
   parfn(p2p, parameters, condition)
 }

@@ -519,11 +519,17 @@ Xd <- function(data, condition = NULL) {
 #' @param deriv2 Logical, if `TRUE`, the function also evaluates second derivatives 
 #' of observables with respect to parameters.
 #' @param compile Logical, if `TRUE`, the function is compiled (see [CppODE::funCpp]).
-#' @param modelname Character, used if `compile = TRUE`, specifies a fixed filename 
+#' @param modelname Character, used if `compile = TRUE`, specifies a fixed filename
 #' for the generated C file.
 #' @param verbose Logical, print compiler output to the R console.
-#' 
-#' @return 
+#' @param derivMode Character. Selects the derivative backend used by [funCpp]
+#'   to evaluate observation Jacobians. One of `"ad"` (default, forward-mode
+#'   automatic differentiation via `jac_chain` — typically faster when the
+#'   number of fitted parameters is large; requires `compile = TRUE`),
+#'   `"symbolic"` (classical SymPy Jacobian followed by an explicit chain
+#'   rule against the upstream `dX`/`dP`), or `"none"` (no derivatives).
+#'
+#' @return
 #' An object of class [obsfn], i.e. a function  `g(..., fixed = NULL, deriv = TRUE, condition = NULL, env = NULL)`
 #' returning predictions for observables and its derivatives.
 #' 
@@ -532,34 +538,37 @@ Xd <- function(data, condition = NULL) {
 #' @importFrom CppODE funCpp
 #' @importFrom abind abind
 #' @export
-Y <- function(g, f = NULL, states = NULL, parameters = NULL, 
+Y <- function(g, f = NULL, states = NULL, parameters = NULL,
               condition = NULL, attach.input = TRUE,
-              compile = FALSE, modelname = NULL, verbose = FALSE) {
-  
-  if (is.null(f) && is.null(states) && is.null(parameters)) 
+              compile = FALSE, modelname = NULL, verbose = FALSE,
+              derivMode = c("ad", "symbolic", "none")) {
+
+  derivMode <- match.arg(derivMode)
+
+  if (is.null(f) && is.null(states) && is.null(parameters))
     stop("Not all three arguments f, states and parameters can be NULL")
-  
+
   # Define model name with condition suffix
   if (is.null(modelname)) modelname <- "obsfn"
   if (!is.null(condition)) modelname <- paste(modelname, sanitizeConditions(condition), sep = "_")
-  
+
   # Identify symbols in g
   symbols <- getSymbols(unclass(g))
-  
+
   # Infer states and parameters
   if (is.null(f)) {
     states <- union(states, "time")
     parameters <- union(parameters, setdiff(symbols, states))
   } else if (inherits(f, "fn")) {
-    myforcings <- Reduce(union, lapply(lapply(attr(f, "mappings"), 
-                                              function(m) attr(m, "forcings")), 
+    myforcings <- Reduce(union, lapply(lapply(attr(f, "mappings"),
+                                              function(m) attr(m, "forcings")),
                                        function(ff) as.character(ff$name)))
     mystates <- unique(c(do.call(c, lapply(getEquations(f), names)), "time"))
     if (length(intersect(myforcings, mystates)) > 0)
       stop("Forcings and states overlap in different conditions.")
-    
+
     mystates <- c(mystates, myforcings)
-    myparameters <- setdiff(union(getParameters(f), getSymbols(unclass(g))), 
+    myparameters <- setdiff(union(getParameters(f), getSymbols(unclass(g))),
                             c(mystates, myforcings))
     states <- union(mystates, states)
     parameters <- union(myparameters, parameters)
@@ -570,12 +579,12 @@ Y <- function(g, f = NULL, states = NULL, parameters = NULL,
     states <- union(mystates, states)
     parameters <- union(myparameters, parameters)
   }
-  
+
   observables <- names(g)
   obsParams <- intersect(symbols, parameters)
   obsStates <- setdiff(symbols, parameters)
-  
-  # Compile evaluator for g (value, Jacobian)
+
+  # Compile evaluator for g (value, Jacobian, AD chain)
   gEval <- suppressWarnings(
     CppODE::funCpp(
       unclass(g),
@@ -585,77 +594,103 @@ Y <- function(g, f = NULL, states = NULL, parameters = NULL,
       modelname  = modelname,
       outdir     = getwd(),
       verbose    = verbose,
-      convenient = FALSE
+      convenient = FALSE,
+      derivMode  = derivMode
     )
   )
-  
-  gfun <- gEval$func
-  gjac <- gEval$jac
-  
+
+  gfun       <- gEval$func
+  gjac       <- gEval$jac
+  gjac_chain <- gEval$jac_chain
+  use_ad     <- derivMode == "ad"
+
   controls <- list(attach.input = attach.input)
-  
+
   # Core observation mapping function
   X2Y <- function(out, pars, fixed = NULL, deriv = TRUE) {
-    
+
     attach.input <- controls$attach.input
     fixedObsParams <- intersect(union(attr(pars, "fixed"), names(fixed)), obsParams)
     params <- c(unclass(pars), unclass(fixed))
-    
-    # Values
-    gVal <- t(gfun(out[, obsStates, drop = FALSE], params[obsParams], attach.input, fixedObsParams)[observables,, drop = FALSE])
-    
-    if (any(is.nan(gVal)))
-      stop("Observable(s) evaluate to NaN: ", 
-           paste(observables[colSums(is.nan(gVal)) > 0], collapse = ", "),
-           "\nLikely cause: division by zero or missing inputs.")
-    
-    values <- cbind(time = out[, "time"], gVal)
-    if (attach.input) values <- cbind(values, submatrix(out, cols = -1))
-    
-    # Derivatives
-    myderivs <- NULL
-    if (deriv && !is.null(gjac)) {
-      
-      ntimes <- nrow(out)
-      dX <- attr(out, "deriv")  # [states, theta, time] state sensitivities
-      dP <- attr(pars, "deriv") # [p, theta] parameter transformation Jacobian
-      dG <- gjac(out[, obsStates, drop = FALSE], params[obsParams]) # [obs, states+params, time]
-      
-      activeP <- setdiff(obsParams, fixedObsParams)
-      activeS <- if (!is.null(dX)) intersect(obsStates, dimnames(dX)[[1]]) else character()
-      theta <- if (!is.null(dP)) colnames(dP) else if (!is.null(dX)) dimnames(dX)[[2]] else NULL
-      
-      # Chain rule: dY/dtheta = dG/dX * dX/dtheta + dG/dP * dP/dtheta
-      t1 <- if (length(activeS)) dG[,activeS,,drop=F] %bmm% dX[activeS,,,drop=F] else NULL
-      t2 <- if (!is.null(dP) && length(activeP)) dG[,activeP,,drop=F] %bmm% dP[activeP,,drop=F] else NULL
-      
-      # Align by theta names before addition
-      if (!is.null(t1)) dimnames(t1)[[2]] <- dimnames(dX)[[2]]
-      if (!is.null(t2)) dimnames(t2)[[2]] <- colnames(dP)
-      myderivs <- if (!is.null(t1) && !is.null(t2)) t1[,theta,,drop=F] + t2[,theta,,drop=F] else t1 %||% t2
-      
-      # Fallback: no upstream derivs, return dG/dp directly
-      
-      if (is.null(myderivs) && length(activeP)) myderivs <- dG[,activeP,,drop=F]
-      if (!is.null(myderivs)) dimnames(myderivs) <- list(observables, theta, NULL)
-      
-      # Append original state sensitivities if attach.input
-      if (attach.input && !is.null(myderivs) && !is.null(dX)) {
-        outer_theta <- theta %||% dimnames(dX)[[2]]
-        missing <- setdiff(outer_theta, dimnames(dX)[[2]])
-        if (length(missing)) dX <- abind::abind(dX, array(0, c(dim(dX)[1], length(missing), dim(dX)[3]), dimnames = list(NULL, missing, NULL)), along = 2)
-        myderivs <- abind::abind(myderivs, dX[, outer_theta, , drop = FALSE], along = 1)
+
+    if (use_ad && deriv && !is.null(gjac_chain)) {
+      # AD path: jac_chain returns y and dy already chain-ruled.
+      dX <- attr(out, "deriv")
+      # Gate dX the same way the symbolic path gates activeS: if no obsStates
+      # appear in dX's row dim, it carries no upstream state sensitivity for
+      # this observation function. Suppress to avoid spurious theta mismatches
+      # against dP (e.g. Xt() returns a deriv array with unrelated layout).
+      if (!is.null(dX) && length(intersect(obsStates, dimnames(dX)[[1]])) == 0)
+        dX <- NULL
+      ad_out <- gjac_chain(out[, obsStates, drop = FALSE], params[obsParams],
+                           dX = dX, dP = attr(pars, "deriv"),
+                           attach.input = attach.input, fixed = fixedObsParams)
+      # Values: gjac_chain returns observables (and pass-through extras when
+      # attach.input = TRUE) under attach.input semantics matching gfun.
+      gAll <- ad_out$y
+      gVal <- t(gAll[observables, , drop = FALSE])
+      if (any(is.nan(gVal)))
+        stop("Observable(s) evaluate to NaN: ",
+             paste(observables[colSums(is.nan(gVal)) > 0], collapse = ", "),
+             "\nLikely cause: division by zero or missing inputs.")
+      values <- cbind(time = out[, "time"], gVal)
+      if (attach.input) values <- cbind(values, submatrix(out, cols = -1))
+      myderivs <- ad_out$dy
+    } else {
+      # Symbolic path (also serves "both" and "none").
+      gVal <- t(gfun(out[, obsStates, drop = FALSE], params[obsParams], attach.input, fixedObsParams)[observables,, drop = FALSE])
+
+      if (any(is.nan(gVal)))
+        stop("Observable(s) evaluate to NaN: ",
+             paste(observables[colSums(is.nan(gVal)) > 0], collapse = ", "),
+             "\nLikely cause: division by zero or missing inputs.")
+
+      values <- cbind(time = out[, "time"], gVal)
+      if (attach.input) values <- cbind(values, submatrix(out, cols = -1))
+
+      myderivs <- NULL
+      if (deriv && !is.null(gjac)) {
+
+        dX <- attr(out, "deriv")  # [states, theta, time] state sensitivities
+        dP <- attr(pars, "deriv") # [p, theta] parameter transformation Jacobian
+        dG <- gjac(out[, obsStates, drop = FALSE], params[obsParams]) # [obs, states+params, time]
+
+        activeP <- setdiff(obsParams, fixedObsParams)
+        activeS <- if (!is.null(dX)) intersect(obsStates, dimnames(dX)[[1]]) else character()
+        theta <- if (!is.null(dP)) colnames(dP) else if (!is.null(dX)) dimnames(dX)[[2]] else NULL
+
+        # Chain rule: dY/dtheta = dG/dX * dX/dtheta + dG/dP * dP/dtheta
+        t1 <- if (length(activeS)) dG[,activeS,,drop=F] %bmm% dX[activeS,,,drop=F] else NULL
+        t2 <- if (!is.null(dP) && length(activeP)) dG[,activeP,,drop=F] %bmm% dP[activeP,,drop=F] else NULL
+
+        # Align by theta names before addition
+        if (!is.null(t1)) dimnames(t1)[[2]] <- dimnames(dX)[[2]]
+        if (!is.null(t2)) dimnames(t2)[[2]] <- colnames(dP)
+        myderivs <- if (!is.null(t1) && !is.null(t2)) t1[,theta,,drop=F] + t2[,theta,,drop=F] else t1 %||% t2
+
+        # Fallback: no upstream derivs, return dG/dp directly
+
+        if (is.null(myderivs) && length(activeP)) myderivs <- dG[,activeP,,drop=F]
+        if (!is.null(myderivs)) dimnames(myderivs) <- list(observables, theta, NULL)
+
+        # Append original state sensitivities if attach.input
+        if (attach.input && !is.null(myderivs) && !is.null(dX)) {
+          outer_theta <- theta %||% dimnames(dX)[[2]]
+          missing <- setdiff(outer_theta, dimnames(dX)[[2]])
+          if (length(missing)) dX <- abind::abind(dX, array(0, c(dim(dX)[1], length(missing), dim(dX)[3]), dimnames = list(NULL, missing, NULL)), along = 2)
+          myderivs <- abind::abind(myderivs, dX[, outer_theta, , drop = FALSE], along = 1)
+        }
       }
     }
-    
+
     prdframe(prediction = values, deriv = myderivs, parameters = c(pars, fixed))
   }
-  
+
   attr(X2Y, "equations")  <- as.eqnvec(g)
   attr(X2Y, "parameters") <- parameters
   attr(X2Y, "states")     <- states
   attr(X2Y, "modelname")  <- modelname
-  attr(X2Y, "compileInfo") <- collectCompileInfo(gfun, gjac)
+  attr(X2Y, "compileInfo") <- collectCompileInfo(gfun, gjac, gjac_chain)
 
   obsfn(X2Y, parameters, condition)
 }
