@@ -9,6 +9,7 @@
 \alias{getParameters.prdlist}
 \alias{getParameters.eqnlist}
 \alias{getParameters.eventlist}
+\alias{getParameters.eqnvec}
 \title{Extract the parameters of an object}
 \usage{
 getParameters(..., conditions = NULL)
@@ -26,6 +27,8 @@ getParameters(..., conditions = NULL)
 \method{getParameters}{eqnlist}(x)
 
 \method{getParameters}{eventlist}(x)
+
+\method{getParameters}{eqnvec}(x)
 }
 \arguments{
 \item{...}{objects from which the parameters should be extracted}

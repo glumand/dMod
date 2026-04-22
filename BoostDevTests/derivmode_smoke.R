@@ -3,6 +3,7 @@
 ## and compares the objective gradient to confirm both paths agree.
 
 setwd(tempdir())  # so generated C++ files don't pollute the repo
+library(dMod)
 
 run_once <- function(pexpl_mode, y_mode, label) {
   cat("\n==== ", label, "  (Pexpl=", pexpl_mode, ", Y=", y_mode, ") ====\n", sep = "")
@@ -38,10 +39,10 @@ run_once <- function(pexpl_mode, y_mode, label) {
   trafo1["k4"] <- "0"
 
   p <- NULL
-  p <- p + dMod::P(trafo1, condition = "noDegradation",
-                   compile = TRUE, modelname = paste0("ek_p1_", label))
-  p <- p + dMod::P(trafo2, condition = "withDegradation",
-                   compile = TRUE, modelname = paste0("ek_p2_", label))
+  p <- p + dMod::Pexpl(trafo1, condition = "noDegradation",
+                   compile = TRUE, modelname = paste0("ek_p1_", label), derivMode = pexpl_mode)
+  p <- p + dMod::Pexpl(trafo2, condition = "withDegradation",
+                   compile = TRUE, modelname = paste0("ek_p2_", label), derivMode = pexpl_mode)
 
   set.seed(1)
   outerpars <- dMod::getParameters(p)
@@ -63,15 +64,12 @@ run_once <- function(pexpl_mode, y_mode, label) {
   prior <- structure(rep(0, length(pouter)), names = names(pouter))
   obj <- dMod::normL2(data, g * x * p) + dMod::constraintL2(mu = prior, sigma = 10)
 
-  o <- obj(pouter)
+  runtime <- system.time({o <- obj(pouter)})
   cat("value:    ", o$value, "\n")
+  cat("run time: ", runtime["elapsed"], "\n")
   cat("gradient: ", paste(format(o$gradient, digits = 8), collapse = " "), "\n")
   invisible(o)
 }
-
-## RStudio holds the installed dMod DLL, so load from source instead.
-suppressMessages(devtools::load_all("C:/Users/simon/Documents/Projects/dMod",
-                                    quiet = TRUE, export_all = FALSE))
 
 a <- run_once("symbolic", "ad",       "default")
 b <- run_once("symbolic", "symbolic", "Y_symb")
@@ -85,3 +83,4 @@ cat("|val(d)-val(a)|: ", abs(d$value - a$value), "\n")
 cat("max|grad(b)-grad(a)|: ", max(abs(b$gradient - a$gradient)), "\n")
 cat("max|grad(c)-grad(a)|: ", max(abs(c$gradient - a$gradient)), "\n")
 cat("max|grad(d)-grad(a)|: ", max(abs(d$gradient - a$gradient)), "\n")
+

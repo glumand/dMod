@@ -33,7 +33,8 @@ collectCompileInfo <- function(...) {
   for (o in objs) {
     src <- attr(o, "srcfile")
     if (is.null(src) || !length(src) || !nzchar(src)) {
-      mname <- attr(o, "modelname") %||% unname(o[1])
+      mname <- attr(o, "modelname")
+      if (is.null(mname) && is.character(o)) mname <- unname(o[1])
       if (is.null(mname) || !nzchar(mname)) next
       b <- outer(mname, c("", "_deriv", "_s", "_s2", "_sdcv", "_dfdx", "_dfdp"), paste0)
       cand <- c(paste0(b, ".c"), paste0(b, ".cpp"))
@@ -1801,6 +1802,12 @@ getParameters.eventlist <- function(x) {
   idx <- match(c("time", "value", "root"), names(x))
   idx[!is.na(idx)]
   Reduce(union, lapply(x[idx], getSymbols))
+}
+
+#' @export
+#' @rdname getParameters
+getParameters.eqnvec <- function(x) {
+  getSymbols(x)
 }
 
 #' Extract the conditions of an object

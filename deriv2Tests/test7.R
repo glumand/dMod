@@ -16,7 +16,7 @@ eqns <- c(A = "-k*A^2")
 events <- NULL
 
 x_ds <- odemodel(eqns, events = events, solver = "deSolve", 
-                 modelname = "m_deSolve", compile = F) %>% Xs(condition = "lsoda", optionsSens = list(method = "lsoda"))
+                 modelname = "m_deSolve", compile = F) %>% Xs(condition = "lsodes", optionsSens = list(method = "lsodes"))
 x_tsit <- odemodel(eqns, events = events, solver = "CppODE", 
                    modelname = "m_tsit5", method = "tsit5", compile = F) %>% Xs(condition = "tsit5") 
 x_rb4 <- odemodel(eqns, events = events, solver = "CppODE", 

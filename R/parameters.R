@@ -172,7 +172,17 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
     Jac <- NULL
     if (use_ad && deriv && !is.null(jac_chain)) {
       # AD path: jac_chain returns y and dy already chain-ruled w.r.t. theta.
-      out <- jac_chain(NULL, p, dX = NULL, dP = attr(pars, "deriv"),
+      # Pexpl typically sits at the head of the chain, so attr(pars, "deriv")
+      # is NULL. jac_chain returns dy = NULL in that case, so supply an
+      # identity dP to get dy/dp directly (matches the symbolic path, which
+      # uses jac()'s output unchanged when dP is NULL).
+      dP <- attr(pars, "deriv")
+      if (is.null(dP)) {
+        active_pars <- setdiff(parameters, names(fixed))
+        dP <- diag(length(active_pars))
+        dimnames(dP) <- list(active_pars, active_pars)
+      }
+      out <- jac_chain(NULL, p, dX = NULL, dP = dP,
                        attach.input = attach.input, fixed = names(fixed))
       pinnerVal <- out$y[, 1]
       if (!is.null(out$dy)) {

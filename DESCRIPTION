@@ -11,8 +11,7 @@ Description: The framework provides functions to generate ODEs of reaction
     used for optimization whenever possible. Therefore, all major functions produce
     and can handle expressions for symbolic derivatives.
 License: GPL (>= 2)
-Depends:
-    cOde (>= 1.1)
+Depends: R (>= 4.5.0), cOde (>= 1.1)
 Imports:
     deSolve,
     rootSolve,

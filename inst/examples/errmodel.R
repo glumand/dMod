@@ -15,7 +15,7 @@ f <- eqnvec() %>%
 
 # Define observables and error model
 observables <- eqnvec(B_obs = "B + off_B")
-errors <- eqnvec(B_obs = "sigma_rel*B_obs")
+errors <- eqnvec(B_obs = "sigma_abs")
 
 # Generate dMod objects
 model <- odemodel(f, modelname = "errtest", compile = FALSE, solver = "deSolve")
@@ -35,7 +35,7 @@ p <-
   define("x~0", x = c("B", "C")) %>%
   branch(table = covariates) %>%
   insert("A~Aini", Aini = Aini) %>%
-  insert("x~exp(x)", x = .currentSymbols) %>%
+  insert("x~exp10(x)", x = .currentSymbols) %>%
   P(modelname = "parfn", compile = FALSE)
 
 compile(g, x, e, p, output = "errtest_total")
@@ -43,7 +43,7 @@ compile(g, x, e, p, output = "errtest_total")
 
 
 ## Simulate data
-ptrue <- c(C1 = 1, C2 = 2, k1 = -2, k2 = -3, off_B = -3, sigma_rel = log(.1))
+ptrue <- c(C1 = 1, C2 = 2, k1 = -2, k2 = -3, off_B = -3, sigma_abs = log(0))
 times <- seq(0, 50, 1)
 prediction <- (g*x*p)(times, ptrue, deriv = TRUE)
 datasheet <- subset(as.data.frame(prediction, errfn = e), name == "B_obs")
