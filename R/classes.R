@@ -268,19 +268,42 @@ eqnvec <- function(...) {
 #' Generate eqnlist object
 #'
 #' @description The eqnlist object stores an ODE as a list of stoichiometric matrix,
-#' rate expressions, state names and compartment volumes.
+#' rate expressions, state names, and compartment information. Compartments are
+#' first-class entities: `compartments` maps a compartment ID to a record holding
+#' its volume expression (and a reserved `rule` field for future dynamic-volume
+#' support); `compartmentOf` assigns each state to a compartment by ID.
 #' @export
 #' @param smatrix Matrix of class numeric. The stoichiometric matrix,
 #' one row per reaction/process and one column per state.
 #' @param states Character vector. Names of the states.
 #' @param rates Character vector. The rate expressions.
-#' @param volumes Named character, volume parameters for states. Names must be a subset of the states.
-#' Values can be either characters, e.g. "V1", or numeric values for the volume. If `volumes` is not
-#' `NULL`, missing entries are treated as 1.
+#' @param volumes Named character, volume parameters for states. Names must be a
+#' subset of the states. Kept for backward compatibility: when supplied without
+#' `compartments`/`compartmentOf`, distinct expressions are auto-assigned
+#' compartment IDs `c1`, `c2`, ... The `$volumes` slot on the returned object is
+#' a derived view of `compartments` and `compartmentOf` and should not be used
+#' as the authoritative source.
 #' @param description Character vector. Description of the single processes.
+#' @param compartments Named list keyed by compartment ID. Each entry is either
+#' a character volume expression (e.g. `"V_cyt"`) or a list with fields
+#' `volume` (character) and `rule` (character or `NULL`). `rule` is reserved
+#' for future dynamic-volume support and must be `NULL` in the current version.
+#' @param compartmentOf Named character vector keyed by state; value = compartment
+#' ID from `names(compartments)`. States not present are assigned to an implicit
+#' `"default"` compartment with volume `"1"`.
+#' @param reactionCompartment Optional character vector of length `nrow(smatrix)`
+#' giving, per reaction, the compartment ID in which the rate expression is a
+#' concentration-rate (the "reference" compartment for that reaction). Use `NA`
+#' to ask [getFluxes()] to infer the reference compartment from the educts.
+#' Required when a reaction's educts span multiple compartments (e.g. membrane
+#' binding `L_ext + R_cyt -> Complex`) — there is no single educt compartment
+#' to infer from.
 #' @return An object of class `eqnlist`, basically a list.
 #' @example inst/examples/eqnlist.R
-eqnlist <- function(smatrix = NULL, states = colnames(smatrix), rates = NULL, volumes = NULL, description = NULL) {
+eqnlist <- function(smatrix = NULL, states = colnames(smatrix), rates = NULL,
+                    volumes = NULL, description = NULL,
+                    compartments = NULL, compartmentOf = NULL,
+                    reactionCompartment = NULL) {
 
   # Dimension checks and preparations for non-empty argument list.
   if (all(!is.null(c(smatrix, states, rates)))) {
@@ -299,14 +322,93 @@ eqnlist <- function(smatrix = NULL, states = colnames(smatrix), rates = NULL, vo
     }
   }
 
+  resolved <- .resolve_compartments(as.character(states), compartments, compartmentOf, volumes)
+
+  # Reaction-compartment annotation: optional per-reaction V_ref. NA means
+  # "infer from educts" in getFluxes(). Default NULL (no annotation anywhere).
+  if (!is.null(rates) && !is.null(reactionCompartment)) {
+    reactionCompartment <- as.character(reactionCompartment)
+    if (length(reactionCompartment) != length(rates))
+      stop("`reactionCompartment` must match the number of rates (", length(rates), ").")
+    bad <- setdiff(stats::na.omit(reactionCompartment), names(resolved$compartments))
+    if (length(bad) > 0L)
+      stop("`reactionCompartment` references undefined compartments: ", paste(bad, collapse = ", "))
+  }
+
   out <- list(smatrix = smatrix,
               states = as.character(states),
               rates = as.character(rates),
-              volumes = volumes,
-              description = as.character(description))
+              volumes = resolved$volumes,
+              description = as.character(description),
+              compartments = resolved$compartments,
+              compartmentOf = resolved$compartmentOf,
+              reactionCompartment = reactionCompartment)
   class(out) <- c("eqnlist", "list")
 
   return(out)
+}
+
+
+# Resolve compartment inputs into canonical (compartments, compartmentOf, volumes).
+# Returns a list with those three fields; all NULL when `states` is empty (the
+# empty-eqnlist case that `is.eqnlist()` validates).
+.resolve_compartments <- function(states, compartments, compartmentOf, volumes) {
+
+  if (length(states) == 0L) {
+    return(list(compartments = NULL, compartmentOf = NULL, volumes = NULL))
+  }
+
+  normalize_entry <- function(e) {
+    if (is.character(e) && length(e) == 1L) return(list(volume = unname(e), rule = NULL))
+    if (is.list(e) && !is.null(e$volume)) {
+      return(list(volume = as.character(e$volume), rule = e$rule))
+    }
+    stop("Each compartment entry must be a character volume expression or a list with `$volume`.")
+  }
+
+  if (!is.null(compartments) && !is.null(compartmentOf)) {
+    compartments <- lapply(compartments, normalize_entry)
+    compartmentOf <- setNames(as.character(compartmentOf), names(compartmentOf))
+    if (is.null(names(compartmentOf)) || any(!nzchar(names(compartmentOf))))
+      stop("`compartmentOf` must be a fully named character vector (names = state IDs).")
+    missing_states <- setdiff(states, names(compartmentOf))
+    if (length(missing_states) > 0L) {
+      if (!"default" %in% names(compartments))
+        compartments[["default"]] <- list(volume = "1", rule = NULL)
+      compartmentOf <- c(compartmentOf, setNames(rep("default", length(missing_states)), missing_states))
+    }
+    bad <- setdiff(compartmentOf, names(compartments))
+    if (length(bad) > 0L)
+      stop("compartmentOf references undefined compartments: ", paste(unique(bad), collapse = ", "))
+    compartmentOf <- compartmentOf[states]
+  } else if (!is.null(volumes)) {
+    v <- as.character(volumes)
+    nms <- names(volumes)
+    if (is.null(nms) || any(!nzchar(nms)))
+      stop("`volumes` must be a fully named character vector.")
+    names(v) <- nms
+    grouped <- split(names(v), v)
+    compartments <- list()
+    compartmentOf <- character(0)
+    for (i in seq_along(grouped)) {
+      cid <- paste0("c", i)
+      compartments[[cid]] <- list(volume = names(grouped)[i], rule = NULL)
+      compartmentOf[grouped[[i]]] <- cid
+    }
+    missing_states <- setdiff(states, names(compartmentOf))
+    if (length(missing_states) > 0L) {
+      compartments[["default"]] <- list(volume = "1", rule = NULL)
+      compartmentOf <- c(compartmentOf, setNames(rep("default", length(missing_states)), missing_states))
+    }
+    compartmentOf <- compartmentOf[states]
+  } else {
+    compartments <- list(default = list(volume = "1", rule = NULL))
+    compartmentOf <- setNames(rep("default", length(states)), states)
+  }
+
+  vols <- vapply(compartmentOf, function(id) compartments[[id]]$volume, character(1))
+  names(vols) <- names(compartmentOf)
+  list(compartments = compartments, compartmentOf = compartmentOf, volumes = vols)
 }
 
 
@@ -1793,7 +1895,15 @@ getParameters.prdlist <- function(x, conditions = NULL) {
 #' @export
 #' @rdname getParameters
 getParameters.eqnlist <- function(x) {
-  unique(c(getSymbols(x$states), getSymbols(x$rates), getSymbols(x$volumes)))
+  comp_exprs <- character(0)
+  if (!is.null(x$compartments)) {
+    comp_exprs <- c(
+      vapply(x$compartments, function(c) c$volume, character(1)),
+      vapply(x$compartments, function(c) if (is.null(c$rule)) "" else c$rule, character(1))
+    )
+    comp_exprs <- comp_exprs[nzchar(comp_exprs)]
+  }
+  unique(c(getSymbols(x$states), getSymbols(x$rates), getSymbols(comp_exprs)))
 }
 
 #' @export

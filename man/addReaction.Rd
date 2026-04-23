@@ -4,7 +4,15 @@
 \alias{addReaction}
 \title{Add reaction to reaction table}
 \usage{
-addReaction(eqnlist, from, to, rate, description = names(rate))
+addReaction(
+  eqnlist,
+  from,
+  to,
+  rate,
+  description = names(rate),
+  compartment = "default",
+  rateCompartment = NA_character_
+)
 }
 \arguments{
 \item{eqnlist}{equation list, see \link{eqnlist}}
@@ -17,6 +25,15 @@ addReaction(eqnlist, from, to, rate, description = names(rate))
 of the reaction.}
 
 \item{description}{Optional description instead of \code{names(rate)}.}
+
+\item{compartment}{Character, compartment ID to which any \emph{new} states introduced
+by this reaction are assigned. Defaults to \code{"default"}. If the compartment does
+not yet exist on \code{eqnlist}, it is created with volume \code{"1"}.}
+
+\item{rateCompartment}{Optional compartment ID naming the frame in which \code{rate}
+is a concentration-rate. Required when educts span multiple compartments
+(e.g. membrane binding \code{L_ext + R_cyt -> Complex}); leave as \code{NA} (the
+default) to let \code{\link[=getFluxes]{getFluxes()}} infer the frame from the educts.}
 }
 \value{
 An object of class \link{eqnlist}.

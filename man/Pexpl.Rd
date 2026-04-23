@@ -12,7 +12,7 @@ Pexpl(
   compile = FALSE,
   modelname = NULL,
   verbose = FALSE,
-  derivMode = c("symbolic", "ad", "none")
+  derivMode = c("ad", "symbolic", "none")
 )
 }
 \arguments{

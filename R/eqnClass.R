@@ -5,13 +5,13 @@
 #' Coerce to an equation list
 #' @description Translates a reaction network, e.g. defined by a data.frame, into an equation list object.
 #' @param ... additional arguments to be passed to or from methods.
-#' @details If `data` is a `data.frame`, it must contain columns "Description" (character), 
-#' "Rate" (character), and one column per ODE state with the state names. 
+#' @details If `data` is a `data.frame`, it must contain columns "Description" (character),
+#' "Rate" (character), and one column per ODE state with the state names.
 #' The state columns correspond to the stoichiometric matrix.
 #' @return Object of class [eqnlist]
 #' @rdname eqnlist
 #' @export
-as.eqnlist <- function(data, volumes) {
+as.eqnlist <- function(data, volumes, ...) {
   UseMethod("as.eqnlist", data)
 }
 
@@ -19,14 +19,22 @@ as.eqnlist <- function(data, volumes) {
 #' @param data data.frame with columns Description, Rate, and one colum for each state
 #' reflecting the stoichiometric matrix
 #' @rdname eqnlist
-as.eqnlist.data.frame <- function(data, volumes = NULL) {
+as.eqnlist.data.frame <- function(data, volumes = NULL, compartments = NULL, compartmentOf = NULL,
+                                   reactionCompartment = NULL, ...) {
   description <- as.character(data$Description)
   rates <- as.character(data$Rate)
   states <- setdiff(colnames(data), c("Description", "Rate"))
   smatrix <- as.matrix(data[, states]); colnames(smatrix) <- states
-  
-  eqnlist(smatrix, states, rates, volumes, description)
-  
+
+  if (is.null(volumes))             volumes             <- attr(data, "volumes")
+  if (is.null(compartments))        compartments        <- attr(data, "compartments")
+  if (is.null(compartmentOf))       compartmentOf       <- attr(data, "compartmentOf")
+  if (is.null(reactionCompartment)) reactionCompartment <- attr(data, "reactionCompartment")
+
+  eqnlist(smatrix, states, rates, volumes, description,
+          compartments = compartments, compartmentOf = compartmentOf,
+          reactionCompartment = reactionCompartment)
+
 }
 
 
@@ -34,13 +42,19 @@ as.eqnlist.data.frame <- function(data, volumes = NULL) {
 #' @rdname eqnlist
 #' @param x object of class `eqnlist`
 is.eqnlist <- function(x) {
-  
+
+  expected_names <- c("smatrix", "states", "rates", "volumes", "description",
+                      "compartments", "compartmentOf", "reactionCompartment")
+
   #Empty list
   if (is.null(x$smatrix)) {
     if (length(x$states) == 0 &&
         length(x$rates) == 0 &&
         is.null(x$volumes) &&
-        length(x$description) == 0
+        length(x$description) == 0 &&
+        is.null(x$compartments) &&
+        is.null(x$compartmentOf) &&
+        is.null(x$reactionCompartment)
     ) {
       return(TRUE)
     } else {
@@ -48,12 +62,19 @@ is.eqnlist <- function(x) {
     }
   } else {
     #Non-empty list
+    rc_ok <- is.null(x$reactionCompartment) ||
+             (length(x$reactionCompartment) == length(x$rates) &&
+              all(is.na(x$reactionCompartment) | x$reactionCompartment %in% names(x$compartments)))
     if (inherits(x, "eqnlist") &&
-        all(names(x) == c("smatrix", "states", "rates", "volumes", "description")) &&
+        all(names(x) == expected_names) &&
         all(names(x$smatrix) == names(x$states)) &&
         dim(x$smatrix)[1] == length(x$rates) &&
         dim(x$smatrix)[2] == length(x$states) &&
-        is.matrix(x$smatrix)
+        is.matrix(x$smatrix) &&
+        !is.null(x$compartments) && !is.null(x$compartmentOf) &&
+        all(x$compartmentOf %in% names(x$compartments)) &&
+        all(x$states %in% names(x$compartmentOf)) &&
+        rc_ok
     ) {
       return(TRUE)
     } else {
@@ -67,17 +88,37 @@ is.eqnlist <- function(x) {
 
 #' Determine conserved quantites by finding the kernel of the stoichiometric
 #' matrix
-#' 
+#'
 #' @param S Stoichiometric matrix
+#' @param weight One of `"none"` (default) or `"volume"`. When `"volume"`, the
+#'   columns of `S` are multiplied by their compartment volume before the kernel
+#'   is computed, so the returned quantities are conserved in *amount* rather
+#'   than concentration. Requires `volumes` to be supplied as numeric.
+#' @param volumes Optional named numeric vector of volume values keyed by state,
+#'   aligned with `colnames(S)`. Only consulted when `weight = "volume"`.
 #' @return Data frame with conserved quantities carrying an attribute with the
 #'   number of conserved quantities.
 #' @author Malenke Mader, \email{Malenka.Mader@@fdm.uni-freiburg.de}
-#'   
+#'
 #' @example inst/examples/equations.R
 #' @export
-conservedQuantities <- function(S) {
+conservedQuantities <- function(S, weight = c("none", "volume"), volumes = NULL) {
+  weight <- match.arg(weight)
   # Get kernel of S
   S[is.na(S)] <- 0
+  if (weight == "volume") {
+    if (is.null(volumes))
+      stop("`weight = \"volume\"` requires a named numeric `volumes` argument.")
+    if (is.null(colnames(S)))
+      stop("`S` must have column names when `weight = \"volume\"`.")
+    missing_vol <- setdiff(colnames(S), names(volumes))
+    if (length(missing_vol) > 0L)
+      stop("`volumes` missing entries for: ", paste(missing_vol, collapse = ", "))
+    v_num <- suppressWarnings(as.numeric(volumes[colnames(S)]))
+    if (anyNA(v_num))
+      stop("`weight = \"volume\"` requires all volumes to be numeric; got symbolic expression(s).")
+    S <- sweep(S, 2, v_num, "*")
+  }
   v <- nullZ(S)
   n_cq <-  ncol(v)
   
@@ -168,30 +209,41 @@ getReactions <- function(eqnlist) {
 
 
 #' Add reaction to reaction table
-#' 
+#'
 #' @param eqnlist equation list, see [eqnlist]
 #' @param from character with the left hand side of the reaction, e.g. "2*A + B"
 #' @param to character with the right hand side of the reaction, e.g. "C + 2*D"
 #' @param rate character. The rate associated with the reaction. The name is employed as a description
 #' of the reaction.
 #' @param description Optional description instead of `names(rate)`.
+#' @param compartment Character, compartment ID to which any *new* states introduced
+#' by this reaction are assigned. Defaults to `"default"`. If the compartment does
+#' not yet exist on `eqnlist`, it is created with volume `"1"`.
+#' @param rateCompartment Optional compartment ID naming the frame in which `rate`
+#' is a concentration-rate. Required when educts span multiple compartments
+#' (e.g. membrane binding `L_ext + R_cyt -> Complex`); leave as `NA` (the
+#' default) to let [getFluxes()] infer the frame from the educts.
 #' @return An object of class [eqnlist].
-#' @examples 
+#' @examples
 #' f <- eqnlist()
 #' f <- addReaction(f, "2*A+B", "C + 2*D", "k1*B*A^2")
 #' f <- addReaction(f, "C + A", "B + A", "k2*C*A")
-#' 
-#' 
+#'
+#'
 #' @example inst/examples/equations.R
 #' @export
 #' @rdname addReaction
-addReaction <- function(eqnlist, from, to, rate, description = names(rate)) {
-  
-  
+addReaction <- function(eqnlist, from, to, rate, description = names(rate),
+                         compartment = "default", rateCompartment = NA_character_) {
+
+
   if (missing(eqnlist)) eqnlist <- eqnlist()
-  
+
   volumes <- eqnlist$volumes
-  
+  compartments_in <- eqnlist$compartments
+  compartmentOf_in <- eqnlist$compartmentOf
+  reactionCompartment_in <- eqnlist$reactionCompartment
+
   # Analyze the reaction character expressions
   educts <- getSymbols(from)
   eductCoef <- 0
@@ -199,40 +251,63 @@ addReaction <- function(eqnlist, from, to, rate, description = names(rate)) {
   products <- getSymbols(to)
   productCoef <- 0
   if(length(products) > 0) productCoef <- sapply(products, function(p) sum(getCoefficients(to, p)))
-  
-  
-  # States
+
+
+  # States introduced by this reaction
   states <- unique(c(educts, products))
-  
+
   # Description
   if(is.null(description)) description <- ""
-  
+
   # Stoichiometric matrix
   smatrix <- matrix(NA, nrow = 1, ncol=length(states)); colnames(smatrix) <- states
   if(length(educts)>0) smatrix[,educts] <- -eductCoef
   if(length(products)>0) {
     filled <- !is.na(smatrix[,products])
     smatrix[,products[filled]] <- smatrix[,products[filled]] + productCoef[filled]
-    smatrix[,products[!filled]] <- productCoef[!filled]  
+    smatrix[,products[!filled]] <- productCoef[!filled]
   }
-  
-  
+
+
   smatrix[smatrix == "0"] <- NA
-  
-  
+
+
   # data.frame
   mydata <- cbind(data.frame(Description = description, Rate = as.character(rate)), as.data.frame(smatrix))
   row.names(mydata) <- NULL
-  
-  
+
+
   if(!is.null(eqnlist)) {
     mydata0 <- as.data.frame(eqnlist)
     mydata <- combine(mydata0, mydata)
   }
-  
-  
-  as.eqnlist(mydata, volumes = volumes)
-  
+
+  # Extend compartment assignment for brand-new states with the `compartment` arg.
+  new_states <- setdiff(states, names(compartmentOf_in))
+  compartments_out <- compartments_in
+  compartmentOf_out <- compartmentOf_in
+  if (length(new_states) > 0L) {
+    if (is.null(compartments_out)) compartments_out <- list()
+    if (is.null(compartmentOf_out)) compartmentOf_out <- character(0)
+    if (!compartment %in% names(compartments_out)) {
+      compartments_out[[compartment]] <- list(volume = "1", rule = NULL)
+    }
+    compartmentOf_out <- c(compartmentOf_out,
+                           setNames(rep(compartment, length(new_states)), new_states))
+  }
+
+  # Extend reactionCompartment with the value for this new reaction. When the
+  # input list has no annotations (NULL), pad with NA for the existing rates
+  # so the final vector lines up with the combined data.frame rows.
+  existing_n <- length(eqnlist$rates)
+  if (is.null(reactionCompartment_in)) reactionCompartment_in <- rep(NA_character_, existing_n)
+  reactionCompartment_out <- c(reactionCompartment_in, as.character(rateCompartment))
+  if (all(is.na(reactionCompartment_out))) reactionCompartment_out <- NULL
+
+  as.eqnlist(mydata, volumes = volumes,
+             compartments = compartments_out, compartmentOf = compartmentOf_out,
+             reactionCompartment = reactionCompartment_out)
+
 }
 
 
@@ -245,71 +320,112 @@ addReaction <- function(eqnlist, from, to, rate, description = names(rate)) {
 #' @example inst/examples/equations.R
 #' @export
 getFluxes <- function(eqnlist, type = c("conc", "amount")) {
-  
+
   type <- match.arg(type)
-  
+
   description <- eqnlist$description
   rate <- eqnlist$rates
   variables <- eqnlist$states
   SMatrix <- eqnlist$smatrix
-  volumes <- eqnlist$volumes
-  
-  if(is.null(SMatrix)) return()
-  
-  volumes.draft <- structure(rep("1", length(variables)), names = variables)
-  volumes.draft[names(volumes)] <- volumes
-  volumes <- volumes.draft
-  
-  
-  
-  
+  compartments <- eqnlist$compartments
+  compartmentOf <- eqnlist$compartmentOf
+  reactionCompartment <- eqnlist$reactionCompartment
+
+  if (is.null(SMatrix)) return()
+
+  # Defensive fallback: an eqnlist constructed outside our constructor may have
+  # NULL compartment info. Treat every state as living in an implicit "default"
+  # compartment with volume "1" — matches legacy behavior.
+  if (is.null(compartments) || is.null(compartmentOf)) {
+    compOf <- setNames(rep("default", length(variables)), variables)
+    compartments <- list(default = list(volume = "1", rule = NULL))
+  } else {
+    compOf <- compartmentOf[variables]
+  }
+  volumes <- vapply(compOf, function(cid) compartments[[cid]]$volume, character(1))
+  names(volumes) <- variables
+
+  # Resolve per-reaction reference compartment V_ref (concentration-rate frame).
+  # Priority: (1) user-supplied reactionCompartment[i] if non-NA, (2) unique
+  # educt compartment, (3) unique product compartment for pure synthesis.
+  # When educts span multiple compartments and no annotation is given, we
+  # error with a clear message pointing the user at `reactionCompartment`.
+  nR <- nrow(SMatrix)
+  vref_cid <- character(nR)
+  for (i in seq_len(nR)) {
+    if (!is.null(reactionCompartment) && !is.na(reactionCompartment[i])) {
+      vref_cid[i] <- reactionCompartment[i]
+      next
+    }
+    row_i <- SMatrix[i, ]
+    educt_idx <- which(!is.na(row_i) & row_i < 0)
+    product_idx <- which(!is.na(row_i) & row_i > 0)
+    cand <- if (length(educt_idx) > 0) unique(compOf[educt_idx])
+            else if (length(product_idx) > 0) unique(compOf[product_idx])
+            else character(0)
+    if (length(cand) == 1L) {
+      vref_cid[i] <- cand
+    } else if (length(cand) > 1L) {
+      stop(sprintf(
+        "Reaction %d (\"%s\") spans compartments (%s). Pass `reactionCompartment` to name the frame in which the rate is a concentration-rate.",
+        i, description[i], paste(cand, collapse = ", ")))
+    } else {
+      stop(sprintf("Reaction %d (\"%s\") has no species; cannot determine reference compartment.",
+                   i, description[i]))
+    }
+  }
+  vref_vol <- vapply(vref_cid, function(cid) compartments[[cid]]$volume, character(1))
+
   # generate equation expressions
   terme <- lapply(1:length(variables), function(j) {
     v <- SMatrix[,j]
     nonZeros <- which(!is.na(v))
     var.description <- description[nonZeros]
     positives <- which(v > 0)
-    negatives <- which(v < 0)
-    volumes.destin <- volumes.origin <- rep(volumes[j], length(v))
-    if(length(positives) > 0) {
-      volumes.origin[positives] <- sapply(positives, function(i) {
-        candidates <- which(SMatrix[i,] < 0)
-        myvolume <- unique(volumes[candidates])
-        if(length(myvolume) > 1) 
-          stop("species from different compartments meet in one reaction")
-        if(length(myvolume) == 0) myvolume <- volumes[j]
-        
-        return(myvolume)
-      })
-    }
-    
+    destin_cid <- compOf[[j]]
+    destin_vol <- volumes[[j]]
+
+    # Uniform flux formula: flux_X = stoich_X * rate * V_ref / V_X for every
+    # species in every reaction. For single-educt-compartment reactions this
+    # is equivalent to the legacy asymmetric formula.
     switch(type,
            conc = {
-             volumes.ratios <- paste0("*(", volumes.origin, "/", volumes.destin, ")")
-             volumes.ratios[volumes.destin == volumes.origin] <- ""
+             volumes.ratios <- paste0("*(", vref_vol, "/", destin_vol, ")")
+             volumes.ratios[vref_cid == destin_cid] <- ""
            },
            amount = {
-             volumes.ratios <- paste0("*(", volumes.origin, ")")
+             volumes.ratios <- paste0("*(", vref_vol, ")")
            }
     )
-    
+
     numberchar <- as.character(v)
-    if(nonZeros[1] %in% positives){
-      numberchar[positives] <- paste(c("", rep("+", length(positives)-1)), numberchar[positives], sep = "") 
+    if (nonZeros[1] %in% positives) {
+      numberchar[positives] <- paste(c("", rep("+", length(positives)-1)), numberchar[positives], sep = "")
     } else {
       numberchar[positives] <- paste("+", numberchar[positives], sep = "")
     }
-    var.flux <- paste0(numberchar[nonZeros], "*(",  rate[nonZeros], ")", volumes.ratios[nonZeros])
+    var.flux <- paste0(numberchar[nonZeros], "*(", rate[nonZeros], ")", volumes.ratios[nonZeros])
     names(var.flux) <- var.description
+
+    # Dilution term: if state j's compartment has a non-null volume rule,
+    # d[X]/dt picks up -[X]*(dV/dt)/V (SBML concentration-correction). Always
+    # zero in the constant-volume case because `rule` is NULL there.
+    r <- compartments[[destin_cid]]$rule
+    if (!is.null(r) && nzchar(r)) {
+      dilution <- paste0("-(", variables[j], ")*(", r, ")/(", destin_vol, ")")
+      names(dilution) <- paste0("dilution_", destin_cid)
+      var.flux <- c(var.flux, dilution)
+    }
+
     return(var.flux)
   })
-  
+
   fluxes <- terme
   names(fluxes) <- variables
-  
+
   return(fluxes)
-  
-  
+
+
 }
 
 
@@ -379,18 +495,21 @@ dot <- function(observable, eqnlist) {
 #' The state columns correspond to the stoichiometric matrix.
 #' @export
 as.data.frame.eqnlist <- function(x, ...) {
-  
+
   eqnlist <- x
-  
+
   if(is.null(eqnlist$smatrix)) return()
-  
+
   data <- data.frame(Description = eqnlist$description,
                      Rate = eqnlist$rate,
-                     eqnlist$smatrix, 
+                     eqnlist$smatrix,
                      stringsAsFactors = FALSE)
-  
+
   attr(data, "volumes") <- eqnlist$volumes
-  
+  attr(data, "compartments") <- eqnlist$compartments
+  attr(data, "compartmentOf") <- eqnlist$compartmentOf
+  attr(data, "reactionCompartment") <- eqnlist$reactionCompartment
+
   return(data)
 }
 
@@ -460,17 +579,34 @@ subset.eqnlist <- function(x, ...) {
   # states and rates
   states <- colnames(smatrix)
   rates <- eqnlist$rates[select]
-  
-  # volumes
+
+  # volumes (derived view; filter to surviving states)
   volumes <- eqnlist$volumes
   if(!is.null(volumes)) volumes <- volumes[intersect(names(volumes),  states)]
-  
+
+  # compartments/compartmentOf: restrict to surviving states and drop unreferenced compartments.
+  # `%in%` is locally shadowed above; use base::`%in%` explicitly.
+  compartmentOf <- eqnlist$compartmentOf
+  compartments <- eqnlist$compartments
+  if (!is.null(compartmentOf)) {
+    compartmentOf <- compartmentOf[intersect(names(compartmentOf), states)]
+    if (!is.null(compartments)) {
+      used_cids <- unique(compartmentOf)
+      compartments <- compartments[base::`%in%`(names(compartments), used_cids)]
+    }
+  }
+
   # description
   description <- eqnlist$description[select]
-  
-  eqnlist(smatrix, states, rates, volumes, description)
-  
-  
+
+  reactionCompartment <- if (!is.null(eqnlist$reactionCompartment)) eqnlist$reactionCompartment[select] else NULL
+  if (!is.null(reactionCompartment) && all(is.na(reactionCompartment))) reactionCompartment <- NULL
+
+  eqnlist(smatrix, states, rates, volumes, description,
+          compartments = compartments, compartmentOf = compartmentOf,
+          reactionCompartment = reactionCompartment)
+
+
 }
 
 
@@ -484,16 +620,25 @@ subset.eqnlist <- function(x, ...) {
 #' 
 #' @export
 print.eqnlist <- function(x, pander = FALSE, ...) {
-  
+
   eqnlist <- x
-  
+
   # Entities to print and pander
   cq <- conservedQuantities(eqnlist$smatrix)
   r <- getReactions(eqnlist)
-  
+
+  # Compartment block: only show when there is a meaningful assignment to
+  # surface (i.e. more than one compartment, or a compartment with non-unit
+  # volume, or any compartment with a rule).
+  comp_lines <- .format_compartments(eqnlist$compartments, eqnlist$compartmentOf)
+
   # Print or pander?
   if (!pander) {
     print(cq)
+    if (length(comp_lines) > 0L) {
+      cat("\n")
+      cat(comp_lines, sep = "\n")
+    }
     cat("\n")
     print(r)
   } else {
@@ -505,6 +650,30 @@ print.eqnlist <- function(x, pander = FALSE, ...) {
     r$Rate <- paste0(format.eqnvec(as.character(r$Rate)))
     pander::pander(r)
   }
+}
+
+
+# Internal: render a compact compartment summary for print.eqnlist.
+# Returns character(0) when the model has exactly one compartment whose volume
+# is "1" and no rule (the implicit-default case for models that never used
+# the compartment feature), so legacy output stays unchanged.
+.format_compartments <- function(compartments, compartmentOf) {
+  if (is.null(compartments) || is.null(compartmentOf)) return(character(0))
+  if (length(compartments) == 1L) {
+    only <- compartments[[1L]]
+    if (identical(only$volume, "1") && is.null(only$rule)) return(character(0))
+  }
+  header <- "Compartments:"
+  comp_entries <- vapply(names(compartments), function(cid) {
+    entry <- compartments[[cid]]
+    rule_txt <- if (!is.null(entry$rule) && nzchar(entry$rule)) paste0(", rule=", entry$rule) else ""
+    sprintf("  %s (V=%s%s)", cid, entry$volume, rule_txt)
+  }, character(1))
+  assign_lines <- sprintf("  %s: %s",
+                          names(split(names(compartmentOf), compartmentOf)),
+                          vapply(split(names(compartmentOf), compartmentOf),
+                                 function(sts) paste(sts, collapse = ", "), character(1)))
+  c(header, comp_entries, "States by compartment:", assign_lines)
 }
 
 
@@ -574,12 +743,69 @@ as.eqnvec.eqnlist <- function(x, ...) {
 
 #' @export
 c.eqnlist <- function(...) {
-  
-  out <- lapply(list(...), as.data.frame)
-  out <- Reduce(combine, out)
-  
-  as.eqnlist(out)
-  
+
+  inputs <- list(...)
+  inputs <- inputs[!vapply(inputs, function(x) is.null(x) || is.null(x$smatrix), logical(1))]
+  if (length(inputs) == 0L) return(eqnlist())
+
+  # Merge stoichiometry / rates / description via the data.frame path
+  out <- Reduce(combine, lapply(inputs, as.data.frame))
+
+  # Merge compartments with conflict detection
+  all_compartments <- list()
+  for (el in inputs) {
+    if (is.null(el$compartments)) next
+    for (cid in names(el$compartments)) {
+      new_entry <- el$compartments[[cid]]
+      if (cid %in% names(all_compartments)) {
+        old_entry <- all_compartments[[cid]]
+        if (!identical(old_entry$volume, new_entry$volume)) {
+          stop(sprintf("Compartment conflict: '%s' has volume '%s' in one eqnlist and '%s' in another.",
+                       cid, old_entry$volume, new_entry$volume))
+        }
+        if (!identical(old_entry$rule, new_entry$rule)) {
+          stop(sprintf("Compartment conflict: '%s' has different `rule` in the input eqnlists.", cid))
+        }
+      } else {
+        all_compartments[[cid]] <- new_entry
+      }
+    }
+  }
+
+  all_compartmentOf <- character(0)
+  for (el in inputs) {
+    if (is.null(el$compartmentOf)) next
+    for (st in names(el$compartmentOf)) {
+      cid <- unname(el$compartmentOf[[st]])
+      if (st %in% names(all_compartmentOf)) {
+        if (!identical(unname(all_compartmentOf[[st]]), cid)) {
+          stop(sprintf("State '%s' assigned to different compartments across input eqnlists.", st))
+        }
+      } else {
+        all_compartmentOf[st] <- cid
+      }
+    }
+  }
+
+  if (length(all_compartments) == 0L) all_compartments <- NULL
+  if (length(all_compartmentOf) == 0L) all_compartmentOf <- NULL
+
+  # Concatenate reactionCompartment annotations. If any input has them, we need
+  # to produce a vector of length nrow(combined). Missing entries become NA.
+  any_rc <- any(vapply(inputs, function(el) !is.null(el$reactionCompartment), logical(1)))
+  if (any_rc) {
+    all_rc <- unlist(lapply(inputs, function(el) {
+      if (is.null(el$reactionCompartment)) rep(NA_character_, length(el$rates))
+      else el$reactionCompartment
+    }))
+    if (all(is.na(all_rc))) all_rc <- NULL
+  } else {
+    all_rc <- NULL
+  }
+
+  as.eqnlist(out, compartments = all_compartments, compartmentOf = all_compartmentOf,
+             reactionCompartment = all_rc)
+
 }
 
 

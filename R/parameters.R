@@ -124,7 +124,7 @@ P <- function(trafo = NULL, parameters = NULL, condition = NULL,
 #' @export
 Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NULL,
                   compile = FALSE, modelname = NULL, verbose = FALSE,
-                  derivMode = c("symbolic", "ad", "none")) {
+                  derivMode = c("ad", "symbolic", "none")) {
 
   derivMode <- match.arg(derivMode)
 

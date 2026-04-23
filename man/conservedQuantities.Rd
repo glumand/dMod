@@ -5,10 +5,18 @@
 \title{Determine conserved quantites by finding the kernel of the stoichiometric
 matrix}
 \usage{
-conservedQuantities(S)
+conservedQuantities(S, weight = c("none", "volume"), volumes = NULL)
 }
 \arguments{
 \item{S}{Stoichiometric matrix}
+
+\item{weight}{One of \code{"none"} (default) or \code{"volume"}. When \code{"volume"}, the
+columns of \code{S} are multiplied by their compartment volume before the kernel
+is computed, so the returned quantities are conserved in \emph{amount} rather
+than concentration. Requires \code{volumes} to be supplied as numeric.}
+
+\item{volumes}{Optional named numeric vector of volume values keyed by state,
+aligned with \code{colnames(S)}. Only consulted when \code{weight = "volume"}.}
 }
 \value{
 Data frame with conserved quantities carrying an attribute with the

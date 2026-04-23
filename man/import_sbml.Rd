@@ -18,3 +18,12 @@ list of eqnlist, parameters and inits
 Requires AMICI https://github.com/ICB-DCM/AMICI/ and dependencies to be installed on your system
 Big thanks go to Daniel Weindl!
 }
+\details{
+Kinetic laws coming out of SBML are \strong{extensive} (amount/time) by SBML
+convention, whereas dMod stores rates in \strong{concentration-style}. On import,
+each kinetic law \code{K} is divided by the volume of its home compartment (the
+compartment shared by the educts, or the product compartment for pure
+synthesis) to produce \code{rate_dMod = K / V}. Combined with the volume-ratio
+factors emitted by \code{\link[=getFluxes]{getFluxes()}}, this preserves the SBML semantics:
+\code{K_SBML = rate_dMod * V}.
+}

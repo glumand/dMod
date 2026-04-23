@@ -51,3 +51,4 @@ deriv2Tests/wd/
 *.o
 *.so
 *.dll
+.positai

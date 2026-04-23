@@ -26,7 +26,25 @@ def getModelJSON(sbml_file_name):
     variableId.getId().endswith('_sigma'))
     importer.processSBML()
     # importer.computeModelEquations()
-    
+
+    # Extract compartment information directly from libsbml.
+    # We emit each compartment's ID, numeric size (if set), and spatial dimensions,
+    # plus a species->compartment mapping. dMod uses these to build first-class
+    # `compartments` and `compartmentOf` slots on the imported eqnlist.
+    sbml = importer.sbml
+    compartments = []
+    for i in range(sbml.getNumCompartments()):
+        c = sbml.getCompartment(i)
+        compartments.append({
+            'id': c.getId(),
+            'size': c.getSize() if c.isSetSize() else None,
+            'spatialDimensions': c.getSpatialDimensions() if c.isSetSpatialDimensions() else None,
+        })
+    speciesCompartments = {}
+    for i in range(sbml.getNumSpecies()):
+        sp = sbml.getSpecies(i)
+        speciesCompartments[sp.getId()] = sp.getCompartment()
+
     S = symengineMatrixToNumpy(importer.stoichiometricMatrix)
     dataPy = {
         'S': importer.stoichiometricMatrix.tolist(),
@@ -35,7 +53,9 @@ def getModelJSON(sbml_file_name):
         'stateNames': symengineMatrixToNumpy(importer.symbols['species']['sym'], astype='str').tolist(),
         'parameterNames': symengineMatrixToNumpy(importer.symbols['parameter']['sym'], astype='str').tolist(),
         'x0': symengineMatrixToNumpy(importer.speciesInitial, astype='str').tolist(),
-        "observables": observables
+        "observables": observables,
+        "compartments": compartments,
+        "speciesCompartments": speciesCompartments,
     }
     data = json.dumps(dataPy)
 

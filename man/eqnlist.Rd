@@ -12,12 +12,22 @@ eqnlist(
   states = colnames(smatrix),
   rates = NULL,
   volumes = NULL,
-  description = NULL
+  description = NULL,
+  compartments = NULL,
+  compartmentOf = NULL,
+  reactionCompartment = NULL
 )
 
-as.eqnlist(data, volumes)
+as.eqnlist(data, volumes, ...)
 
-\method{as.eqnlist}{data.frame}(data, volumes = NULL)
+\method{as.eqnlist}{data.frame}(
+  data,
+  volumes = NULL,
+  compartments = NULL,
+  compartmentOf = NULL,
+  reactionCompartment = NULL,
+  ...
+)
 
 is.eqnlist(x)
 }
@@ -29,18 +39,38 @@ one row per reaction/process and one column per state.}
 
 \item{rates}{Character vector. The rate expressions.}
 
-\item{volumes}{Named character, volume parameters for states. Names must be a subset of the states.
-Values can be either characters, e.g. "V1", or numeric values for the volume. If \code{volumes} is not
-\code{NULL}, missing entries are treated as 1.}
+\item{volumes}{Named character, volume parameters for states. Names must be a
+subset of the states. Kept for backward compatibility: when supplied without
+\code{compartments}/\code{compartmentOf}, distinct expressions are auto-assigned
+compartment IDs \code{c1}, \code{c2}, ... The \verb{$volumes} slot on the returned object is
+a derived view of \code{compartments} and \code{compartmentOf} and should not be used
+as the authoritative source.}
 
 \item{description}{Character vector. Description of the single processes.}
+
+\item{compartments}{Named list keyed by compartment ID. Each entry is either
+a character volume expression (e.g. \code{"V_cyt"}) or a list with fields
+\code{volume} (character) and \code{rule} (character or \code{NULL}). \code{rule} is reserved
+for future dynamic-volume support and must be \code{NULL} in the current version.}
+
+\item{compartmentOf}{Named character vector keyed by state; value = compartment
+ID from \code{names(compartments)}. States not present are assigned to an implicit
+\code{"default"} compartment with volume \code{"1"}.}
+
+\item{reactionCompartment}{Optional character vector of length \code{nrow(smatrix)}
+giving, per reaction, the compartment ID in which the rate expression is a
+concentration-rate (the "reference" compartment for that reaction). Use \code{NA}
+to ask \code{\link[=getFluxes]{getFluxes()}} to infer the reference compartment from the educts.
+Required when a reaction's educts span multiple compartments (e.g. membrane
+binding \code{L_ext + R_cyt -> Complex}) — there is no single educt compartment
+to infer from.}
 
 \item{data}{data.frame with columns Description, Rate, and one colum for each state
 reflecting the stoichiometric matrix}
 
-\item{x}{object of class \code{eqnlist}}
-
 \item{...}{additional arguments to be passed to or from methods.}
+
+\item{x}{object of class \code{eqnlist}}
 }
 \value{
 An object of class \code{eqnlist}, basically a list.
@@ -49,7 +79,10 @@ Object of class \link{eqnlist}
 }
 \description{
 The eqnlist object stores an ODE as a list of stoichiometric matrix,
-rate expressions, state names and compartment volumes.
+rate expressions, state names, and compartment information. Compartments are
+first-class entities: \code{compartments} maps a compartment ID to a record holding
+its volume expression (and a reserved \code{rule} field for future dynamic-volume
+support); \code{compartmentOf} assigns each state to a compartment by ID.
 
 Translates a reaction network, e.g. defined by a data.frame, into an equation list object.
 }
@@ -60,8 +93,8 @@ The state columns correspond to the stoichiometric matrix.
 }
 \examples{
 # Generate eqnlist from the constructor
-S <- matrix(c(-1, 1, 1, -1), 
-            nrow = 2, ncol = 2, 
+S <- matrix(c(-1, 1, 1, -1),
+            nrow = 2, ncol = 2,
             dimnames = list(NULL, c("A", "B")))
 
 rates <- c("k1*A", "k2*B")
@@ -74,10 +107,18 @@ print(f)
 fdata <- as.data.frame(f)
 print(fdata)
 
-# Generate eqnlist from data.frame and add volume parameter
+# Legacy path: flat `volumes` gets auto-translated into compartments c1, c2
 f <- as.eqnlist(fdata, volumes = c(A = "Vcyt", B = "Vnuc"))
 print(f)
 print(as.eqnvec(f))
 print(as.eqnvec(f, type = "amount"))
 
+# First-class compartments: name each compartment and assign states explicitly.
+f2 <- eqnlist(
+  smatrix = S, rates = rates, description = description,
+  compartments = list(cyt = "Vcyt", nuc = "Vnuc"),
+  compartmentOf = c(A = "cyt", B = "nuc")
+)
+print(f2)
+print(as.eqnvec(f2))
 }
