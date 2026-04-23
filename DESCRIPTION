@@ -33,8 +33,10 @@ Imports:
     abind,
     optimx,
     reticulate,
-    BH,
-    Rcpp
+    Rcpp,
+    cowplot,
+    digest,
+    nleqslv
 Remotes:
     simonbeyer1/CppODE@devel
 Suggests:

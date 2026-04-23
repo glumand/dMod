@@ -47,9 +47,12 @@ void expl_parfn_steady_eval(double* x, double* y, double* p, int* n, int* k, int
     const int n_out  = *l;
     (void)n_vars;  // suppress unused warning
 
+    double y_local[7];
     for (int obs = 0; obs < n_obs; obs++) {
         const double* x_obs = nullptr;
-        expl_parfn_steady_eval_one<double>(x_obs, p, y + obs * n_out);
+        expl_parfn_steady_eval_one<double>(x_obs, p, y_local);
+        for (int i = 0; i < n_out; ++i)
+            y[obs + (size_t)n_obs * i] = y_local[i];
     }
 }
 
@@ -84,9 +87,9 @@ void expl_parfn_steady_eval_ad(double* x, double* p, double* dX, double* dP,
     for (int obs = 0; obs < n_obs; ++obs) {
         expl_parfn_steady_eval_one<F<double>>(x_ad.data(), p_ad.data(), y_ad.data());
         for (int i = 0; i < n_out; ++i) {
-            y[i + n_out * obs] = y_ad[i].val();
+            y[obs + (size_t)n_obs * i] = y_ad[i].val();
             for (int k = 0; k < n_theta; ++k) {
-                dy[i + n_out * (k + n_theta * obs)] = y_ad[i].deriv(k);
+                dy[obs + (size_t)n_obs * (i + (size_t)n_out * k)] = y_ad[i].deriv(k);
             }
         }
     }

@@ -40,9 +40,12 @@ void obsfn_eval(double* x, double* y, double* p, int* n, int* k, int* l) {
     const int n_out  = *l;
     (void)n_vars;  // suppress unused warning
 
+    double y_local[1];
     for (int obs = 0; obs < n_obs; obs++) {
         const double* x_obs = x + obs * n_vars;
-        obsfn_eval_one<double>(x_obs, p, y + obs * n_out);
+        obsfn_eval_one<double>(x_obs, p, y_local);
+        for (int i = 0; i < n_out; ++i)
+            y[obs + (size_t)n_obs * i] = y_local[i];
     }
 }
 
@@ -80,15 +83,15 @@ void obsfn_eval_ad(double* x, double* p, double* dX, double* dP,
             if (n_theta > 0) {
                 x_ad[j].diff(0, n_theta);
                 for (int k = 0; k < n_theta; ++k) {
-                    x_ad[j][k] = dX[j + n_vars * (k + n_theta * obs)];
+                    x_ad[j][k] = dX[obs + (size_t)n_obs * (j + (size_t)n_vars * k)];
                 }
             }
         }
         obsfn_eval_one<F<double>>(x_ad.data(), p_ad.data(), y_ad.data());
         for (int i = 0; i < n_out; ++i) {
-            y[i + n_out * obs] = y_ad[i].val();
+            y[obs + (size_t)n_obs * i] = y_ad[i].val();
             for (int k = 0; k < n_theta; ++k) {
-                dy[i + n_out * (k + n_theta * obs)] = y_ad[i].deriv(k);
+                dy[obs + (size_t)n_obs * (i + (size_t)n_out * k)] = y_ad[i].deriv(k);
             }
         }
     }

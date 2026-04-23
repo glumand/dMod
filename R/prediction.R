@@ -121,22 +121,25 @@ Xs.deSolve <- function(odemodel, forcings = NULL, events = NULL, names = NULL, c
       
       out <- submatrix(outSens, cols = c("time", names))
       
-      # Apply parameter transformation to the derivatives
+      # Apply parameter transformation to the derivatives.
+      # deSolve's outSens columns are laid out so that array() fills into
+      # [time, variable, sensitivity] naturally under column-major.
       sensNames <- as.vector(outer(names, senspars, paste, sep = "."))
-      mysensitivities <- aperm(array(outSens[, sensNames], dim = c(nrow(outSens), length(names), length(senspars))), c(2, 3, 1))
-      
+      mysensitivities <- array(outSens[, sensNames],
+                               dim = c(nrow(outSens), length(names), length(senspars)))
+
       dP <- attr(pars, "deriv")
       if (!is.null(dP)) {
         dPsub <- dP[senspars, , drop = FALSE]
         if(any(rownames(dP) %in% senspars)) {
           myderivs <- mysensitivities %bmm% dPsub
-          dimnames(myderivs) <- list(names, colnames(dPsub), NULL)
+          dimnames(myderivs) <- list(NULL, names, colnames(dPsub))
         } else {
           myderivs <- NULL
         }
       } else {
         myderivs <- mysensitivities
-        dimnames(myderivs) <- list(names, senspars, NULL)
+        dimnames(myderivs) <- list(NULL, names, senspars)
       }
       
     }
@@ -252,7 +255,7 @@ Xs.CppODE <- function(odemodel, forcings = NULL, events = NULL, names = NULL, co
                               onFailure = optionsOde$onFailure,
                               traceFile = optionsOde$traceFile)
 
-      out <- cbind(out$time, submatrix(t(out$variable), cols = names))
+      out <- cbind(out$time, submatrix(out$variable, cols = names))
       colnames(out)[1] <- "time"
 
     } else {
@@ -271,20 +274,20 @@ Xs.CppODE <- function(odemodel, forcings = NULL, events = NULL, names = NULL, co
                                   usePID = optionsSens$usePID,
                                   onFailure = optionsSens$onFailure,
                                   traceFile = optionsSens$traceFile)
-      
-      out <- cbind(outSens$time, submatrix(t(outSens$variable), cols = names))
+
+      out <- cbind(outSens$time, submatrix(outSens$variable, cols = names))
       colnames(out)[1] <- "time"
-      
+
       ntimes <- nrow(out)
-      
+
       # Apply parameter transformation to the derivatives (chain rule)
-      mysensitivities <- outSens$sens1[names,,, drop = FALSE]
-      
+      mysensitivities <- outSens$sens1[, names, , drop = FALSE]
+
       dP <- attr(pars, "deriv")
       if (!is.null(dP)) {
         dPsub <- dP[sensnames, , drop = FALSE]
         dX <- mysensitivities %bmm% dPsub
-        dimnames(dX) <- list(names, colnames(dPsub), NULL)
+        dimnames(dX) <- list(NULL, names, colnames(dPsub))
       } else {
         dX <- mysensitivities
       }
@@ -631,10 +634,10 @@ Y <- function(g, f = NULL, states = NULL, parameters = NULL,
       # AD path: jac_chain returns y and dy already chain-ruled.
       dX <- attr(out, "deriv")
       # Gate dX the same way the symbolic path gates activeS: if no obsStates
-      # appear in dX's row dim, it carries no upstream state sensitivity for
+      # appear in dX's state dim, it carries no upstream state sensitivity for
       # this observation function. Suppress to avoid spurious theta mismatches
       # against dP (e.g. Xt() returns a deriv array with unrelated layout).
-      if (!is.null(dX) && length(intersect(obsStates, dimnames(dX)[[1]])) == 0)
+      if (!is.null(dX) && length(intersect(obsStates, dimnames(dX)[[2]])) == 0)
         dX <- NULL
       ad_out <- gjac_chain(out[, obsStates, drop = FALSE], params[obsParams],
                            dX = dX, dP = attr(pars, "deriv"),
@@ -642,7 +645,7 @@ Y <- function(g, f = NULL, states = NULL, parameters = NULL,
       # Values: gjac_chain returns observables (and pass-through extras when
       # attach.input = TRUE) under attach.input semantics matching gfun.
       gAll <- ad_out$y
-      gVal <- t(gAll[observables, , drop = FALSE])
+      gVal <- gAll[, observables, drop = FALSE]
       if (any(is.nan(gVal)))
         stop("Observable(s) evaluate to NaN: ",
              paste(observables[colSums(is.nan(gVal)) > 0], collapse = ", "),
@@ -652,7 +655,7 @@ Y <- function(g, f = NULL, states = NULL, parameters = NULL,
       myderivs <- ad_out$dy
     } else {
       # Symbolic path (also serves "both" and "none").
-      gVal <- t(gfun(out[, obsStates, drop = FALSE], params[obsParams], attach.input, fixedObsParams)[observables,, drop = FALSE])
+      gVal <- gfun(out[, obsStates, drop = FALSE], params[obsParams], attach.input, fixedObsParams)[, observables, drop = FALSE]
 
       if (any(is.nan(gVal)))
         stop("Observable(s) evaluate to NaN: ",
@@ -665,34 +668,34 @@ Y <- function(g, f = NULL, states = NULL, parameters = NULL,
       myderivs <- NULL
       if (deriv && !is.null(gjac)) {
 
-        dX <- attr(out, "deriv")  # [states, theta, time] state sensitivities
+        dX <- attr(out, "deriv")  # [time, states, theta] state sensitivities
         dP <- attr(pars, "deriv") # [p, theta] parameter transformation Jacobian
-        dG <- gjac(out[, obsStates, drop = FALSE], params[obsParams]) # [obs, states+params, time]
+        dG <- gjac(out[, obsStates, drop = FALSE], params[obsParams]) # [time, obs, states+params]
 
         activeP <- setdiff(obsParams, fixedObsParams)
-        activeS <- if (!is.null(dX)) intersect(obsStates, dimnames(dX)[[1]]) else character()
-        theta <- if (!is.null(dP)) colnames(dP) else if (!is.null(dX)) dimnames(dX)[[2]] else NULL
+        activeS <- if (!is.null(dX)) intersect(obsStates, dimnames(dX)[[2]]) else character()
+        theta <- if (!is.null(dP)) colnames(dP) else if (!is.null(dX)) dimnames(dX)[[3]] else NULL
 
         # Chain rule: dY/dtheta = dG/dX * dX/dtheta + dG/dP * dP/dtheta
-        t1 <- if (length(activeS)) dG[,activeS,,drop=F] %bmm% dX[activeS,,,drop=F] else NULL
-        t2 <- if (!is.null(dP) && length(activeP)) dG[,activeP,,drop=F] %bmm% dP[activeP,,drop=F] else NULL
+        t1 <- if (length(activeS)) dG[,,activeS,drop=F] %bmm% dX[,activeS,,drop=F] else NULL
+        t2 <- if (!is.null(dP) && length(activeP)) dG[,,activeP,drop=F] %bmm% dP[activeP,,drop=F] else NULL
 
         # Align by theta names before addition
-        if (!is.null(t1)) dimnames(t1)[[2]] <- dimnames(dX)[[2]]
-        if (!is.null(t2)) dimnames(t2)[[2]] <- colnames(dP)
-        myderivs <- if (!is.null(t1) && !is.null(t2)) t1[,theta,,drop=F] + t2[,theta,,drop=F] else t1 %||% t2
+        if (!is.null(t1)) dimnames(t1)[[3]] <- dimnames(dX)[[3]]
+        if (!is.null(t2)) dimnames(t2)[[3]] <- colnames(dP)
+        myderivs <- if (!is.null(t1) && !is.null(t2)) t1[,,theta,drop=F] + t2[,,theta,drop=F] else t1 %||% t2
 
         # Fallback: no upstream derivs, return dG/dp directly
 
-        if (is.null(myderivs) && length(activeP)) myderivs <- dG[,activeP,,drop=F]
-        if (!is.null(myderivs)) dimnames(myderivs) <- list(observables, theta, NULL)
+        if (is.null(myderivs) && length(activeP)) myderivs <- dG[,,activeP,drop=F]
+        if (!is.null(myderivs)) dimnames(myderivs) <- list(NULL, observables, theta)
 
         # Append original state sensitivities if attach.input
         if (attach.input && !is.null(myderivs) && !is.null(dX)) {
-          outer_theta <- theta %||% dimnames(dX)[[2]]
-          missing <- setdiff(outer_theta, dimnames(dX)[[2]])
-          if (length(missing)) dX <- abind::abind(dX, array(0, c(dim(dX)[1], length(missing), dim(dX)[3]), dimnames = list(NULL, missing, NULL)), along = 2)
-          myderivs <- abind::abind(myderivs, dX[, outer_theta, , drop = FALSE], along = 1)
+          outer_theta <- theta %||% dimnames(dX)[[3]]
+          missing <- setdiff(outer_theta, dimnames(dX)[[3]])
+          if (length(missing)) dX <- abind::abind(dX, array(0, c(dim(dX)[1], dim(dX)[2], length(missing)), dimnames = list(NULL, NULL, missing)), along = 3)
+          myderivs <- abind::abind(myderivs, dX[, , outer_theta, drop = FALSE], along = 2)
         }
       }
     }
@@ -737,9 +740,9 @@ Xt <- function(condition = NULL) {
     # Output: matrix with time column
     out <- matrix(times, ncol = 1, dimnames = list(NULL, "time"))
     
-    # Sensitivities (deriv): 3D array [n_times, n_states, n_pars]
-    # time has no dependence on parameters, so all zeros
-    sens <- array(0, 
+    # Sensitivities (deriv): 3D array [n_times, n_states, n_pars] (batch-first).
+    # time has no dependence on parameters, so all zeros.
+    sens <- array(0,
                   dim = c(n_times, 1, n_pars),
                   dimnames = list(NULL, "time", par_names))
     

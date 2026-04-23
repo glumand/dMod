@@ -41,11 +41,11 @@ res <- function(data, out, err = NULL) {
   
   deriv <- NULL
   if (!is.null(d <- attr(out, "deriv"))) {
-    oi <- match(data$name, dimnames(d)[[1]])
-    np <- dim(d)[2]
+    oi <- match(data$name, dimnames(d)[[2]])
+    np <- dim(d)[3]
     deriv <- matrix(
-      d[cbind(rep(oi, np), rep(seq_len(np), each = n), rep(ti, np))],
-      n, np, dimnames = list(NULL, dimnames(d)[[2]]))
+      d[cbind(rep(ti, np), rep(oi, np), rep(seq_len(np), each = n))],
+      n, np, dimnames = list(NULL, dimnames(d)[[3]]))
   }
   
   sig  <- data$sigma
@@ -59,12 +59,12 @@ res <- function(data, out, err = NULL) {
     sig[sNA] <- err[cbind(ti_e, ni_e)][sNA]
     
     if (!is.null(de <- attr(err, "deriv"))) {
-      oi <- match(data$name, dimnames(de)[[1]])
-      np <- dim(de)[2]
+      oi <- match(data$name, dimnames(de)[[2]])
+      np <- dim(de)[3]
       ns <- sum(sNA)
-      derr <- matrix(0, n, np, dimnames = list(NULL, dimnames(de)[[2]]))
+      derr <- matrix(0, n, np, dimnames = list(NULL, dimnames(de)[[3]]))
       derr[sNA, ] <- matrix(
-        de[cbind(rep(oi[sNA], np), rep(seq_len(np), each = ns), rep(ti_e[sNA], np))],
+        de[cbind(rep(ti_e[sNA], np), rep(oi[sNA], np), rep(seq_len(np), each = ns))],
         ns, np)
     }
   }

@@ -12,17 +12,18 @@ A \%bmm\% B
 \item{B}{Numeric matrix or 3D array}
 }
 \value{
-Numeric 3D array with dim \code{[M, N, B]}
+Numeric 3D array with dim \code{[B, M, N]}
 }
 \description{
 Efficient batched matrix multiplication with BLAS-backend.
+Batch index is the FIRST dimension.
 }
 \section{Supported Contractions}{
 
 \describe{
-\item{\code{[M,K,B] x [K,N] -> [M,N,B]}}{Left batched}
-\item{\code{[M,K] x [K,N,B] -> [M,N,B]}}{Right batched}
-\item{\code{[M,K,B] x [K,N,B] -> [M,N,B]}}{Both batched}
+\item{\code{[B,M,K] x [K,N] -> [B,M,N]}}{Left batched}
+\item{\code{[M,K] x [B,K,N] -> [B,M,N]}}{Right batched}
+\item{\code{[B,M,K] x [B,K,N] -> [B,M,N]}}{Both batched}
 }
 }
 

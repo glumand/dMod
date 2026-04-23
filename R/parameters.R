@@ -184,16 +184,16 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
       }
       out <- jac_chain(NULL, p, dX = NULL, dP = dP,
                        attach.input = attach.input, fixed = names(fixed))
-      pinnerVal <- out$y[, 1]
+      pinnerVal <- out$y[1, ]
       if (!is.null(out$dy)) {
-        Jac <- matrix(out$dy, dim(out$dy)[1], dim(out$dy)[2],
-                      dimnames = list(dimnames(out$dy)[[1]], dimnames(out$dy)[[2]]))
+        Jac <- matrix(out$dy, dim(out$dy)[2], dim(out$dy)[3],
+                      dimnames = list(dimnames(out$dy)[[2]], dimnames(out$dy)[[3]]))
       }
     } else {
       # Symbolic path (also serves "both" and "none" via NULL jac).
       pinnerVal <- fun(NULL, p, attach.input = attach.input, fixed = names(fixed))[,]
       if (deriv && !is.null(jac)) {
-        Jac <- as.matrix(jac(NULL, p, attach.input = attach.input, fixed = names(fixed))[,,1])
+        Jac <- as.matrix(jac(NULL, p, attach.input = attach.input, fixed = names(fixed))[1,,])
         dP <- attr(pars, "deriv")
         if (!is.null(dP)) {
           Jac <- Jac %*% dP[colnames(Jac), , drop = FALSE]
@@ -901,7 +901,7 @@ Pequil <- function(trafo, parameters = NULL, forcings = NULL, condition = NULL, 
     if (res$time[last] == end.time)
       warning("Steady state not reached within integration time.", call. = FALSE)
     
-    root <- round(res$variable[, last], floor(-log10(controls$roottol))+1L)
+    root <- round(res$variable[last, ], floor(-log10(controls$roottol))+1L)
     names(root) <- dependent
     
     if (attach.input) {
@@ -915,13 +915,13 @@ Pequil <- function(trafo, parameters = NULL, forcings = NULL, condition = NULL, 
       cache$yini <- root
       if (!is.null(res$sens1)) {
         full_new <- default_sens
-        full_new[, active_sens] <- res$sens1[, , last]
+        full_new[, active_sens] <- res$sens1[last, , ]
         cache$sensini <- full_new
       } else cache$sensini <- NULL
     }
-    
+
     if (deriv && !is.null(res$sens1)) {
-      sens_final <- round(matrix(res$sens1[, , last], nrow = n_dep, ncol = n_active,
+      sens_final <- round(matrix(res$sens1[last, , ], nrow = n_dep, ncol = n_active,
                                  dimnames = list(dependent, active_sens)),
                           floor(-log10(controls$roottol))+1L)
       

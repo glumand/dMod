@@ -356,11 +356,11 @@ datapointL2 <- function(name, time, value, sigma = 1, attr.name = "validation", 
     if (withDeriv) {
       dfull <- attr(prediction[[condition]], "deriv")
       if (length(dim(dfull)) == 3L) {
-        # new format: [variable x parameter x time]
-        avail_pars <- dimnames(dfull)[[2]]
+        # new format: [time x variable x parameter]
+        avail_pars <- dimnames(dfull)[[3]]
         use_pars   <- intersect(parapar, avail_pars)
         if (length(use_pars)) {
-          dtmp  <- dfull[mu, use_pars, time.index, drop = TRUE]
+          dtmp  <- dfull[time.index, mu, use_pars, drop = TRUE]
           deriv <- setNames(as.numeric(dtmp), use_pars)
         }
       } else {

@@ -1754,17 +1754,17 @@ getDerivs.prdframe <- function(x, ...) {
     stop("Object does not contain first-order derivatives.")
   
   dn <- dimnames(derivs)
-  n  <- dim(derivs)[3]
-  v  <- dim(derivs)[1]
-  d  <- dim(derivs)[2]
-  
-  varnames <- dn[[1]] %||% paste0("var", seq_len(v))
-  parnames <- dn[[2]] %||% paste0("par", seq_len(d))
-  
+  n  <- dim(derivs)[1]
+  v  <- dim(derivs)[2]
+  d  <- dim(derivs)[3]
+
+  varnames <- dn[[2]] %||% paste0("var", seq_len(v))
+  parnames <- dn[[3]] %||% paste0("par", seq_len(d))
+
   derivswide <- times
-  
+
   for (i in seq_len(v)) {
-    m <- t(matrix(derivs[i, , ], nrow = d, ncol = n))
+    m <- matrix(derivs[, i, ], nrow = n, ncol = d)
     colnames(m) <- paste0("\u2202", varnames[i], "/\u2202", parnames)
     derivswide <- cbind(derivswide, m)
   }

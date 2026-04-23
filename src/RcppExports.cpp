@@ -10,16 +10,6 @@ Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
 Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
-// has_batch_gemm
-bool has_batch_gemm();
-RcppExport SEXP _dMod_has_batch_gemm() {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    rcpp_result_gen = Rcpp::wrap(has_batch_gemm());
-    return rcpp_result_gen;
-END_RCPP
-}
 // bmm_lb
 NumericVector bmm_lb(NumericVector A, NumericVector B, int Bn, int M, int K, int N);
 RcppExport SEXP _dMod_bmm_lb(SEXP ASEXP, SEXP BSEXP, SEXP BnSEXP, SEXP MSEXP, SEXP KSEXP, SEXP NSEXP) {
@@ -70,7 +60,6 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
-    {"_dMod_has_batch_gemm", (DL_FUNC) &_dMod_has_batch_gemm, 0},
     {"_dMod_bmm_lb", (DL_FUNC) &_dMod_bmm_lb, 6},
     {"_dMod_bmm_rb", (DL_FUNC) &_dMod_bmm_rb, 6},
     {"_dMod_bmm_bb", (DL_FUNC) &_dMod_bmm_bb, 6},
