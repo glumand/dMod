@@ -31,7 +31,7 @@ reactions <- eqnlist() %>%
 #             TCA_cell = "k_import * TCA_buffer - k_export_sinus * TCA_cell - k_export_cana * TCA_cell")
 
 # Translate reactions into ODE model object
-mymodel <- odemodel(reactions, modelname = "bamodel", compile = F, solver = "CppODE")
+mymodel <- odemodel(reactions, modelname = "bamodel", compile = F, solver = "CppODE", ntheta = 8)
 # Generate trajectories for the default condition
 x <- Xs(mymodel)
 
@@ -72,7 +72,7 @@ prd <- g*x*p
 times <- seq(0, 45, len = 300)
 # debugonce(g)
 out <- prd(times, pouter)
-out %>% plot()
+out %>% plot(data)
 out %>% getDerivs() %>% plot()
 
 myderivs <- attr(out$closed, "deriv")
@@ -98,7 +98,7 @@ plot(data)
 
 trafo <- getEquations(p, conditions = "closed") %>% 
   insert("K_REFLUX~K_REFLUX_OPEN")
-p <- p + P(trafo, condition = "open", compile = F)
+p <- p + P(trafo, condition = "open", compile = T)
 
 outerpars <- getParameters(p)
 pouter <- structure(rep(-1, length(outerpars)), names = outerpars)
@@ -113,15 +113,15 @@ system.time({obj(pouter)})
 myfit <- trust(obj, pouter, rinit = 0.1, rmax = 5, iterlim = 500, printIter = T)
 
 # # Fit 50 times, sample with sd=4 around pouter
-outms <- mstrust(obj, pouter, sd = 4, studyname = "bamodel", cores=detectFreeCores(), fits=100, iterlim = 5e2)
+outms <- mstrust(obj, pouter, sd = 4, studyname = "bamodel", cores=detectFreeCores(), fits=100, iterlim = 1e3)
 
-### Later: Fitting on Knecht machines
+# ## Later: Fitting on Knecht machines
 # outknecht <- runbg({
 #   mstrust(obj, pouter, sd = 4, studyname = "bamodelms", cores=detectFreeCores(), fits=100, iterlim = 1e3)
-# }, machine = "knecht1", filename = "bamodelms")
+# }, machine = "knecht1", filename = "bamodelms", link = T)
 # outknecht$check()
 # outknecht$get()
-
+# 
 # outms <- .runbgOutput$knecht1
 
 out_frame <- as.parframe(outms)
@@ -171,7 +171,7 @@ trafo <- eqnvec() %>%
   insert("S~0") # fixed structural non identifiablility
   
 # debugonce(P)
-p <- P(trafo, modelname = "bamodel_SS", compile = T)
+p <- P(trafo, modelname = "bamodel_SS", compile = TRUE)
 
 outerpars <- getParameters(p)
 pouter <- structure(rep(-1, length(outerpars)), names = outerpars)
@@ -223,7 +223,6 @@ validation_profile <- profile(obj.validation, myfit$argument, "v", cores = 4, me
                               algoControl = list(reoptimize = T),
                               optControl = list(rinit = .1, rmax = 5, iterlim = 200, fterm = 1e-5, mterm = 1e-5),
                               cautiousMode = TRUE)
-
 
 # plotProfile(validation_profile) # This also plos the prediction colums, which is a bug in the code.
 plotProfile(validation_profile, mode %in% c("validation", "data")) # Plots only the two contributions validation and data, along with the sum (total)

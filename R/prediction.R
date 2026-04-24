@@ -212,18 +212,26 @@ Xs.CppODE <- function(odemodel, forcings = NULL, events = NULL, names = NULL, co
   paramNames <- c(attr(func, "variables"), attr(func, "parameters"))
   dim_names <- attr(func, "dim_names")
   dim_names_sens <- attr(extended, "dim_names")
-  
+
+  # Variant 2 (reparam): extended was compiled with `ntheta`, so solveODE
+  # integrates sensitivities directly in theta space and expects `sens1ini` =
+  # Phi'(theta) on full rows c(variables, parameters).
+  has_reparam <- isTRUE(attr(extended, "has_reparam"))
+  inner_names <- c(attr(func, "variables"), attr(func, "parameters"))
+
   # Only a subset of all variables is returned
   if (is.null(names)) names <- dim_names$variable else names <- intersect(dim_names$variable, names)
   if (length(names) == 0) stop(paste("Valid names are:", paste(dim_names$variable, collapse = ", ")))
-  
+
   # Controls to be modified from outside
   controls <- list(
     forcings = forcs,
     names = names,
     optionsOde = optionsOde,
     optionsSens = optionsSens,
-    sensnames = dim_names_sens$sens
+    sensnames = dim_names_sens$sens,
+    has_reparam = has_reparam,
+    inner_names = inner_names
   )
   
   P2X <- function(times, pars, fixed = NULL, deriv = TRUE) {
@@ -258,9 +266,48 @@ Xs.CppODE <- function(odemodel, forcings = NULL, events = NULL, names = NULL, co
       out <- cbind(out$time, submatrix(out$variable, cols = names))
       colnames(out)[1] <- "time"
 
+    } else if (controls$has_reparam) {
+
+      # Variant 2: solveODE integrates theta sensitivities directly. sens1ini
+      # is Phi'(theta) on full rows c(variables, parameters). Pexpl drops
+      # zero-derivative rows (parameters.R:237), so pad the missing rows
+      # back with zeros before handing off to CppODE.
+      dP <- attr(pars, "deriv")
+      if (is.null(dP))
+        stop("Xs.CppODE is in reparam mode (extended compiled with 'ntheta'); ",
+             "attr(pars, 'deriv') is required. Compose with a parameter ",
+             "transformation (P(...)) or rebuild odemodel() without 'ntheta'.")
+
+      inner_names <- controls$inner_names
+      dP_full <- matrix(0, length(inner_names), ncol(dP),
+                        dimnames = list(inner_names, colnames(dP)))
+      hit <- intersect(inner_names, rownames(dP))
+      dP_full[hit, ] <- dP[hit, , drop = FALSE]
+
+      outSens <- CppODE::solveODE(extended, times, params,
+                                  sens1ini = dP_full, sens2ini = NULL,
+                                  fixed = NULL,
+                                  forcings = forcings,
+                                  abstol = optionsSens$atol, reltol = optionsSens$rtol,
+                                  maxprogress = optionsSens$maxWithoutProgress,
+                                  maxsteps = optionsSens$maxsteps,
+                                  hini = optionsSens$hini,
+                                  roottol = optionsSens$roottol,
+                                  maxroot = optionsSens$maxroot,
+                                  usePID = optionsSens$usePID,
+                                  onFailure = optionsSens$onFailure,
+                                  traceFile = optionsSens$traceFile)
+
+      out <- cbind(outSens$time, submatrix(outSens$variable, cols = names))
+      colnames(out)[1] <- "time"
+
+      # outSens$sens1 is already [time, variable, theta] with theta colnames.
+      dX <- outSens$sens1[, names, , drop = FALSE]
+
     } else {
 
-      # Evaluate model with sensitivities
+      # Variant 1: solveODE integrates inner-parameter sensitivities; apply
+      # chain rule with Phi'(theta) after the fact.
       outSens <- CppODE::solveODE(extended, times, params,
                                   sens1ini = NULL, sens2ini = NULL,
                                   fixed = fixedNames,
@@ -291,7 +338,7 @@ Xs.CppODE <- function(odemodel, forcings = NULL, events = NULL, names = NULL, co
       } else {
         dX <- mysensitivities
       }
-      
+
     }
     
     prdframe(out, deriv = dX, parameters = c(pars,fixed))
@@ -632,11 +679,12 @@ Y <- function(g, f = NULL, states = NULL, parameters = NULL,
 
     if (use_ad && deriv && !is.null(gjac_chain)) {
       # AD path: jac_chain returns y and dy already chain-ruled.
-      dX <- attr(out, "deriv")
+      dX_full <- attr(out, "deriv")
       # Gate dX the same way the symbolic path gates activeS: if no obsStates
       # appear in dX's state dim, it carries no upstream state sensitivity for
       # this observation function. Suppress to avoid spurious theta mismatches
       # against dP (e.g. Xt() returns a deriv array with unrelated layout).
+      dX <- dX_full
       if (!is.null(dX) && length(intersect(obsStates, dimnames(dX)[[2]])) == 0)
         dX <- NULL
       ad_out <- gjac_chain(out[, obsStates, drop = FALSE], params[obsParams],
@@ -653,6 +701,19 @@ Y <- function(g, f = NULL, states = NULL, parameters = NULL,
       values <- cbind(time = out[, "time"], gVal)
       if (attach.input) values <- cbind(values, submatrix(out, cols = -1))
       myderivs <- ad_out$dy
+      # Append pass-through state sensitivities so dimnames(myderivs)[[2]]
+      # mirrors the attached values; the AD jac_chain only sees obsStates and
+      # therefore drops the non-consumed state rows.
+      if (attach.input && !is.null(myderivs) && !is.null(dX_full)) {
+        theta <- dimnames(myderivs)[[3]]
+        outer_theta <- theta %||% dimnames(dX_full)[[3]]
+        missing <- setdiff(outer_theta, dimnames(dX_full)[[3]])
+        if (length(missing)) dX_full <- abind::abind(dX_full, array(0, c(dim(dX_full)[1], dim(dX_full)[2], length(missing)), dimnames = list(NULL, NULL, missing)), along = 3)
+        already <- intersect(dimnames(myderivs)[[2]], dimnames(dX_full)[[2]])
+        add_states <- setdiff(dimnames(dX_full)[[2]], already)
+        if (length(add_states))
+          myderivs <- abind::abind(myderivs, dX_full[, add_states, outer_theta, drop = FALSE], along = 2)
+      }
     } else {
       # Symbolic path (also serves "both" and "none").
       gVal <- gfun(out[, obsStates, drop = FALSE], params[obsParams], attach.input, fixedObsParams)[, observables, drop = FALSE]

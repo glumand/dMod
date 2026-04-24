@@ -38,7 +38,7 @@ Imports:
     digest,
     nleqslv
 Remotes:
-    simonbeyer1/CppODE@devel
+    simonbeyer1/CppODE
 Suggests:
     MASS,
     pander,

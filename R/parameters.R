@@ -51,27 +51,34 @@ P <- function(trafo = NULL, parameters = NULL, condition = NULL,
   } else { trafo_list <- trafo }
   
   if (Sys.info()[['sysname']] == "Windows") cores <- 1
-  
-  Reduce("+", mclapply(seq_along(trafo_list), function(i) {
-    
+
+  # Always do codegen-only inside mclapply; actual compile + dyn.load must
+  # happen in the parent process below, because dyn.load in a forked worker
+  # is lost when the fork exits.
+  result <- Reduce("+", mclapply(seq_along(trafo_list), function(i) {
+
     tr <- trafo_list[[i]]
     cond <- names(trafo_list[i])
-    
+
     # Auto-select method per entry
     m <- if (!is.null(method)) match.arg(method, c("explicit", "implicit", "equilibrate"))
-    else if (inherits(tr, "eqnlist")) "equilibrate" 
+    else if (inherits(tr, "eqnlist")) "equilibrate"
     else "explicit"
-    
+
     switch(m,
-           explicit    = Pexpl(as.eqnvec(tr), parameters = parameters, condition = cond, compile = compile, 
+           explicit    = Pexpl(as.eqnvec(tr), parameters = parameters, condition = cond, compile = FALSE,
                                modelname = modelname, verbose = verbose, ...),
-           implicit    = Pimpl(trafo = as.eqnvec(tr), parameters = parameters, condition = cond, 
-                               compile = compile, modelname = modelname, verbose = verbose, ...),
-           equilibrate = Pequil(trafo = tr, parameters = parameters, condition = cond, 
-                                compile = compile, modelname = modelname, verbose = verbose, ...)
+           implicit    = Pimpl(trafo = as.eqnvec(tr), parameters = parameters, condition = cond,
+                               compile = FALSE, modelname = modelname, verbose = verbose, ...),
+           equilibrate = Pequil(trafo = tr, parameters = parameters, condition = cond,
+                                compile = FALSE, modelname = modelname, verbose = verbose, ...)
     )
-    
+
   }, mc.cores = min(detectFreeCores(), cores)))
+
+  if (compile) compile(result, cores = cores, output = modelname, verbose = verbose)
+
+  result
 }
 
 
@@ -142,6 +149,14 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
   if (is.null(modelname)) modelname <- "expl_parfn"
   if (!is.null(condition)) modelname <- paste(modelname, sanitizeConditions(condition), sep = "_")
 
+  # funCpp's AD path has no R fallback — it requires the compiled `_eval_ad`
+  # entry. When `compile = FALSE` the user (or a later `+` composition with an
+  # uncompiled partner) may call the parfn before compile() runs. Generate the
+  # symbolic Jacobian alongside the AD entry in that case so p2p can fall back
+  # gracefully; once compile() is called, the AD path takes over automatically.
+  effective_mode <- derivMode
+  if (!compile && derivMode == "ad") effective_mode <- "both"
+
   # Build compiled (or fallback R) evaluator for transformation
   PEval <- suppressWarnings(
     CppODE::funCpp(
@@ -154,7 +169,7 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
       outdir     = getwd(),
       verbose    = verbose,
       convenient = FALSE,
-      derivMode  = derivMode
+      derivMode  = effective_mode
     )
   )
 
@@ -162,6 +177,7 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
   jac       <- PEval$jac
   jac_chain <- PEval$jac_chain
   use_ad    <- derivMode == "ad"
+  ad_symbol <- paste0(modelname, "_eval_ad")
 
   # Define returned parameter transformation function
   p2p <- function(pars, fixed = NULL, deriv = TRUE) {
@@ -169,8 +185,13 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
     # Prepare pars
     p <- c(pars, fixed)
 
+    # Only take the AD path if the compiled entry is actually loaded; otherwise
+    # drop to the symbolic fallback so post-composition calls like
+    # `(p1 + P(..., compile = FALSE))(pars)` keep working without crashing.
+    ad_ok <- use_ad && !is.null(jac_chain) && is.loaded(ad_symbol)
+
     Jac <- NULL
-    if (use_ad && deriv && !is.null(jac_chain)) {
+    if (ad_ok && deriv) {
       # AD path: jac_chain returns y and dy already chain-ruled w.r.t. theta.
       # Pexpl typically sits at the head of the chain, so attr(pars, "deriv")
       # is NULL. jac_chain returns dy = NULL in that case, so supply an

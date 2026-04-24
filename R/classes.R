@@ -108,11 +108,22 @@ odemodel <- function(f, deriv = TRUE, forcings=NULL, events = NULL, outputs = NU
 
   f <- as.eqnvec(f)
   solver <- match.arg(solver)
-  
+
+  dots <- list(...)
+  if (solver == "deSolve" && "ntheta" %in% names(dots)) {
+    warning("'ntheta' is only supported for solver = 'CppODE' or 'Sundials' and will be ignored.",
+            call. = FALSE)
+    dots <- dots[setdiff(names(dots), "ntheta")]
+  }
+
   if (solver == "deSolve") {
-    
+
     if (is.null(gridpoints)) gridpoints <- 2
-    func <- cOde::funC(f, forcings = forcings, events = events, outputs = outputs, fixed = fixed, modelname = modelname , solver = solver, nGridpoints = gridpoints, ...)
+    func <- do.call(cOde::funC,
+                    c(list(f, forcings = forcings, events = events, outputs = outputs,
+                           fixed = fixed, modelname = modelname, solver = solver,
+                           nGridpoints = gridpoints),
+                      dots))
     extended <- NULL
     if (deriv) {
       modelname_s <- paste0(modelname, "_s")
@@ -158,7 +169,11 @@ odemodel <- function(f, deriv = TRUE, forcings=NULL, events = NULL, outputs = NU
         
       }
       
-      extended <- cOde::funC(fs, forcings = forcings, modelname = modelname_s, solver = solver, nGridpoints = gridpoints, events = events, outputs = outputs, ...)
+      extended <- do.call(cOde::funC,
+                          c(list(fs, forcings = forcings, modelname = modelname_s,
+                                 solver = solver, nGridpoints = gridpoints,
+                                 events = events, outputs = outputs),
+                            dots))
     }
     out <- list(func = func, extended = extended)
     class(out) <- c("deSolve", "odemodel")
@@ -169,28 +184,46 @@ odemodel <- function(f, deriv = TRUE, forcings=NULL, events = NULL, outputs = NU
       estimate = estimate,
       gridpoints = gridpoints
     )
-    
+
     # List of arguments that are not supported
     unsupported <- names(unsupported_args)[
       sapply(unsupported_args, function(arg) !is.null(arg) && !(is.logical(arg) && arg == FALSE))
     ]
-    
+
     if (length(unsupported) > 0) {
       warning(sprintf("The following arguments are not (yet) supported by CppODE and will be ignored: %s", paste(unsupported, collapse = ", ")), call. = FALSE)
     }
+    # `ntheta` is a compile-time setting on the sensitivity system only. CppODE
+    # rejects it when `deriv = FALSE`, so strip it from the ... list used for
+    # the `func` compile and keep it on the `extended` compile.
+    dots_func <- dots[setdiff(names(dots), "ntheta")]
     if (solver == "CppODE") {
-      func <- CppODE::CppODE(f, events = events, fixed = fixed, modelname = modelname, outdir = getwd(), deriv = FALSE, verbose = verbose, ...)
+      func <- do.call(CppODE::CppODE,
+                      c(list(f, events = events, fixed = fixed, modelname = modelname,
+                             outdir = getwd(), deriv = FALSE, verbose = verbose),
+                        dots_func))
       extended <- NULL
       if (deriv) {
-        extended <- CppODE::CppODE(f, events = events, fixed = fixed, forcings = forcings, modelname = paste0(modelname, "_s"), outdir = getwd(), deriv = TRUE, verbose = verbose, ...)
+        extended <- do.call(CppODE::CppODE,
+                            c(list(f, events = events, fixed = fixed, forcings = forcings,
+                                   modelname = paste0(modelname, "_s"), outdir = getwd(),
+                                   deriv = TRUE, verbose = verbose),
+                              dots))
       }
       out <- list(func = func, extended = extended)
       class(out) <- c("CppODE", "odemodel")
     } else if (solver == "Sundials") {
-      func <- CppODE::CVODE(f, events = events, fixed = fixed, modelname = modelname, outdir = getwd(), deriv = FALSE, verbose = verbose, ...)
+      func <- do.call(CppODE::CVODE,
+                      c(list(f, events = events, fixed = fixed, modelname = modelname,
+                             outdir = getwd(), deriv = FALSE, verbose = verbose),
+                        dots_func))
       extended <- NULL
       if (deriv) {
-        extended <- CppODE::CVODE(f, events = events, fixed = fixed, forcings = forcings, modelname = paste0(modelname, "_s"), outdir = getwd(), deriv = TRUE, verbose = verbose, ...)
+        extended <- do.call(CppODE::CVODE,
+                            c(list(f, events = events, fixed = fixed, forcings = forcings,
+                                   modelname = paste0(modelname, "_s"), outdir = getwd(),
+                                   deriv = TRUE, verbose = verbose),
+                              dots))
       }
       out <- list(func = func, extended = extended)
       class(out) <- c("CppODE", "odemodel")

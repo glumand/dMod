@@ -1,6 +1,5 @@
 ^.*\.Rproj$
 ^\.Rproj\.user$
-^src/.*\.c$
 ^src/.*\.so$
 
 ^\.github$
