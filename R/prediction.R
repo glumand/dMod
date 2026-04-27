@@ -262,7 +262,7 @@ Xs.CppODE <- function(odemodel, forcings = NULL, events = NULL, names = NULL, co
 
     } else {
       outSens <- CppODE::solveODE(extended, times, params,
-                                  sens1ini = attr(pars, "deriv"), 
+                                  sens1ini = attr(pars, "deriv")[sensnames, ], 
                                   sens2ini = NULL,
                                   fixed = NULL,
                                   forcings = forcings,
