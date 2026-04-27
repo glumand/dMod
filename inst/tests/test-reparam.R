@@ -1,22 +1,20 @@
-context("reparam (Variant 2 theta sensitivities in Xs.CppODE)")
+context("Xs.CppODE theta-sensitivity path (heap vs stack AD slab)")
 
-# Tests that odemodel(..., ntheta = K) switches Xs.CppODE onto the direct
-# theta-sensitivity path (Phi'(theta) as sens1ini) and that it stays
-# numerically equivalent to the classical inner-parameter path (Variant 1,
-# post-hoc %bmm%-chain-rule). Per-condition varying theta counts are covered
-# by a two-condition setup.
+# Tests that the unified Xs.CppODE path (Phi'(theta) as sens1ini) produces
+# identical sensitivities whether the underlying AD slab is heap-allocated
+# (default nStack = Inf) or compile-time stack-allocated (finite nStack).
+# Per-condition varying theta counts are covered by a two-condition setup.
 
-test_that("Variant 2 dX matches Variant 1 dX on a single-condition linear model", {
+test_that("Heap and stack AD slabs match on a single-condition linear model", {
 
   setwd(tempdir())
 
   f <- c(A = "-k1*A + k2*B",
          B =  "k1*A - k2*B")
 
-  # Identity-parameter model (Variant 1) vs reparam-compiled model (Variant 2).
-  # ntheta = 4 covers the full theta set {A, B, log_k1, log_k2}.
+  # Default heap slab vs explicit stack slab (nStack = 4 covers {A,B,log_k1,log_k2}).
   mod_v1 <- odemodel(f, modelname = "rep_v1", solver = "CppODE")
-  mod_v2 <- odemodel(f, modelname = "rep_v2", solver = "CppODE", ntheta = 4L)
+  mod_v2 <- odemodel(f, modelname = "rep_v2", solver = "CppODE", nStack = 4L)
 
   # Same parameter transformation for both.
   trafo <- c(A = "A", B = "B", k1 = "exp(log_k1)", k2 = "exp(log_k2)")
@@ -40,8 +38,6 @@ test_that("Variant 2 dX matches Variant 1 dX on a single-condition linear model"
   d1 <- getDerivs(pred1)[[1]]
   d2 <- getDerivs(pred2)[[1]]
 
-  # d1, d2 are prdframes with "deriv" attribute [time, var, theta].
-  # Xs.CppODE returns the same theta column ordering (propagated from Phi').
   arr1 <- attr(d1, "deriv")
   arr2 <- attr(d2, "deriv")
   expect_equal(dim(arr1), dim(arr2))
@@ -51,7 +47,7 @@ test_that("Variant 2 dX matches Variant 1 dX on a single-condition linear model"
 })
 
 
-test_that("Variant 2 supports per-condition varying theta subsets", {
+test_that("Heap/stack parity holds with per-condition varying theta subsets", {
 
   setwd(tempdir())
 
@@ -59,8 +55,8 @@ test_that("Variant 2 supports per-condition varying theta subsets", {
          B =  "k1*A - k2*B")
 
   mod_v1 <- odemodel(f, modelname = "repmulti_v1", solver = "CppODE")
-  # Upper bound: any condition may activate up to 4 thetas (A, B, log_k1/2).
-  mod_v2 <- odemodel(f, modelname = "repmulti_v2", solver = "CppODE", ntheta = 4L)
+  # Stack upper bound: any condition may activate up to 4 thetas.
+  mod_v2 <- odemodel(f, modelname = "repmulti_v2", solver = "CppODE", nStack = 4L)
 
   # Condition "closed" uses log_k1; condition "open" uses log_k_open instead.
   # Global theta set has 5 elements; each condition activates 4.
@@ -79,7 +75,6 @@ test_that("Variant 2 supports per-condition varying theta subsets", {
     P(trafo_open,   condition = "open",
       modelname = "repmulti_trafo_op_v2", compile = TRUE)
 
-  # Xs is condition-unspecific; p1/p2 carry the per-condition branching.
   tight <- list(atol = 1e-10, rtol = 1e-10)
   x1 <- Xs(mod_v1, optionsSens = tight) * p1
   x2 <- Xs(mod_v2, optionsSens = tight) * p2
@@ -91,13 +86,11 @@ test_that("Variant 2 supports per-condition varying theta subsets", {
   pred1 <- x1(times, theta, deriv = TRUE)
   pred2 <- x2(times, theta, deriv = TRUE)
 
-  # Per-condition parity — each condition's dX must match element-wise.
   for (cond in c("closed", "open")) {
     arr1 <- attr(pred1[[cond]], "deriv")
     arr2 <- attr(pred2[[cond]], "deriv")
     expect_equal(dim(arr1), dim(arr2),
                  info = paste("shape mismatch for condition", cond))
-    # Each condition sees only 4 of the 5 global thetas.
     expect_equal(dim(arr2)[3], 4L,
                  info = paste("ncol mismatch for condition", cond))
     expect_equal(dimnames(arr1)[[3]], dimnames(arr2)[[3]],
@@ -105,20 +98,4 @@ test_that("Variant 2 supports per-condition varying theta subsets", {
     expect_equal(as.numeric(arr1), as.numeric(arr2), tolerance = 1e-6,
                  info = paste("values mismatch for condition", cond))
   }
-})
-
-
-test_that("Variant 2 errors cleanly without attr(pars, 'deriv')", {
-
-  setwd(tempdir())
-
-  f <- c(A = "-k*A")
-  mod <- odemodel(f, modelname = "rep_noderiv", solver = "CppODE", ntheta = 2L)
-  x <- Xs(mod)
-
-  # Calling the prediction function directly with raw inner pars (no P() in
-  # the chain) → no attr(.,'deriv') → reparam path must stop with a clear msg.
-  pars <- c(A = 1.0, k = 0.3)
-  expect_error(x(times = c(0, 1), pars = pars, deriv = TRUE),
-               regexp = "reparam mode")
 })

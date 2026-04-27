@@ -14,7 +14,7 @@ Y(
   compile = FALSE,
   modelname = NULL,
   verbose = FALSE,
-  derivMode = c("ad", "symbolic", "none")
+  derivMode = c("dual", "fadbad", "symbolic")
 )
 }
 \arguments{
@@ -47,11 +47,13 @@ for the generated C file.}
 \item{verbose}{Logical, print compiler output to the R console.}
 
 \item{derivMode}{Character. Selects the derivative backend used by \link[CppODE:funCpp]{CppODE::funCpp}
-to evaluate observation Jacobians. One of \code{"ad"} (default, forward-mode
-automatic differentiation via \code{jac_chain} — typically faster when the
-number of fitted parameters is large; requires \code{compile = TRUE}),
-\code{"symbolic"} (classical SymPy Jacobian followed by an explicit chain
-rule against the upstream \code{dX}/\code{dP}), or \code{"none"} (no derivatives).}
+to evaluate observation Jacobians. One of \code{"dual"} (default, in-tree
+forward-mode AD via \code{jac_chain} — typically faster when the number of
+fitted parameters is large; requires \code{compile = TRUE}), \code{"fadbad"}
+(legacy FADBAD++ AD backend), or \code{"symbolic"} (classical SymPy Jacobian
+followed by an explicit chain rule against the upstream \code{dX}/\code{dP}).
+When \code{compile = FALSE}, the AD modes silently fall back to \code{"symbolic"}
+since the AD entry point is only available after compilation.}
 
 \item{deriv}{Logical, if \code{TRUE}, the function evaluates first-order derivatives
 of observables with respect to parameters.}

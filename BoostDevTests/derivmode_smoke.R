@@ -71,16 +71,19 @@ run_once <- function(pexpl_mode, y_mode, label) {
   invisible(o)
 }
 
-a <- run_once("symbolic", "ad",       "default")
+a <- run_once("symbolic", "dual",     "default")
 b <- run_once("symbolic", "symbolic", "Y_symb")
-c <- run_once("ad",       "ad",       "Pexpl_ad")
-d <- run_once("ad",       "symbolic", "all_swapped")
+c <- run_once("dual",     "dual",     "Pexpl_dual")
+d <- run_once("dual",     "symbolic", "all_swapped")
+e <- run_once("fadbad",   "fadbad",   "fadbad")
 
 cat("\n==== diffs vs default ====\n")
 cat("|val(b)-val(a)|: ", abs(b$value - a$value), "\n")
 cat("|val(c)-val(a)|: ", abs(c$value - a$value), "\n")
 cat("|val(d)-val(a)|: ", abs(d$value - a$value), "\n")
+cat("|val(e)-val(a)|: ", abs(e$value - a$value), "\n")
 cat("max|grad(b)-grad(a)|: ", max(abs(b$gradient - a$gradient)), "\n")
 cat("max|grad(c)-grad(a)|: ", max(abs(c$gradient - a$gradient)), "\n")
 cat("max|grad(d)-grad(a)|: ", max(abs(d$gradient - a$gradient)), "\n")
+cat("max|grad(e)-grad(a)|: ", max(abs(e$gradient - a$gradient)), "\n")
 

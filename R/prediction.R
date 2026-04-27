@@ -188,7 +188,7 @@ Xs.CppODE <- function(odemodel, forcings = NULL, events = NULL, names = NULL, co
     stop("Events should be passed to odemodel() when using solver = 'boost'")
   }
   
-  optionsDefault <- list(atol = 1e-6, rtol = 1e-6, maxWithoutProgress = 50L, maxsteps = 1e6L,
+  optionsDefault <- list(atol = 1e-6, rtol = 1e-6, maxWithoutProgress = 20L, maxsteps = 1e6L,
                          hini = 0, roottol = 1e-6, maxroot = 1L,
                          usePID = "none", onFailure = "stop", traceFile = NULL)
   
@@ -210,13 +210,8 @@ Xs.CppODE <- function(odemodel, forcings = NULL, events = NULL, names = NULL, co
   
   # Extract metadata
   paramNames <- c(attr(func, "variables"), attr(func, "parameters"))
-  dim_names <- attr(func, "dim_names")
-  dim_names_sens <- attr(extended, "dim_names")
-
-  # Variant 2 (reparam): extended was compiled with `ntheta`, so solveODE
-  # integrates sensitivities directly in theta space and expects `sens1ini` =
-  # Phi'(theta) on full rows c(variables, parameters).
-  has_reparam <- isTRUE(attr(extended, "has_reparam"))
+  dim_names <- attr(func, "dimNames")
+  dim_names_sens <- attr(extended, "dimNames")
   inner_names <- c(attr(func, "variables"), attr(func, "parameters"))
 
   # Only a subset of all variables is returned
@@ -230,7 +225,6 @@ Xs.CppODE <- function(odemodel, forcings = NULL, events = NULL, names = NULL, co
     optionsOde = optionsOde,
     optionsSens = optionsSens,
     sensnames = dim_names_sens$sens,
-    has_reparam = has_reparam,
     inner_names = inner_names
   )
   
@@ -266,26 +260,10 @@ Xs.CppODE <- function(odemodel, forcings = NULL, events = NULL, names = NULL, co
       out <- cbind(out$time, submatrix(out$variable, cols = names))
       colnames(out)[1] <- "time"
 
-    } else if (controls$has_reparam) {
-
-      # Variant 2: solveODE integrates theta sensitivities directly. sens1ini
-      # is Phi'(theta) on full rows c(variables, parameters). Pexpl drops
-      # zero-derivative rows (parameters.R:237), so pad the missing rows
-      # back with zeros before handing off to CppODE.
-      dP <- attr(pars, "deriv")
-      if (is.null(dP))
-        stop("Xs.CppODE is in reparam mode (extended compiled with 'ntheta'); ",
-             "attr(pars, 'deriv') is required. Compose with a parameter ",
-             "transformation (P(...)) or rebuild odemodel() without 'ntheta'.")
-
-      inner_names <- controls$inner_names
-      dP_full <- matrix(0, length(inner_names), ncol(dP),
-                        dimnames = list(inner_names, colnames(dP)))
-      hit <- intersect(inner_names, rownames(dP))
-      dP_full[hit, ] <- dP[hit, , drop = FALSE]
-
+    } else {
       outSens <- CppODE::solveODE(extended, times, params,
-                                  sens1ini = dP_full, sens2ini = NULL,
+                                  sens1ini = attr(pars, "deriv"), 
+                                  sens2ini = NULL,
                                   fixed = NULL,
                                   forcings = forcings,
                                   abstol = optionsSens$atol, reltol = optionsSens$rtol,
@@ -303,41 +281,6 @@ Xs.CppODE <- function(odemodel, forcings = NULL, events = NULL, names = NULL, co
 
       # outSens$sens1 is already [time, variable, theta] with theta colnames.
       dX <- outSens$sens1[, names, , drop = FALSE]
-
-    } else {
-
-      # Variant 1: solveODE integrates inner-parameter sensitivities; apply
-      # chain rule with Phi'(theta) after the fact.
-      outSens <- CppODE::solveODE(extended, times, params,
-                                  sens1ini = NULL, sens2ini = NULL,
-                                  fixed = fixedNames,
-                                  forcings = forcings,
-                                  abstol = optionsSens$atol, reltol = optionsSens$rtol,
-                                  maxprogress = optionsSens$maxWithoutProgress,
-                                  maxsteps = optionsSens$maxsteps,
-                                  hini = optionsSens$hini,
-                                  roottol = optionsSens$roottol,
-                                  maxroot = optionsSens$maxroot,
-                                  usePID = optionsSens$usePID,
-                                  onFailure = optionsSens$onFailure,
-                                  traceFile = optionsSens$traceFile)
-
-      out <- cbind(outSens$time, submatrix(outSens$variable, cols = names))
-      colnames(out)[1] <- "time"
-
-      ntimes <- nrow(out)
-
-      # Apply parameter transformation to the derivatives (chain rule)
-      mysensitivities <- outSens$sens1[, names, , drop = FALSE]
-
-      dP <- attr(pars, "deriv")
-      if (!is.null(dP)) {
-        dPsub <- dP[sensnames, , drop = FALSE]
-        dX <- mysensitivities %bmm% dPsub
-        dimnames(dX) <- list(NULL, names, colnames(dPsub))
-      } else {
-        dX <- mysensitivities
-      }
 
     }
     
@@ -587,11 +530,13 @@ Xd <- function(data, condition = NULL) {
 #' for the generated C file.
 #' @param verbose Logical, print compiler output to the R console.
 #' @param derivMode Character. Selects the derivative backend used by [funCpp]
-#'   to evaluate observation Jacobians. One of `"ad"` (default, forward-mode
-#'   automatic differentiation via `jac_chain` — typically faster when the
-#'   number of fitted parameters is large; requires `compile = TRUE`),
-#'   `"symbolic"` (classical SymPy Jacobian followed by an explicit chain
-#'   rule against the upstream `dX`/`dP`), or `"none"` (no derivatives).
+#'   to evaluate observation Jacobians. One of `"dual"` (default, in-tree
+#'   forward-mode AD via `jac_chain` — typically faster when the number of
+#'   fitted parameters is large; requires `compile = TRUE`), `"fadbad"`
+#'   (legacy FADBAD++ AD backend), or `"symbolic"` (classical SymPy Jacobian
+#'   followed by an explicit chain rule against the upstream `dX`/`dP`).
+#'   When `compile = FALSE`, the AD modes silently fall back to `"symbolic"`
+#'   since the AD entry point is only available after compilation.
 #'
 #' @return
 #' An object of class [obsfn], i.e. a function  `g(..., fixed = NULL, deriv = TRUE, condition = NULL, env = NULL)`
@@ -605,9 +550,14 @@ Xd <- function(data, condition = NULL) {
 Y <- function(g, f = NULL, states = NULL, parameters = NULL,
               condition = NULL, attach.input = TRUE,
               compile = FALSE, modelname = NULL, verbose = FALSE,
-              derivMode = c("ad", "symbolic", "none")) {
+              derivMode = c("dual", "fadbad", "symbolic")) {
 
   derivMode <- match.arg(derivMode)
+
+  # AD path requires the compiled `_eval_ad` entry; without compile = TRUE
+  # the only viable runtime Jacobian is the symbolic one.
+  effective_mode <- derivMode
+  if (!compile && derivMode %in% c("dual", "fadbad")) effective_mode <- "symbolic"
 
   if (is.null(f) && is.null(states) && is.null(parameters))
     stop("Not all three arguments f, states and parameters can be NULL")
@@ -659,14 +609,14 @@ Y <- function(g, f = NULL, states = NULL, parameters = NULL,
       outdir     = getwd(),
       verbose    = verbose,
       convenient = FALSE,
-      derivMode  = derivMode
+      derivMode  = effective_mode
     )
   )
 
   gfun       <- gEval$func
   gjac       <- gEval$jac
   gjac_chain <- gEval$jac_chain
-  use_ad     <- derivMode == "ad"
+  use_ad     <- derivMode %in% c("dual", "fadbad")
 
   controls <- list(attach.input = attach.input)
 
@@ -715,7 +665,7 @@ Y <- function(g, f = NULL, states = NULL, parameters = NULL,
           myderivs <- abind::abind(myderivs, dX_full[, add_states, outer_theta, drop = FALSE], along = 2)
       }
     } else {
-      # Symbolic path (also serves "both" and "none").
+      # Symbolic path (also serves the !compile fallback for AD modes).
       gVal <- gfun(out[, obsStates, drop = FALSE], params[obsParams], attach.input, fixedObsParams)[, observables, drop = FALSE]
 
       if (any(is.nan(gVal)))

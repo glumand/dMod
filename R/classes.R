@@ -110,10 +110,10 @@ odemodel <- function(f, deriv = TRUE, forcings=NULL, events = NULL, outputs = NU
   solver <- match.arg(solver)
 
   dots <- list(...)
-  if (solver == "deSolve" && "ntheta" %in% names(dots)) {
-    warning("'ntheta' is only supported for solver = 'CppODE' or 'Sundials' and will be ignored.",
+  if (solver == "deSolve" && "nStack" %in% names(dots)) {
+    warning("'nStack' is only supported for solver = 'CppODE' or 'Sundials' and will be ignored.",
             call. = FALSE)
-    dots <- dots[setdiff(names(dots), "ntheta")]
+    dots <- dots[setdiff(names(dots), "nStack")]
   }
 
   if (solver == "deSolve") {
@@ -193,10 +193,10 @@ odemodel <- function(f, deriv = TRUE, forcings=NULL, events = NULL, outputs = NU
     if (length(unsupported) > 0) {
       warning(sprintf("The following arguments are not (yet) supported by CppODE and will be ignored: %s", paste(unsupported, collapse = ", ")), call. = FALSE)
     }
-    # `ntheta` is a compile-time setting on the sensitivity system only. CppODE
-    # rejects it when `deriv = FALSE`, so strip it from the ... list used for
-    # the `func` compile and keep it on the `extended` compile.
-    dots_func <- dots[setdiff(names(dots), "ntheta")]
+    # `nStack` is a compile-time setting on the sensitivity system only. CppODE
+    # rejects a finite `nStack` when `deriv = FALSE`, so strip it from the ...
+    # list used for the `func` compile and keep it on the `extended` compile.
+    dots_func <- dots[setdiff(names(dots), "nStack")]
     if (solver == "CppODE") {
       func <- do.call(CppODE::CppODE,
                       c(list(f, events = events, fixed = fixed, modelname = modelname,

@@ -115,10 +115,12 @@ P <- function(trafo = NULL, parameters = NULL, condition = NULL,
 #' @param modelname Base name for generated C++ code if `compile = TRUE`.
 #' @param verbose Logical. Print compiler messages.
 #' @param derivMode Character. Selects the derivative backend used by [funCpp]
-#'   to evaluate the transformation Jacobian. One of `"symbolic"` (default,
-#'   classical SymPy Jacobian — appropriate for the typically small parameter
-#'   transformations), `"ad"` (forward-mode automatic differentiation via
-#'   `jac_chain`; requires `compile = TRUE`), or `"none"` (no derivatives).
+#'   to evaluate the transformation Jacobian. One of `"dual"` (default,
+#'   in-tree forward-mode AD via `jac_chain`; requires `compile = TRUE` to
+#'   take effect), `"fadbad"` (legacy FADBAD++ AD backend), or `"symbolic"`
+#'   (classical SymPy Jacobian — appropriate for typically small parameter
+#'   transformations). When `compile = FALSE`, the AD modes silently fall
+#'   back to `"symbolic"` since the AD entry point requires compilation.
 #'
 #' @return
 #' A function of class [parfn].
@@ -131,7 +133,7 @@ P <- function(trafo = NULL, parameters = NULL, condition = NULL,
 #' @export
 Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NULL,
                   compile = FALSE, modelname = NULL, verbose = FALSE,
-                  derivMode = c("ad", "symbolic", "none")) {
+                  derivMode = c("dual", "fadbad", "symbolic")) {
 
   derivMode <- match.arg(derivMode)
 
@@ -150,12 +152,11 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
   if (!is.null(condition)) modelname <- paste(modelname, sanitizeConditions(condition), sep = "_")
 
   # funCpp's AD path has no R fallback — it requires the compiled `_eval_ad`
-  # entry. When `compile = FALSE` the user (or a later `+` composition with an
-  # uncompiled partner) may call the parfn before compile() runs. Generate the
-  # symbolic Jacobian alongside the AD entry in that case so p2p can fall back
-  # gracefully; once compile() is called, the AD path takes over automatically.
+  # entry. When `compile = FALSE` no AD entry is loadable, so emit the
+  # symbolic Jacobian instead. The runtime guard `is.loaded(ad_symbol)` below
+  # then keeps p2p on the symbolic branch.
   effective_mode <- derivMode
-  if (!compile && derivMode == "ad") effective_mode <- "both"
+  if (!compile && derivMode %in% c("dual", "fadbad")) effective_mode <- "symbolic"
 
   # Build compiled (or fallback R) evaluator for transformation
   PEval <- suppressWarnings(
@@ -176,7 +177,7 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
   fun       <- PEval$func
   jac       <- PEval$jac
   jac_chain <- PEval$jac_chain
-  use_ad    <- derivMode == "ad"
+  use_ad    <- derivMode %in% c("dual", "fadbad")
   ad_symbol <- paste0(modelname, "_eval_ad")
 
   # Define returned parameter transformation function
@@ -211,7 +212,7 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
                       dimnames = list(dimnames(out$dy)[[2]], dimnames(out$dy)[[3]]))
       }
     } else {
-      # Symbolic path (also serves "both" and "none" via NULL jac).
+      # Symbolic path (also serves the !compile fallback for AD modes).
       pinnerVal <- fun(NULL, p, attach.input = attach.input, fixed = names(fixed))[,]
       if (deriv && !is.null(jac)) {
         Jac <- as.matrix(jac(NULL, p, attach.input = attach.input, fixed = names(fixed))[1,,])
@@ -460,7 +461,8 @@ Pimpl <- function(trafo, parameters = NULL, forcings = NULL, condition = NULL, k
   PEval <- suppressWarnings(CppODE::funCpp(
     all_exprs, variables = dependent, parameters = parms_all,
     fixed = NULL, compile = compile, modelname = modelname,
-    outdir = getwd(), verbose = verbose, convenient = FALSE, deriv = TRUE
+    outdir = getwd(), verbose = verbose, convenient = FALSE,
+    deriv = TRUE, derivMode = "symbolic"
   ))
   
   jac_cols <- c(dependent, parms_all)
@@ -839,7 +841,7 @@ Pequil <- function(trafo, parameters = NULL, forcings = NULL, condition = NULL, 
   model   <- do.call(CppODE::CppODE, c(.args, list(deriv = FALSE, modelname = modelname)))
   model_s <- do.call(CppODE::CppODE, c(.args, list(deriv = TRUE,  modelname = paste0(modelname, "_s"),
                                                    fixed = names(f))))
-  dims    <- attr(model_s, "dim_names")
+  dims    <- attr(model_s, "dimNames")
   all_sens <- dims$sens
   
   # ---- ODE controls ----
