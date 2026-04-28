@@ -22,12 +22,33 @@ import_sbml <- function(modelpath, amicipath = NULL) {
 
   importscript <- system.file("code/sbmlAmiciDmod.py", package = "dMod")
   tmpfile_json <- tempfile()
+  modelpath <- normalizePath(modelpath, mustWork = TRUE)
 
-  if (!is.null(amicipath))
-    amicipath <- paste0("PYTHONPATH=", amicipath)
+  # Call the virtualenv's python directly — that python knows its own
+  # site-packages via pyvenv.cfg, no `source activate` gymnastics needed.
+  # `amicipath` (when set) is prepended to PYTHONPATH so users can mix in a
+  # libsbml install that lives outside the venv.
+  venv_python <- path.expand("~/.virtualenvs/amici/bin/python")
+  if (!file.exists(venv_python))
+    stop("dMod expects a Python virtualenv at ~/.virtualenvs/amici/. ",
+         "Create one with `python3 -m venv ~/.virtualenvs/amici && ",
+         "~/.virtualenvs/amici/bin/pip install python-libsbml`.")
 
-  run_import_script_call <- paste0('bash -c "', "cd ~/.virtualenvs/amici/bin && source activate &&", amicipath, "&&",  " python ", importscript, " ", modelpath, " ", tmpfile_json, '"')
-  system(run_import_script_call)
+  pyenv <- if (!is.null(amicipath))
+             paste0("PYTHONPATH=",
+                    paste(c(amicipath,
+                            Sys.getenv("PYTHONPATH", unset = "")),
+                          collapse = ":"))
+           else character(0)
+
+  status <- system2(venv_python,
+                    args = c(shQuote(importscript),
+                             shQuote(modelpath),
+                             shQuote(tmpfile_json)),
+                    env = pyenv)
+  if (status != 0L || !file.exists(tmpfile_json))
+    stop("SBML import failed (exit ", status, "). ",
+         "Check that ~/.virtualenvs/amici/ has python-libsbml installed.")
   json_content <- rjson::fromJSON(file = tmpfile_json)
 
   S <- do.call(cbind, json_content[["S"]])
@@ -151,8 +172,12 @@ export_sbml <- function(eqnlist, parameters = NULL, inits = NULL, filepath,
   smatrix <- eqnlist$smatrix
   rxn_list <- lapply(seq_len(nrow(smatrix)), function(i) {
     row_i <- smatrix[i, ]
-    educt_idx <- which(!is.na(row_i) & row_i < 0)
-    product_idx <- which(!is.na(row_i) & row_i > 0)
+    # `which()` on a named vector preserves names, which would propagate
+    # through lapply() into a *named* list — rjson then serialises it as
+    # a JSON object, breaking the array-of-dicts contract dmodToSbml.py
+    # expects. unname() the indices.
+    educt_idx <- unname(which(!is.na(row_i) & row_i < 0))
+    product_idx <- unname(which(!is.na(row_i) & row_i > 0))
 
     educts <- lapply(educt_idx, function(j)
       list(species = eqnlist$states[j], stoich = as.numeric(abs(row_i[j]))))
@@ -181,10 +206,17 @@ export_sbml <- function(eqnlist, parameters = NULL, inits = NULL, filepath,
   writeLines(rjson::toJSON(spec), spec_json)
 
   script <- system.file("code/dmodToSbml.py", package = "dMod")
-  amp <- if (!is.null(amicipath)) paste0("PYTHONPATH=", amicipath) else ""
-  cmd <- paste0('bash -c "', "cd ~/.virtualenvs/amici/bin && source activate &&", amp, "&&",
-                " python ", script, " ", spec_json, '"')
-  status <- system(cmd)
+  venv_python <- path.expand("~/.virtualenvs/amici/bin/python")
+  if (!file.exists(venv_python))
+    stop("dMod expects a Python virtualenv at ~/.virtualenvs/amici/.")
+  pyenv <- if (!is.null(amicipath))
+             paste0("PYTHONPATH=",
+                    paste(c(amicipath,
+                            Sys.getenv("PYTHONPATH", unset = "")),
+                          collapse = ":"))
+           else character(0)
+  status <- system2(venv_python, args = c(shQuote(script), shQuote(spec_json)),
+                    env = pyenv)
   if (status != 0L) stop("SBML export failed (exit ", status, ").")
 
   invisible(filepath)

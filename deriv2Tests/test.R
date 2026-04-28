@@ -237,7 +237,7 @@ confint(validation_profile, val.column = "value")
 # Here we calculate a prediction CI for different timepoints. In the end we interpolate to a "prediction band"
 library(parallel)
 predprofs <- list()
-prediction_band <- do.call(rbind, mclapply(c(0,1,3,5, seq(10, 50, 5)), function(t) {
+prediction_band <- do.call(rbind, mclapply(seq(0, 50, 1), function(t) {
 
   cat("Computing prediction profile for t =", t, "\n")
 
@@ -258,7 +258,7 @@ prediction_band <- do.call(rbind, mclapply(c(0,1,3,5, seq(10, 50, 5)), function(
   # Output
   data.frame(time = t, condition = "closed", name = "TCA_cell",  d1[-1])
 
-}, mc.cores = 10))
+}, mc.cores = 20))
 
 times <- seq(0,51,len=300)
 prediction <- (g * x * p)(times, bestfit) %>%
@@ -277,10 +277,14 @@ prediction_band_spline <- data.frame(
 # Create the ggplot
 ggplot(prediction, aes(x = time, y = value, color = condition)) +
   geom_line() +  # Line connecting the points for each condition
+  geom_point(data = badata, aes(x = time, y = value, color = condition)) + 
+  geom_errorbar(data = badata, aes(x = time, y = value,
+                                   ymin = value - sigma, ymax = value + sigma,
+                                   colour = condition)) +
   geom_ribbon(data = prediction_band_spline, aes(x = time, ymin = lower, ymax = upper, fill = condition), lty = 0, alpha = .3, show.legend = F) +  # Show ribbon in the legend
   geom_point(data = prediction_band, aes(x = time, y = lower, color = condition), shape = 4, show.legend = F) +
   geom_point(data = prediction_band, aes(x = time, y = upper, color = condition), shape = 4, show.legend = F) +
-  facet_wrap(~ name, scales = "free_y") +  # Facet by 'name' column
+  facet_wrap(~ name, scales = "free_y")) +  # Facet by 'name' column
   labs(
     x = "Time",
     y = "Value",
