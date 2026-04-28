@@ -20,8 +20,12 @@ export_sbml(
 compartment-size parameters referenced in \code{eqnlist$compartments}). Pass
 \code{NULL} to write parameters without values.}
 
-\item{inits}{Named numeric vector of initial concentrations keyed by state
-name. Missing states default to 0.}
+\item{inits}{Named numeric \emph{or} character vector of initial values keyed
+by state name. Numeric entries (or character entries that parse as
+numeric) are written as \code{initialConcentration}; non-numeric character
+entries are emitted as \verb{<initialAssignment>} formulas and let the SBML
+simulator resolve the expression against \code{parameters} at sim time.
+Missing states default to 0.}
 
 \item{filepath}{Path to the SBML output file.}
 

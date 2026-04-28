@@ -32,10 +32,15 @@ to their PEtab condition + per-row \code{observableParameters} /
 \code{noiseParameters} representation.
 }
 \details{
+Symbolic species initials (SBML \verb{<initialAssignment>} elements) survive
+the roundtrip: they are carried as-is on \code{petab$inits} and re-emitted by
+\code{\link[=export_sbml]{export_sbml()}}. The reimported objective therefore matches the original
+value at the same \code{pouter}.
+
 Lossy steps documented:
 \itemize{
-\item AMICI-flattened SBML (assignment / initial assignments inlined into
-the eqnlist) does not roundtrip to byte-identical SBML.
+\item AssignmentRules / RateRules are not yet read by \code{\link[=import_sbml]{import_sbml()}};
+models that rely on them are out of scope.
 \item Parameter scales survive only via \code{attr(petab$pouter, "petab_scales")} set by the importer; hand-built problems lacking
 this attribute default to \code{"lin"}.
 }

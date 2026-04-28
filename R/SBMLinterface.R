@@ -128,8 +128,12 @@ import_sbml <- function(modelpath, amicipath = NULL) {
 #' @param parameters Named numeric vector of parameter values (including any
 #'   compartment-size parameters referenced in `eqnlist$compartments`). Pass
 #'   `NULL` to write parameters without values.
-#' @param inits Named numeric vector of initial concentrations keyed by state
-#'   name. Missing states default to 0.
+#' @param inits Named numeric *or* character vector of initial values keyed
+#'   by state name. Numeric entries (or character entries that parse as
+#'   numeric) are written as `initialConcentration`; non-numeric character
+#'   entries are emitted as `<initialAssignment>` formulas and let the SBML
+#'   simulator resolve the expression against `parameters` at sim time.
+#'   Missing states default to 0.
 #' @param filepath Path to the SBML output file.
 #' @param model_id SBML model identifier. Defaults to `"dMod_export"`.
 #' @param amicipath Optional `PYTHONPATH` entry prepended to the python call,
@@ -155,10 +159,16 @@ export_sbml <- function(eqnlist, parameters = NULL, inits = NULL, filepath,
   })
 
   species_list <- lapply(eqnlist$states, function(st) {
-    init_val <- if (!is.null(inits) && st %in% names(inits)) as.numeric(inits[[st]]) else 0
-    list(id = st,
-         compartment = unname(eqnlist$compartmentOf[[st]]),
-         initialConcentration = init_val)
+    raw <- if (!is.null(inits) && st %in% names(inits)) inits[[st]] else 0
+    num <- suppressWarnings(as.numeric(raw))
+    base <- list(id = st, compartment = unname(eqnlist$compartmentOf[[st]]))
+    if (!is.na(num)) {
+      c(base, list(initialConcentration = num))
+    } else {
+      # symbolic: emit as <initialAssignment>; the formula may reference any
+      # parameter declared on the SBML side (incl. compartment-volume IDs).
+      c(base, list(initialAssignment = as.character(raw)))
+    }
   })
 
   param_list <- list()

@@ -32,10 +32,28 @@ def build_sbml(spec):
         sp = model.createSpecies()
         _check(sp.setId(s["id"]), "species.setId")
         _check(sp.setCompartment(s["compartment"]), "species.setCompartment")
-        sp.setInitialConcentration(s.get("initialConcentration", 0.0))
+        # Symbolic initials become InitialAssignments (created below); numeric
+        # initials use initialConcentration. SBML lets both coexist — the
+        # InitialAssignment wins at sim time — but we keep them mutually
+        # exclusive for cleanliness on roundtrip.
+        if "initialAssignment" not in s:
+            sp.setInitialConcentration(s.get("initialConcentration", 0.0))
         sp.setHasOnlySubstanceUnits(False)
         sp.setBoundaryCondition(False)
         sp.setConstant(False)
+
+    for s in spec.get("species", []):
+        formula = s.get("initialAssignment")
+        if formula is None:
+            continue
+        ia = model.createInitialAssignment()
+        _check(ia.setSymbol(s["id"]), "initialAssignment.setSymbol")
+        ast = libsbml.parseL3Formula(formula)
+        if ast is None:
+            raise ValueError(
+                "Could not parse initialAssignment for %r: %s — got %r"
+                % (s["id"], libsbml.getLastParseL3Error(), formula))
+        ia.setMath(ast)
 
     for p in spec.get("parameters", []):
         par = model.createParameter()

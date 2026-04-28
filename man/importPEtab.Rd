@@ -9,7 +9,8 @@ importPEtab(
   solver,
   amicipath = NULL,
   compile = TRUE,
-  modelname = NULL
+  modelname = NULL,
+  preeqMethod = c("analytic", "numeric")
 )
 }
 \arguments{
@@ -27,13 +28,27 @@ observation function, and ODE model are compiled to native code. Set to
 
 \item{modelname}{Optional base modelname for the generated native files.
 Defaults to the YAML basename.}
+
+\item{preeqMethod}{How to compute pre-equilibration steady states for
+measurement rows that carry a \code{preequilibrationConditionId}. One of
+\code{"analytic"} (default) — solve symbolically via \code{\link[=steadyStates]{steadyStates()}} and
+inject the closed-form expressions as state initial values, falling back
+to \code{"numeric"} automatically when the symbolic solver leaves any state
+unresolved — or \code{"numeric"} — always integrate the pre-equilibration
+condition to steady state via \code{\link[=Pequil]{Pequil()}} and feed the result into the
+simulation phase.}
 }
 \value{
 A list with class \code{"petab_problem"} holding \code{prd}, \code{p}, \code{g},
 \code{err}, \code{data}, \code{obj}, \code{pouter}, \code{lower}, \code{upper}, \code{fixed},
-\code{condition.grid}, \code{observables}, \code{reactions}, \code{model_id}, \code{source_yaml},
-\code{sub_cond_map}. The \code{pouter} vector carries \code{attr(., "petab_scales")}
-recording each parameter's PEtab scale, which the exporter reads back.
+\code{condition.grid}, \code{observables}, \code{reactions}, \code{inits}, \code{model_id},
+\code{source_yaml}, \code{sub_cond_map}, \code{obs_meta}, \code{param_meta}. The \code{inits}
+slot is a named character vector of (possibly symbolic) species initial
+expressions sourced from SBML; \code{\link[=exportPEtab]{exportPEtab()}} re-emits non-numeric
+entries as \verb{<initialAssignment>} elements so the roundtrip preserves
+parameter-bound initials. The \code{pouter} vector carries
+\code{attr(., "petab_scales")} recording each parameter's PEtab scale,
+which the exporter reads back.
 }
 \description{
 Reads a PEtab YAML manifest plus the associated SBML model and four TSV

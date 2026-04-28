@@ -233,11 +233,11 @@ test_that("hand-built case-0001 fixture produces solution-matching llh", {
 
 test_that("PEtab test cases 0001-0006 import and produce solution-matching llh", {
 
+  setwd(tempdir())
+
   petab_dir <- .petab_repo_dir()
   if (!nzchar(petab_dir)) skip("PEtabTests/ directory not found")
   if (!.amici_works())   skip("AMICI / Python virtualenv not available")
-
-  setwd(tempdir())
 
   for (id in sprintf("%04d", 1:6)) {
     yaml_path <- file.path(petab_dir, id, paste0("_", id, ".yaml"))
@@ -261,15 +261,78 @@ test_that("PEtab test cases 0001-0006 import and produce solution-matching llh",
 })
 
 
-test_that("two-condition roundtrip preserves objective value", {
+test_that("PEtab Stage-2 test cases 0007-0016 produce solution-matching llh", {
+
+  setwd(tempdir())
 
   petab_dir <- .petab_repo_dir()
   if (!nzchar(petab_dir)) skip("PEtabTests/ directory not found")
   if (!.amici_works())   skip("AMICI / Python virtualenv not available")
 
+  # Cases 0007 (log10 trafo), 0008 (replicates), 0009/0010 (preequilibration —
+  # numeric Pequil fallback is exercised because steadyStates() leaves one
+  # state unresolved on the A↔B reaction), 0011-0013 (init / compartment /
+  # parametric init overrides), 0014/0015 (numeric / symbolic noise parameter
+  # overrides), 0016 (log trafo).
+  for (id in sprintf("%04d", 7:16)) {
+
+    yaml_path <- file.path(petab_dir, id, paste0("_", id, ".yaml"))
+    sol_path  <- file.path(petab_dir, id, paste0("_", id, "_solution.yaml"))
+    if (!file.exists(sol_path)) next
+
+    suppressWarnings(
+      petab <- importPEtab(yaml_path, solver = "deSolve",
+                           modelname = paste0("petab_s2_", id)))
+    sol <- yaml::read_yaml(sol_path)
+    out <- petab$obj(petab$pouter, fixed = petab$fixed, deriv = FALSE)
+    expect_lt(abs(out$value - (-2 * sol$llh)),
+              max(0.01, abs(2 * sol$tol_llh)),
+              label = paste0("case ", id, " -2*llh"))
+  }
+
+  unlink("petab_s2_*"); unlink("*.c"); unlink("*.cpp")
+  unlink("*.o"); unlink("*.so"); unlink("*_model.csv")
+  unlink("reactions_for_Alyssa*")
+})
+
+
+test_that("preeqMethod = 'numeric' forces Pequil even when analytic would work", {
+
   setwd(tempdir())
 
-  # Case 0002 has two conditions and exercises the condition table.
+  petab_dir <- .petab_repo_dir()
+  if (!nzchar(petab_dir)) skip("PEtabTests/ directory not found")
+  if (!.amici_works())   skip("AMICI / Python virtualenv not available")
+
+  # Case 0009 has no symbolic conserved-quantity hint, so analytic falls back
+  # automatically. The explicit "numeric" override should still match.
+  yaml_path <- file.path(petab_dir, "0009", "_0009.yaml")
+  sol_path  <- file.path(petab_dir, "0009", "_0009_solution.yaml")
+  petab <- importPEtab(yaml_path, solver = "deSolve",
+                       modelname = "petab_0009_num",
+                       preeqMethod = "numeric")
+  sol <- yaml::read_yaml(sol_path)
+  out <- petab$obj(petab$pouter, fixed = petab$fixed, deriv = FALSE)
+  expect_lt(abs(out$value - (-2 * sol$llh)),
+            max(0.01, abs(2 * sol$tol_llh)))
+
+  unlink("petab_0009_num*"); unlink("*.c"); unlink("*.cpp")
+  unlink("*.o"); unlink("*.so")
+})
+
+
+test_that("two-condition roundtrip preserves objective value", {
+
+  setwd(tempdir())
+
+  petab_dir <- .petab_repo_dir()
+  if (!nzchar(petab_dir)) skip("PEtabTests/ directory not found")
+  if (!.amici_works())   skip("AMICI / Python virtualenv not available")
+
+  # Case 0002 has two conditions, an InitialAssignment binding A := a0 / B := b0
+  # and exercises the condition table. The InitialAssignment roundtrip is the
+  # interesting part: without it the reimported objective evaluates with
+  # state initials = 0 and disagrees with the original.
   yaml1 <- file.path(petab_dir, "0002", "_0002.yaml")
   petab1 <- importPEtab(yaml1, solver = "deSolve",
                         modelname = "rt_in")
@@ -280,16 +343,43 @@ test_that("two-condition roundtrip preserves objective value", {
 
   petab2 <- importPEtab(yaml2, solver = "deSolve",
                         modelname = "rt_back")
-  # NOTE: round-trip is *objective-value equivalent at the imported pouter*,
-  # not gradient-equivalent. SBML InitialAssignments are not reconstructed
-  # by export_sbml() — see exportPEtab() documentation. We assert the
-  # roundtripped petab evaluates without error and produces a comparable
-  # value at the same nominal point.
   v2 <- petab2$obj(petab2$pouter, fixed = petab2$fixed, deriv = FALSE)$value
 
   expect_true(is.finite(v1))
   expect_true(is.finite(v2))
+  # InitialAssignments survive the roundtrip → values must match within
+  # numerical noise of the ODE solver.
+  expect_lt(abs(v1 - v2), 1e-6)
 
   unlink("rt_*"); unlink("*.c"); unlink("*.cpp")
   unlink("*.o"); unlink("*.so")
+})
+
+
+test_that("export_sbml emits InitialAssignment for symbolic state initials", {
+
+  setwd(tempdir())
+  if (!.amici_works()) skip("Python / libsbml virtualenv not available")
+
+  reactions <- eqnlist()
+  reactions <- addReaction(reactions, "A", "B", "k1*A", "fwd",
+                           compartment = "compartment")
+  reactions <- addReaction(reactions, "B", "A", "k2*B", "rev",
+                           compartment = "compartment")
+
+  # Mixed inits: A is symbolic (→ InitialAssignment), B is numeric.
+  inits <- c(A = "a0", B = "0")
+  pars  <- c(a0 = 0.8, k1 = 0.8, k2 = 0.6, compartment = 1.0)
+
+  out_xml <- file.path(tempdir(), "ia_export.xml")
+  export_sbml(reactions, parameters = pars, inits = inits,
+              filepath = out_xml, model_id = "ia_export")
+
+  xml_text <- readLines(out_xml, warn = FALSE)
+  expect_true(any(grepl("<initialAssignment", xml_text, fixed = TRUE)),
+              info = "no <initialAssignment> emitted for symbolic init")
+  expect_true(any(grepl("symbol=\"A\"", xml_text)),
+              info = "InitialAssignment for A missing")
+
+  unlink(out_xml)
 })
