@@ -98,25 +98,28 @@ cat("\nWritten files:\n  ", paste(list.files(out_dir), collapse = "\n  "), "\n",
 
 ## --- 4. Re-import and verify --------------------------------------------
 
-petab <- importPEtab(yaml_out, solver = "CppODE")
+petab <- importPEtab(yaml_out, solver = "CppODE", cores = 4)
 
-cat("\nReimported pouter names:        ", paste(names(petab$pouter), collapse = ", "), "\n")
-cat("Reimported parameterScales:     ", paste(attr(petab$pouter, "petab_scales"), collapse = ", "), "\n")
+cat("\nReimported bestfit names:       ", paste(names(petab$bestfit), collapse = ", "), "\n")
+cat("Reimported parameterScales:     ", paste(attr(petab$bestfit, "petab_scales"), collapse = ", "), "\n")
 cat("Native pouter names:            ", paste(names(phat), collapse = ", "), "\n")
 
-stopifnot(setequal(names(petab$pouter), names(phat)))
+stopifnot(setequal(names(petab$bestfit), names(phat)))
 
-## Compare objective values at the same outer point.
+## Compare objective values at the same outer point. `petab$obj` has the
+## PEtab-fixed parameters baked in, so a single argument suffices.
 val_native <- obj(phat)$value
-val_petab  <- petab$obj(petab$pouter, fixed = petab$fixed)$value
+val_petab  <- petab$obj(petab$bestfit)$value
 cat("\nNative    obj(phat) =", val_native, "\n")
 cat("Re-import obj(phat) =", val_petab, "\n")
 cat("Difference          =", val_petab - val_native, "\n")
 
 stopifnot(abs(val_petab - val_native) < 1e-3)
 
-## And compare predictions across conditions.
-times <- seq(0, 45, length.out = 200)
+## And compare predictions across conditions. `petab$prd` is the raw
+## composite g * x * p, so it expects the full parameter vector.
+fixed_petab <- attr(petab, "petab_meta")$fixed
+times       <- seq(0, 45, length.out = 200)
 pred_native <- (g * x * p)(times, phat)
-pred_petab  <- petab$prd(times, c(petab$pouter, petab$fixed))
+pred_petab  <- petab$prd(times, c(petab$bestfit, fixed_petab))
 plot(pred_petab, data)

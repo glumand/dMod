@@ -757,15 +757,15 @@ read_petab_tables <- function(yaml_path) {
 }
 
 
-# Build the prediction function `x` (Xs) for the chosen solver. `compile` is
-# forwarded to the underlying cOde::funC / CppODE::CppODE call so the import
-# pipeline can defer linking until a final batched compile().
+# Build the underlying odemodel and the Xs() prediction function for the
+# chosen solver. `compile` is forwarded to cOde::funC / CppODE::CppODE so
+# the importer can defer linking until a single batched compile().
 .petab_build_odemodel <- function(reactions, solver,
                                   modelname = "petab_model",
                                   compile = TRUE) {
   m <- odemodel(reactions, modelname = modelname, solver = solver,
                 compile = compile)
-  Xs(m)
+  list(odemodel = m, x = Xs(m))
 }
 
 
@@ -890,16 +890,17 @@ read_petab_tables <- function(yaml_path) {
 #'   unresolved — or `"numeric"` — always integrate the pre-equilibration
 #'   condition to steady state via [Pequil()] and feed the result into the
 #'   simulation phase.
-#' @return A list with class `"petabProblem"` holding `prd`, `p`, `g`,
-#'   `err`, `data`, `obj`, `pouter`, `lower`, `upper`, `fixed`,
-#'   `condition.grid`, `observables`, `reactions`, `inits`, `model_id`,
-#'   `source_yaml`, `sub_cond_map`, `obs_meta`, `param_meta`. The `inits`
-#'   slot is a named character vector of (possibly symbolic) species initial
-#'   expressions sourced from SBML; [exportPEtabObject()] re-emits non-numeric
-#'   entries as `<initialAssignment>` elements so the roundtrip preserves
-#'   parameter-bound initials. The `pouter` vector carries
-#'   `attr(., "petab_scales")` recording each parameter's PEtab scale,
-#'   which the exporter reads back.
+#' @return A list with class `"PEtabProblem"` holding `dataList`,
+#'   `reactions`, `odemodel`, `g`, `x`, `p`, `e`, `prd` (the composite
+#'   `g * x * p`), `obj`, `bestfit`, `parlower`, `parupper`. The `obj`
+#'   closure has the PEtab fixed parameters baked in, so calling
+#'   `obj(bestfit)` evaluates the likelihood at the current estimate
+#'   without the user having to pass `fixed = ...`. The `bestfit` vector
+#'   carries `attr(., "petab_scales")` recording each parameter's PEtab
+#'   scale (the exporter reads it back). Internal metadata needed for
+#'   the round-trip exporter (`fixed`, `inits`, `model_id`,
+#'   `source_yaml`, `sub_cond_map`, `obs_meta`, `param_meta`) lives on
+#'   `attr(., "petab_meta")`.
 #' @export
 #' @example inst/examples/PEtabInterface.R
 importPEtab <- function(yaml_path, solver, amicipath = NULL,
@@ -988,17 +989,19 @@ importPEtab <- function(yaml_path, solver, amicipath = NULL,
   # avoid one g++ invocation per sub-condition.
   outdir <- getwd()  # native files land here, per dMod convention
 
-  ode <- .petab_build_odemodel(sbml$reactions, solver = solver,
-                               modelname = paste0(modelname, "_ode"),
-                               compile = FALSE)
+  ode_pair <- .petab_build_odemodel(sbml$reactions, solver = solver,
+                                    modelname = paste0(modelname, "_ode"),
+                                    compile = FALSE)
+  odeobj <- ode_pair$odemodel
+  x      <- ode_pair$x
   g <- .petab_build_observation_fn(obs_meta$obs, obs_meta$obs_trafo,
                                    sbml$reactions,
                                    compile = FALSE,
                                    modelname = paste0(modelname, "_obs"))
-  err <- .petab_build_error_fn(obs_meta, meas_info$sub_cond_map,
-                               sbml$reactions, compile = FALSE,
-                               modelname = paste0(modelname, "_err"))
-  p  <- .petab_build_trafo(
+  e <- .petab_build_error_fn(obs_meta, meas_info$sub_cond_map,
+                             sbml$reactions, compile = FALSE,
+                             modelname = paste0(modelname, "_err"))
+  p <- .petab_build_trafo(
           sub_cond_map  = meas_info$sub_cond_map,
           conditions    = cond_info$grid,
           col_kind      = cond_info$col_kind,
@@ -1017,68 +1020,86 @@ importPEtab <- function(yaml_path, solver, amicipath = NULL,
           preeqMethod   = preeqMethod)
 
   # Datalist: split data into per-condition data.frames keyed by sub_condition
-  dat <- as.datalist(meas_info$data, split.by = "condition")
+  dataList <- as.datalist(meas_info$data, split.by = "condition")
 
-  prd <- g * ode * p
+  prd <- g * x * p
 
   if (isTRUE(compile)) {
-    if (is.null(err)) dMod::compile(prd, cores = cores)
-    else              dMod::compile(prd, err, cores = cores)
+    if (is.null(e)) dMod::compile(prd, cores = cores)
+    else            dMod::compile(prd, e, cores = cores)
   }
 
-  obj <- .petab_build_objective(data = dat, prd = prd, errmodel = err,
-                                obs_meta = obs_meta)
+  raw_obj <- .petab_build_objective(data = dataList, prd = prd, errmodel = e,
+                                    obs_meta = obs_meta)
 
-  # 6) assemble petabProblem
-  pouter <- param_meta$pouter
-  attr(pouter, "petab_scales") <- param_meta$scales[names(pouter)]
+  # Bake `fixed` into the objective so users only pass the estimated bestfit
+  # vector. `fixed = NULL` (the default) lets the closure inject the PEtab
+  # fixed values; an explicit `fixed = ...` overrides per call.
+  baked_fixed <- fixed
+  obj <- function(pars, fixed = NULL, ...) {
+    if (is.null(fixed)) fixed <- baked_fixed
+    raw_obj(pars, fixed = fixed, ...)
+  }
+
+  # 6) assemble PEtabProblem
+  bestfit <- param_meta$pouter
+  attr(bestfit, "petab_scales") <- param_meta$scales[names(bestfit)]
 
   out <- list(
-    prd            = prd,
-    p              = p,
-    g              = g,
-    err            = err,
-    data           = dat,
-    obj            = obj,
-    pouter         = pouter,
-    lower          = param_meta$lower,
-    upper          = param_meta$upper,
-    fixed          = fixed,
-    condition.grid = cond_info$grid,
-    observables    = obs_meta$obs,
-    reactions      = sbml$reactions,
-    inits          = sbml$inits,
-    model_id       = modelname,
-    source_yaml    = yaml_path,
-    sub_cond_map   = meas_info$sub_cond_map,
-    obs_meta       = obs_meta,
-    param_meta     = param_meta
+    dataList  = dataList,
+    reactions = sbml$reactions,
+    odemodel  = odeobj,
+    g         = g,
+    x         = x,
+    p         = p,
+    e         = e,
+    prd       = prd,
+    obj       = obj,
+    bestfit   = bestfit,
+    parlower  = param_meta$lower,
+    parupper  = param_meta$upper
   )
-  class(out) <- "petabProblem"
+  attr(out, "petab_meta") <- list(
+    fixed        = fixed,
+    inits        = sbml$inits,
+    model_id     = modelname,
+    source_yaml  = yaml_path,
+    sub_cond_map = meas_info$sub_cond_map,
+    obs_meta     = obs_meta,
+    param_meta   = param_meta
+  )
+  class(out) <- "PEtabProblem"
   out
 }
 
 
-#' Print method for `petabProblem`
-#' @param x A `petabProblem`.
+#' Print method for `PEtabProblem`
+#' @param x A `PEtabProblem`.
 #' @param ... Unused.
 #' @export
-print.petabProblem <- function(x, ...) {
-  cat("<petabProblem ", x$model_id, ">\n", sep = "")
-  cat("  source:        ", x$source_yaml, "\n", sep = "")
-  cat("  conditions:    ", nrow(x$sub_cond_map),
-      " (", length(unique(x$sub_cond_map$simulationConditionId)),
-      " sim, ", length(unique(x$sub_cond_map$preequilibrationConditionId[
-        x$sub_cond_map$preequilibrationConditionId != ""])),
-      " preeq)\n", sep = "")
-  cat("  observables:   ", paste(names(x$observables), collapse = ", "), "\n",
-      sep = "")
-  cat("  measurements:  ", sum(vapply(x$data, nrow, 0L)), "\n", sep = "")
-  cat("  pouter (n=", length(x$pouter), "): ",
-      paste(names(x$pouter), collapse = ", "), "\n", sep = "")
-  if (length(x$fixed) > 0L)
-    cat("  fixed  (n=", length(x$fixed), "): ",
-        paste(names(x$fixed), collapse = ", "), "\n", sep = "")
+print.PEtabProblem <- function(x, ...) {
+  meta  <- attr(x, "petab_meta") %||% list()
+  scm   <- meta$sub_cond_map
+  obs   <- meta$obs_meta$obs
+  fixed <- meta$fixed
+  cat("<PEtabProblem ", meta$model_id %||% "", ">\n", sep = "")
+  if (!is.null(meta$source_yaml))
+    cat("  source:        ", meta$source_yaml, "\n", sep = "")
+  if (!is.null(scm))
+    cat("  conditions:    ", nrow(scm),
+        " (", length(unique(scm$simulationConditionId)),
+        " sim, ", length(unique(scm$preequilibrationConditionId[
+          scm$preequilibrationConditionId != ""])),
+        " preeq)\n", sep = "")
+  if (!is.null(obs))
+    cat("  observables:   ", paste(names(obs), collapse = ", "), "\n",
+        sep = "")
+  cat("  measurements:  ", sum(vapply(x$dataList, nrow, 0L)), "\n", sep = "")
+  cat("  bestfit (n=", length(x$bestfit), "): ",
+      paste(names(x$bestfit), collapse = ", "), "\n", sep = "")
+  if (length(fixed) > 0L)
+    cat("  fixed   (n=", length(fixed), "): ",
+        paste(names(fixed), collapse = ", "), "\n", sep = "")
   invisible(x)
 }
 
@@ -1712,8 +1733,23 @@ exportPEtab <- function(data, reactions, observables, p, pouter,
 exportPEtabObject <- function(petab, dir, model_id = NULL, amicipath = NULL,
                               overwrite = FALSE) {
 
-  stopifnot(inherits(petab, "petabProblem") || is.list(petab))
-  if (is.null(model_id)) model_id <- petab$model_id %||% "dMod_export"
+  stopifnot(inherits(petab, "PEtabProblem") || is.list(petab))
+
+  meta <- attr(petab, "petab_meta") %||% list()
+  fixed        <- meta$fixed        %||% petab$fixed        %||% numeric(0)
+  inits_meta   <- meta$inits        %||% petab$inits
+  obs_meta     <- meta$obs_meta     %||% petab$obs_meta
+  sub_cond_map <- meta$sub_cond_map %||% petab$sub_cond_map
+  param_meta   <- meta$param_meta   %||% petab$param_meta
+  cond_grid    <- attr(petab$dataList %||% petab$data, "condition.grid")
+  if (is.null(cond_grid)) cond_grid <- petab$condition.grid
+  bestfit      <- petab$bestfit %||% petab$pouter
+  parlower     <- petab$parlower %||% petab$lower
+  parupper     <- petab$parupper %||% petab$upper
+  data_list    <- petab$dataList %||% petab$data
+  reactions    <- petab$reactions
+  if (is.null(model_id))
+    model_id <- meta$model_id %||% petab$model_id %||% "dMod_export"
 
   if (!dir.exists(dir)) dir.create(dir, recursive = TRUE)
 
@@ -1732,14 +1768,14 @@ exportPEtabObject <- function(petab, dir, model_id = NULL, amicipath = NULL,
            paste(unlist(paths)[existing], collapse = ", "))
   }
 
-  # parameters.tsv: pouter (estimate=1) + fixed (estimate=0)
-  scales <- attr(petab$pouter, "petab_scales")
+  # parameters.tsv: bestfit (estimate=1) + fixed (estimate=0)
+  scales <- attr(bestfit, "petab_scales")
   if (is.null(scales))
-    scales <- setNames(rep("lin", length(petab$pouter)), names(petab$pouter))
+    scales <- setNames(rep("lin", length(bestfit)), names(bestfit))
 
   # PEtab v1 spec: nominalValue / lowerBound / upperBound are written on the
-  # linear scale. Internally dMod stores pouter on the parameter scale, so
-  # we invert the importer's forward transform: log10 → 10^x, log → exp(x).
+  # linear scale. Internally dMod stores parameters on the parameter scale,
+  # so we invert the importer's forward transform: log10 → 10^x, log → exp(x).
   apply_inv_scale <- function(values, ids) {
     sc <- scales[ids]
     out <- values
@@ -1750,33 +1786,31 @@ exportPEtabObject <- function(petab, dir, model_id = NULL, amicipath = NULL,
     out
   }
 
-  pouter_ids <- names(petab$pouter)
-  pouter_df <- data.frame(
-    parameterId    = pouter_ids,
-    parameterScale = unname(scales[pouter_ids]),
-    lowerBound     = unname(apply_inv_scale(petab$lower[pouter_ids],
-                                            pouter_ids)),
-    upperBound     = unname(apply_inv_scale(petab$upper[pouter_ids],
-                                            pouter_ids)),
-    nominalValue   = unname(apply_inv_scale(petab$pouter, pouter_ids)),
+  est_ids <- names(bestfit)
+  est_df <- data.frame(
+    parameterId    = est_ids,
+    parameterScale = unname(scales[est_ids]),
+    lowerBound     = unname(apply_inv_scale(parlower[est_ids], est_ids)),
+    upperBound     = unname(apply_inv_scale(parupper[est_ids], est_ids)),
+    nominalValue   = unname(apply_inv_scale(bestfit, est_ids)),
     estimate       = 1L,
     stringsAsFactors = FALSE
   )
-  fixed_df <- if (length(petab$fixed)) data.frame(
-    parameterId    = names(petab$fixed),
+  fixed_df <- if (length(fixed)) data.frame(
+    parameterId    = names(fixed),
     parameterScale = "lin",
     lowerBound     = -Inf,
     upperBound     = Inf,
-    nominalValue   = unname(petab$fixed),
+    nominalValue   = unname(fixed),
     estimate       = 0L,
     stringsAsFactors = FALSE
   ) else NULL
 
-  utils::write.table(rbind(pouter_df, fixed_df), paths$parameters,
+  utils::write.table(rbind(est_df, fixed_df), paths$parameters,
                      sep = "\t", quote = FALSE, row.names = FALSE, na = "")
 
   # observables.tsv
-  om <- petab$obs_meta
+  om <- obs_meta
   obs_df <- data.frame(
     observableId             = names(om$obs),
     observableFormula        = unname(om$obs),
@@ -1789,9 +1823,9 @@ exportPEtabObject <- function(petab, dir, model_id = NULL, amicipath = NULL,
                      row.names = FALSE, na = "")
 
   # conditions.tsv: collapse sub_cond_map back to original conditions
-  scm <- petab$sub_cond_map
+  scm <- sub_cond_map
   uniq_sims <- unique(scm$simulationConditionId)
-  cond_df <- petab$condition.grid[uniq_sims, , drop = FALSE]
+  cond_df <- cond_grid[uniq_sims, , drop = FALSE]
   cond_df$conditionId <- uniq_sims
   cond_df <- cond_df[, c("conditionId",
                          setdiff(colnames(cond_df), "conditionId")),
@@ -1800,8 +1834,8 @@ exportPEtabObject <- function(petab, dir, model_id = NULL, amicipath = NULL,
                      row.names = FALSE, na = "")
 
   # measurements.tsv: long-format with re-attached obs/noise param strings
-  meas_rows <- do.call(rbind, lapply(names(petab$data), function(sub) {
-    df <- petab$data[[sub]]
+  meas_rows <- do.call(rbind, lapply(names(data_list), function(sub) {
+    df <- data_list[[sub]]
     ix <- match(sub, scm$sub_condition)
     data.frame(
       observableId               = df$name,
@@ -1826,11 +1860,10 @@ exportPEtabObject <- function(petab, dir, model_id = NULL, amicipath = NULL,
   # parameters.tsv or compartment volumes) get re-emitted as
   # <initialAssignment> elements; numeric initials use initialConcentration.
   # See export_sbml() for the dispatch on character vs. numeric `inits`.
-  all_pars <- c(petab$pouter, petab$fixed)
-  inits <- petab$inits %||%
-           setNames(rep(0, length(petab$reactions$states)),
-                    petab$reactions$states)
-  export_sbml(petab$reactions, parameters = all_pars, inits = inits,
+  all_pars <- c(bestfit, fixed)
+  inits <- inits_meta %||%
+           setNames(rep(0, length(reactions$states)), reactions$states)
+  export_sbml(reactions, parameters = all_pars, inits = inits,
               filepath = paths$sbml, model_id = model_id,
               amicipath = amicipath)
 

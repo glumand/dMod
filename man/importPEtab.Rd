@@ -45,16 +45,17 @@ condition to steady state via \code{\link[=Pequil]{Pequil()}} and feed the resul
 simulation phase.}
 }
 \value{
-A list with class \code{"petabProblem"} holding \code{prd}, \code{p}, \code{g},
-\code{err}, \code{data}, \code{obj}, \code{pouter}, \code{lower}, \code{upper}, \code{fixed},
-\code{condition.grid}, \code{observables}, \code{reactions}, \code{inits}, \code{model_id},
-\code{source_yaml}, \code{sub_cond_map}, \code{obs_meta}, \code{param_meta}. The \code{inits}
-slot is a named character vector of (possibly symbolic) species initial
-expressions sourced from SBML; \code{\link[=exportPEtabObject]{exportPEtabObject()}} re-emits non-numeric
-entries as \verb{<initialAssignment>} elements so the roundtrip preserves
-parameter-bound initials. The \code{pouter} vector carries
-\code{attr(., "petab_scales")} recording each parameter's PEtab scale,
-which the exporter reads back.
+A list with class \code{"PEtabProblem"} holding \code{dataList},
+\code{reactions}, \code{odemodel}, \code{g}, \code{x}, \code{p}, \code{e}, \code{prd} (the composite
+\code{g * x * p}), \code{obj}, \code{bestfit}, \code{parlower}, \code{parupper}. The \code{obj}
+closure has the PEtab fixed parameters baked in, so calling
+\code{obj(bestfit)} evaluates the likelihood at the current estimate
+without the user having to pass \code{fixed = ...}. The \code{bestfit} vector
+carries \code{attr(., "petab_scales")} recording each parameter's PEtab
+scale (the exporter reads it back). Internal metadata needed for
+the round-trip exporter (\code{fixed}, \code{inits}, \code{model_id},
+\code{source_yaml}, \code{sub_cond_map}, \code{obs_meta}, \code{param_meta}) lives on
+\code{attr(., "petab_meta")}.
 }
 \description{
 Reads a PEtab YAML manifest plus the associated SBML model and four TSV
