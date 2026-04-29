@@ -119,24 +119,41 @@ read_petab_tables <- function(yaml_path) {
          paste(unique(scales[!scales %in% c("lin", "log", "log10")]),
                collapse = ", "))
 
-  # PEtab semantics: nominalValue / lowerBound / upperBound are given on the
-  # *parameter scale* the user picked. dMod's outer parameters live on that
-  # same scale; the back-transform exp/10^ happens inside the trafo (see
-  # .petab_build_trafo). So we keep the values as written and only translate
-  # `lin` numerics to numeric — no log/log10 conversion here.
+  # PEtab v1 spec: nominalValue / lowerBound / upperBound are written on the
+  # *linear* scale, regardless of parameterScale. dMod's outer parameters
+  # live on the chosen parameter scale (the trafo applies `10^x` / `exp(x)`
+  # in apply_scale_chain_rule), so we pre-transform here:
+  #   log10 → log10(.),   log → log(.),   lin → identity.
   to_num <- function(col) suppressWarnings(as.numeric(col))
+  apply_fwd_scale <- function(values, ids) {
+    sc <- scales[ids]
+    out <- values
+    log_idx   <- which(sc == "log")
+    log10_idx <- which(sc == "log10")
+    if (length(log_idx))   out[log_idx]   <- log(values[log_idx])
+    if (length(log10_idx)) out[log10_idx] <- log10(values[log10_idx])
+    out
+  }
 
   pouter_idx <- which(df$estimate == 1)
   fixed_idx  <- which(df$estimate == 0)
 
-  pouter <- setNames(to_num(df$nominalValue[pouter_idx]),
-                     df$parameterId[pouter_idx])
-  fixed  <- setNames(to_num(df$nominalValue[fixed_idx]),
-                     df$parameterId[fixed_idx])
-  lower  <- setNames(to_num(df$lowerBound[pouter_idx]),
-                     df$parameterId[pouter_idx])
-  upper  <- setNames(to_num(df$upperBound[pouter_idx]),
-                     df$parameterId[pouter_idx])
+  pouter_ids <- df$parameterId[pouter_idx]
+  fixed_ids  <- df$parameterId[fixed_idx]
+
+  pouter <- setNames(apply_fwd_scale(to_num(df$nominalValue[pouter_idx]),
+                                     pouter_ids),
+                     pouter_ids)
+  # `fixed` parameters are passed straight through to the trafo as numeric
+  # constants on the *inner* (linear) scale — no scale wrapping in the
+  # trafo, so we keep linear values here regardless of parameterScale.
+  fixed  <- setNames(to_num(df$nominalValue[fixed_idx]), fixed_ids)
+  lower  <- setNames(apply_fwd_scale(to_num(df$lowerBound[pouter_idx]),
+                                     pouter_ids),
+                     pouter_ids)
+  upper  <- setNames(apply_fwd_scale(to_num(df$upperBound[pouter_idx]),
+                                     pouter_ids),
+                     pouter_ids)
 
   list(pouter = pouter, lower = lower, upper = upper,
        fixed = fixed, scales = scales)
@@ -1085,12 +1102,28 @@ exportPEtab <- function(petab, dir, model_id = NULL, amicipath = NULL,
   if (is.null(scales))
     scales <- setNames(rep("lin", length(petab$pouter)), names(petab$pouter))
 
+  # PEtab v1 spec: nominalValue / lowerBound / upperBound are written on the
+  # linear scale. Internally dMod stores pouter on the parameter scale, so
+  # we invert the importer's forward transform: log10 → 10^x, log → exp(x).
+  apply_inv_scale <- function(values, ids) {
+    sc <- scales[ids]
+    out <- values
+    log_idx   <- which(sc == "log")
+    log10_idx <- which(sc == "log10")
+    if (length(log_idx))   out[log_idx]   <- exp(values[log_idx])
+    if (length(log10_idx)) out[log10_idx] <- 10 ^ values[log10_idx]
+    out
+  }
+
+  pouter_ids <- names(petab$pouter)
   pouter_df <- data.frame(
-    parameterId    = names(petab$pouter),
-    parameterScale = unname(scales[names(petab$pouter)]),
-    lowerBound     = unname(petab$lower[names(petab$pouter)]),
-    upperBound     = unname(petab$upper[names(petab$pouter)]),
-    nominalValue   = unname(petab$pouter),
+    parameterId    = pouter_ids,
+    parameterScale = unname(scales[pouter_ids]),
+    lowerBound     = unname(apply_inv_scale(petab$lower[pouter_ids],
+                                            pouter_ids)),
+    upperBound     = unname(apply_inv_scale(petab$upper[pouter_ids],
+                                            pouter_ids)),
+    nominalValue   = unname(apply_inv_scale(petab$pouter, pouter_ids)),
     estimate       = 1L,
     stringsAsFactors = FALSE
   )

@@ -18,6 +18,20 @@ context("PEtab importer / exporter")
   ""
 }
 
+# Same idea for the BenchmarkModels/ directory (real-world PEtab benchmarks).
+.benchmark_dir <- function() {
+  envp <- Sys.getenv("DMOD_BENCHMARKMODELS", unset = "")
+  candidates <- c(
+    if (nzchar(envp)) envp,
+    file.path(getwd(), "BenchmarkModels"),
+    file.path(getwd(), "..", "..", "BenchmarkModels"),
+    file.path(dirname(getwd()), "..", "BenchmarkModels"),
+    "/home/simon/Documents/Projects/dMod/BenchmarkModels"
+  )
+  for (p in candidates) if (nzchar(p) && dir.exists(p)) return(normalizePath(p))
+  ""
+}
+
 # AMICI is a heavy GitHub-only dependency. Skip integration tests that need
 # it if we cannot run import_sbml() at all.
 .amici_works <- function() {
@@ -38,24 +52,35 @@ context("PEtab importer / exporter")
 
 test_that(".petab_parse_parameters splits estimated / fixed and tracks scales", {
 
+  # PEtab v1: nominalValue / lowerBound / upperBound are written on the
+  # linear scale regardless of parameterScale. The parser pre-transforms
+  # estimated parameters and bounds to the parameter scale (dMod's pouter
+  # convention); fixed parameters stay on the linear scale because the
+  # trafo's scale chain rule only wraps estimated outer parameters.
   df <- data.frame(
     parameterId    = c("a", "b", "c"),
     parameterScale = c("lin", "log10", "log"),
-    lowerBound     = c(0, -3, -5),
-    upperBound     = c(10, 3, 5),
-    nominalValue   = c(1.0, 0.5, -1.0),
+    lowerBound     = c(0, 1e-3, 1e-5),
+    upperBound     = c(10, 1e3, 1e5),
+    nominalValue   = c(1.0, 100, exp(2)),
     estimate       = c(1L, 1L, 0L),
     stringsAsFactors = FALSE
   )
   pm <- dMod:::.petab_parse_parameters(df)
 
   expect_equal(names(pm$pouter), c("a", "b"))
-  expect_equal(unname(pm$pouter), c(1.0, 0.5))
+  # a (lin)   = 1.0
+  # b (log10) = log10(100) = 2  — pouter on parameter scale
+  expect_equal(unname(pm$pouter), c(1.0, 2.0))
   expect_equal(names(pm$fixed),  c("c"))
+  # c is fixed → stays on linear scale (no scale chain rule wraps it).
+  expect_equal(unname(pm$fixed["c"]), exp(2))
   expect_equal(pm$scales[["a"]], "lin")
   expect_equal(pm$scales[["b"]], "log10")
   expect_equal(pm$scales[["c"]], "log")
+  # lower["b"] = log10(1e-3) = -3
   expect_equal(unname(pm$lower["b"]), -3)
+  expect_equal(unname(pm$upper["b"]), 3)
 })
 
 
@@ -353,6 +378,54 @@ test_that("two-condition roundtrip preserves objective value", {
 
   unlink("rt_*"); unlink("*.c"); unlink("*.cpp")
   unlink("*.o"); unlink("*.so")
+})
+
+
+## --- real-world benchmark: Boehm_JProteomeRes2014 -------------------------
+##
+## End-to-end test on a published JAK/STAT5 benchmark. Exercises features the
+## bundled 0001-0016 fixtures don't:
+##   - log10 parameter scaling on 9 outer parameters,
+##   - libsbml `<power/>` MathML (kinetic laws contain STAT5A^2 / STAT5B^2
+##     which the L2 formatter rendered as `pow(...)` — broke jacobianSymb),
+##   - <assignmentRule> for time-varying input BaF3_Epo,
+##   - sub-condition splitting from per-observable noiseParameter symbols.
+## At nominalValue (= the published optimum), -log L should reproduce the
+## Hass et al. 2019 benchmark value of 138.22.
+
+test_that("Boehm_JProteomeRes2014 benchmark imports and matches published optimum", {
+
+  setwd(tempdir())
+
+  bm_dir <- .benchmark_dir()
+  if (!nzchar(bm_dir))  skip("BenchmarkModels/ directory not found")
+  if (!.amici_works())  skip("AMICI / Python virtualenv not available")
+
+  yaml_path <- file.path(bm_dir, "Boehm_JProteomeRes2014",
+                         "Boehm_JProteomeRes2014.yaml")
+  petab <- importPEtab(yaml_path, solver = "deSolve",
+                       modelname = "boehm")
+
+  # Imported problem shape:
+  expect_equal(length(petab$pouter), 9L)
+  expect_setequal(names(petab$observables),
+                  c("pSTAT5A_rel", "pSTAT5B_rel", "rSTAT5A_rel"))
+  # All estimated parameters are on log10 scale per parameters.tsv:
+  scales <- attr(petab$pouter, "petab_scales")
+  expect_true(all(scales == "log10"))
+  # AssignmentRule for BaF3_Epo must have been inlined → not in `fixed`:
+  expect_false("BaF3_Epo" %in% names(petab$fixed))
+
+  out <- petab$obj(petab$pouter, fixed = petab$fixed, deriv = FALSE)
+
+  # Published optimum: -log L = 138.22 (Hass et al. 2019, "Benchmark
+  # problems for dynamic modeling of intracellular processes"). dMod's
+  # normL2 returns -2*log L, so we compare against ~276.44.
+  expect_lt(abs(out$value - 2 * 138.22), 0.5,
+            label = "Boehm -2*logL at published optimum")
+
+  unlink("boehm*"); unlink("*.c"); unlink("*.cpp")
+  unlink("*.o"); unlink("*.so"); unlink("*_model.csv")
 })
 
 

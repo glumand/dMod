@@ -28,10 +28,14 @@ Limitations relative to the old AMICI pipeline:
   dMod's downstream parser will likely fail on them. Workaround: expand
   function definitions in the SBML file beforehand (libsbml's
   `expandFunctionDefinitions()` converter does this in-place).
-- AssignmentRules / RateRules are NOT inlined. For PEtab v1 problems used
-  in test cases 0001-0006 this is a non-issue; advanced models that rely
-  on them need the AMICI pipeline (or a libsbml-side rule-substitution
-  pre-pass) once we add support.
+- AssignmentRules are emitted in the JSON `assignmentRules` dict (LHS -> RHS
+  formula text in L3 syntax). The R-side caller is expected to inline them
+  into rates / inits / observables (see import_sbml() in R/SBMLinterface.R).
+- FunctionDefinitions are inlined via libsbml's
+  SBMLFunctionDefinitionConverter before the formulas are read out — this
+  unwraps `Function_for_v_15(args...)` style calls in benchmark models like
+  Zheng_PNAS2012 into the underlying expressions.
+- RateRules are NOT supported.
 """
 
 import sys
@@ -40,8 +44,14 @@ import libsbml
 
 
 def _formula(ast):
-    """Convert a MathML AST to dMod-compatible formula text."""
-    return libsbml.formulaToString(ast) if ast is not None else "0"
+    """Convert a MathML AST to dMod-compatible formula text.
+
+    Uses the SBML L3 formatter so MathML <power/> renders as `x^y` instead of
+    `pow(x, y)` — R's `stats::D()` (used by dMod's symbolic Jacobian) has no
+    derivative rule for `pow`. L3 also emits the time symbol as `time`, which
+    matches dMod's convention.
+    """
+    return libsbml.formulaToL3String(ast) if ast is not None else "0"
 
 
 def parse_sbml(sbml_file):
@@ -61,6 +71,17 @@ def parse_sbml(sbml_file):
     model = doc.getModel()
     if model is None:
         raise RuntimeError("No SBML model found in %s" % sbml_file)
+
+    # Inline <functionDefinition> calls so downstream formulas only reference
+    # builtins. Done in-place on the libsbml document.
+    if model.getNumFunctionDefinitions() > 0:
+        conv = libsbml.SBMLFunctionDefinitionConverter()
+        conv.setDocument(doc)
+        rc = conv.convert()
+        if rc != libsbml.LIBSBML_OPERATION_SUCCESS:
+            raise RuntimeError(
+                "Failed to inline SBML <functionDefinition> elements (rc=%d)" % rc)
+        model = doc.getModel()
 
     # --- compartments ---
     compartments = []
@@ -144,6 +165,20 @@ def parse_sbml(sbml_file):
         kl = rxn.getKineticLaw()
         flux_vector.append(_formula(kl.getMath()) if kl is not None else "0")
 
+    # --- assignment rules ---
+    # PEtab v1 SBML may use <assignmentRule> for time-varying inputs (e.g.
+    # Boehm's BaF3_Epo). The R caller substitutes them into rates / inits /
+    # observables; the assigned symbol then drops out of the parameter set.
+    assignment_rules = {}
+    for i in range(model.getNumRules()):
+        rule = model.getRule(i)
+        if rule.getTypeCode() != libsbml.SBML_ASSIGNMENT_RULE:
+            # RateRules and AlgebraicRules are not supported.
+            continue
+        if not rule.isSetMath():
+            continue
+        assignment_rules[rule.getVariable()] = _formula(rule.getMath())
+
     return {
         'S': S,
         'v': flux_vector,
@@ -154,6 +189,7 @@ def parse_sbml(sbml_file):
         'observables': {},
         'compartments': compartments,
         'speciesCompartments': species_compartments,
+        'assignmentRules': assignment_rules,
     }
 
 

@@ -54,8 +54,19 @@ import_sbml <- function(modelpath, amicipath = NULL) {
   S <- do.call(cbind, json_content[["S"]])
   S[S==0] <- NA
 
-  v <- json_content[["v"]]
-  v <- stringr::str_replace_all(v, "\\*\\*", "^")
+  # libsbml L3 emits natural log as `ln(x)`, but both R's stats::D() and the
+  # C math library expect `log(x)` for natural log. Apply this normalisation
+  # to every formula channel — rates, initial-value expressions, and
+  # AssignmentRule RHSs — at a single point. The leading boundary
+  # `(^|[^A-Za-z0-9_.])` prevents matching `eln`, `arcln`, etc.
+  .normalise_formula <- function(s) {
+    if (length(s) == 0L) return(s)
+    s <- stringr::str_replace_all(s, "\\*\\*", "^")
+    s <- stringr::str_replace_all(s, "(^|[^A-Za-z0-9_.])ln\\(", "\\1log(")
+    s
+  }
+
+  v <- .normalise_formula(json_content[["v"]])
 
   states <- json_content[["stateNames"]]
 
@@ -104,14 +115,39 @@ import_sbml <- function(modelpath, amicipath = NULL) {
   }
 
   pars <- setNames(json_content[["p"]], json_content[["parameterNames"]])
-  x0 <- setNames(json_content[["x0"]], json_content[["stateNames"]])
+  x0 <- setNames(.normalise_formula(json_content[["x0"]]),
+                 json_content[["stateNames"]])
+
+  # Inline AssignmentRules from the SBML model. Each rule `lhs := rhs` becomes
+  # an algebraic substitution applied to all rates and species initials. PEtab
+  # benchmark models (e.g. Boehm_JProteomeRes2014) use rules to encode
+  # time-varying inputs like `BaF3_Epo := 1.25e-7 * exp(-k * time)`.
+  # Iterate to a fixed point so chained rules resolve. After inlining, the
+  # LHS symbols are no longer free parameters and are dropped from `pars`.
+  rules <- json_content[["assignmentRules"]]
+  if (length(rules)) {
+    rule_lhs <- names(rules)
+    rule_rhs <- .normalise_formula(unlist(rules, use.names = FALSE))
+    # Wrap each RHS in parens so substitution into a sub-expression keeps
+    # operator precedence intact (e.g. `1.25e-7 * exp(...)` inside `a * lhs`).
+    rule_rhs <- paste0("(", rule_rhs, ")")
+    max_iter <- length(rule_lhs) + 1L
+    for (it in seq_len(max_iter)) {
+      new_v  <- replaceSymbols(rule_lhs, rule_rhs, v)
+      new_x0 <- replaceSymbols(rule_lhs, rule_rhs, x0)
+      if (identical(new_v, v) && identical(new_x0, x0)) break
+      v <- new_v; x0 <- new_x0
+    }
+    pars <- pars[setdiff(names(pars), rule_lhs)]
+  }
 
   reactions <- eqnlist(smatrix = S, states = states, rates = v,
                        compartments = compartments, compartmentOf = compartmentOf)
 
   observables <- json_content[["observables"]]
 
-  out <- list(reactions = reactions, pars = pars, inits = x0, observables = observables)
+  out <- list(reactions = reactions, pars = pars, inits = x0,
+              observables = observables, assignmentRules = rules)
   return(out)
 }
 
