@@ -2,7 +2,7 @@
 % Please edit documentation in R/PEtabInterface.R
 \name{exportPEtabObject}
 \alias{exportPEtabObject}
-\title{Export a dMod \code{petab_problem} back to PEtab v1}
+\title{Export a dMod \code{petabProblem} back to PEtab v1}
 \usage{
 exportPEtabObject(
   petab,
@@ -13,7 +13,7 @@ exportPEtabObject(
 )
 }
 \arguments{
-\item{petab}{A \code{petab_problem} produced by \code{\link[=importPEtab]{importPEtab()}} (or hand-built
+\item{petab}{A \code{petabProblem} produced by \code{\link[=importPEtab]{importPEtab()}} (or hand-built
 list with the same slot names).}
 
 \item{dir}{Output directory; created if missing.}
@@ -32,7 +32,7 @@ Path to the written YAML manifest, invisibly.
 \description{
 Low-level exporter that writes the four PEtab tables (parameters,
 observables, conditions, measurements) plus the SBML model and a YAML
-manifest, given a fully-populated \code{petab_problem}-shaped list (i.e. an
+manifest, given a fully-populated \code{petabProblem}-shaped list (i.e. an
 object as produced by \code{\link[=importPEtab]{importPEtab()}}). Sub-conditions synthesised by the
 importer are collapsed back to their PEtab condition + per-row
 \code{observableParameters} / \code{noiseParameters} representation.

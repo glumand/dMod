@@ -9,6 +9,7 @@ importPEtab(
   solver,
   amicipath = NULL,
   compile = TRUE,
+  cores = 1L,
   modelname = NULL,
   preeqMethod = c("analytic", "numeric")
 )
@@ -26,6 +27,11 @@ importPEtab(
 observation function, and ODE model are compiled to native code. Set to
 \code{FALSE} for inspection-only use.}
 
+\item{cores}{Number of parallel compilation jobs (Unix only) forwarded to
+\code{\link[=compile]{compile()}}. The importer batches all generated source files into a
+single \code{compile()} call so this directly controls native-build
+concurrency.}
+
 \item{modelname}{Optional base modelname for the generated native files.
 Defaults to the YAML basename.}
 
@@ -39,7 +45,7 @@ condition to steady state via \code{\link[=Pequil]{Pequil()}} and feed the resul
 simulation phase.}
 }
 \value{
-A list with class \code{"petab_problem"} holding \code{prd}, \code{p}, \code{g},
+A list with class \code{"petabProblem"} holding \code{prd}, \code{p}, \code{g},
 \code{err}, \code{data}, \code{obj}, \code{pouter}, \code{lower}, \code{upper}, \code{fixed},
 \code{condition.grid}, \code{observables}, \code{reactions}, \code{inits}, \code{model_id},
 \code{source_yaml}, \code{sub_cond_map}, \code{obs_meta}, \code{param_meta}. The \code{inits}
@@ -91,7 +97,7 @@ currently raise a clear "Stage 2" error.
                rinit = 1, rmax = 10)
 
   ## Round-trip back to PEtab on disk. exportPEtabObject takes the full
-  ## petab_problem list; for a dMod-native problem (no PEtab origin), use
+  ## petabProblem list; for a dMod-native problem (no PEtab origin), use
   ## exportPEtab(data, obj, model, g, x, p, pouter, lower, upper, ...).
   out_dir <- file.path(tempdir(), "petab_export")
   yaml_out <- exportPEtabObject(petab, out_dir, overwrite = TRUE)

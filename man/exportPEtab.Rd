@@ -109,7 +109,7 @@ required-symbol check finds them.
 
 \itemize{
 \item Pre-equilibration is not yet roundtrippable through \code{p}. Use
-\code{\link[=exportPEtabObject]{exportPEtabObject()}} on the original \code{petab_problem} if you
+\code{\link[=exportPEtabObject]{exportPEtabObject()}} on the original \code{petabProblem} if you
 need it.
 \item Per-row data sigmas are not preserved; supply an explicit
 \code{errors} formula (e.g. parameterised noise) if you need
@@ -123,5 +123,5 @@ the mixed-wrap error.
 
 \seealso{
 \code{\link[=exportPEtabObject]{exportPEtabObject()}} for the lower-level entry that takes a
-pre-assembled \code{petab_problem} list. \code{\link[=importPEtab]{importPEtab()}} for the inverse.
+pre-assembled \code{petabProblem} list. \code{\link[=importPEtab]{importPEtab()}} for the inverse.
 }

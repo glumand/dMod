@@ -339,21 +339,28 @@ read_petab_tables <- function(yaml_path) {
   }
 
   # Sub-condition key: (simCondId, peq, obsParStr, noiseParStr).
-  # Empty strings collapse to a single key per sim cond. Hashes only kick in
-  # when at least one of obs/noise param strings is non-empty AND varies.
+  # A suffix is applied only when a single simCondId carries more than one
+  # distinct tuple — otherwise the original simCondId is kept as the
+  # sub_condition name (no synthetic ``cond__hash`` artifacts).
   obs_hash <- .petab_subcond_hash(m$observableParameters)
   noi_hash <- .petab_subcond_hash(m$noiseParameters)
   peq_hash <- .petab_subcond_hash(m$preequilibrationConditionId)
 
-  sub_cond <- m$simulationConditionId
-  needs_split <- (obs_hash != "") | (noi_hash != "") | (peq_hash != "")
-  if (any(needs_split)) {
-    suffix <- ifelse(!needs_split, "",
-                     paste0("__",
-                            ifelse(peq_hash == "", "", paste0(peq_hash, "_")),
-                            obs_hash,
-                            ifelse(noi_hash == "", "", paste0("_", noi_hash))))
-    sub_cond <- paste0(m$simulationConditionId, suffix)
+  tuple_key <- paste(peq_hash, obs_hash, noi_hash, sep = "")
+  sub_cond  <- m$simulationConditionId
+  for (sc in unique(m$simulationConditionId)) {
+    ix <- which(m$simulationConditionId == sc)
+    if (length(unique(tuple_key[ix])) <= 1L) next
+    for (k in unique(tuple_key[ix])) {
+      ix2 <- ix[tuple_key[ix] == k]
+      ph  <- peq_hash[ix2[1L]]
+      oh  <- obs_hash[ix2[1L]]
+      nh  <- noi_hash[ix2[1L]]
+      parts <- c(if (nzchar(ph)) ph,
+                 if (nzchar(oh)) oh,
+                 if (nzchar(nh)) nh)
+      sub_cond[ix2] <- paste0(sc, "__", paste(parts, collapse = "_"))
+    }
   }
   m$sub_condition <- sub_cond
 
@@ -750,12 +757,14 @@ read_petab_tables <- function(yaml_path) {
 }
 
 
-# Build the prediction function `x` (Xs) for the chosen solver.
-# `odemodel()` always compiles native code; the `compile` knob is only
-# honoured by Y / P / compile().
+# Build the prediction function `x` (Xs) for the chosen solver. `compile` is
+# forwarded to the underlying cOde::funC / CppODE::CppODE call so the import
+# pipeline can defer linking until a final batched compile().
 .petab_build_odemodel <- function(reactions, solver,
-                                  modelname = "petab_model") {
-  m <- odemodel(reactions, modelname = modelname, solver = solver)
+                                  modelname = "petab_model",
+                                  compile = TRUE) {
+  m <- odemodel(reactions, modelname = modelname, solver = solver,
+                compile = compile)
   Xs(m)
 }
 
@@ -867,6 +876,10 @@ read_petab_tables <- function(yaml_path) {
 #' @param compile Logical. If `TRUE` (default) the generated trafo,
 #'   observation function, and ODE model are compiled to native code. Set to
 #'   `FALSE` for inspection-only use.
+#' @param cores Number of parallel compilation jobs (Unix only) forwarded to
+#'   [compile()]. The importer batches all generated source files into a
+#'   single `compile()` call so this directly controls native-build
+#'   concurrency.
 #' @param modelname Optional base modelname for the generated native files.
 #'   Defaults to the YAML basename.
 #' @param preeqMethod How to compute pre-equilibration steady states for
@@ -877,7 +890,7 @@ read_petab_tables <- function(yaml_path) {
 #'   unresolved — or `"numeric"` — always integrate the pre-equilibration
 #'   condition to steady state via [Pequil()] and feed the result into the
 #'   simulation phase.
-#' @return A list with class `"petab_problem"` holding `prd`, `p`, `g`,
+#' @return A list with class `"petabProblem"` holding `prd`, `p`, `g`,
 #'   `err`, `data`, `obj`, `pouter`, `lower`, `upper`, `fixed`,
 #'   `condition.grid`, `observables`, `reactions`, `inits`, `model_id`,
 #'   `source_yaml`, `sub_cond_map`, `obs_meta`, `param_meta`. The `inits`
@@ -890,10 +903,13 @@ read_petab_tables <- function(yaml_path) {
 #' @export
 #' @example inst/examples/PEtabInterface.R
 importPEtab <- function(yaml_path, solver, amicipath = NULL,
-                        compile = TRUE, modelname = NULL,
+                        compile = TRUE, cores = 1L, modelname = NULL,
                         preeqMethod = c("analytic", "numeric")) {
 
   preeqMethod <- match.arg(preeqMethod)
+  cores <- as.integer(cores)
+  if (length(cores) != 1L || is.na(cores) || cores < 1L)
+    stop("`cores` must be a single positive integer.")
 
   if (missing(solver))
     stop("Argument `solver` is required (one of \"deSolve\", \"CppODE\").")
@@ -966,16 +982,21 @@ importPEtab <- function(yaml_path, solver, amicipath = NULL,
   }
 
   # 5) build prediction / observation / trafo / objective
+  #
+  # Defer per-call compilation: each helper writes generated source files but
+  # leaves linking to a single batched compile() so we can honour `cores` and
+  # avoid one g++ invocation per sub-condition.
   outdir <- getwd()  # native files land here, per dMod convention
 
   ode <- .petab_build_odemodel(sbml$reactions, solver = solver,
-                               modelname = paste0(modelname, "_ode"))
+                               modelname = paste0(modelname, "_ode"),
+                               compile = FALSE)
   g <- .petab_build_observation_fn(obs_meta$obs, obs_meta$obs_trafo,
                                    sbml$reactions,
-                                   compile = compile,
+                                   compile = FALSE,
                                    modelname = paste0(modelname, "_obs"))
   err <- .petab_build_error_fn(obs_meta, meas_info$sub_cond_map,
-                               sbml$reactions, compile = compile,
+                               sbml$reactions, compile = FALSE,
                                modelname = paste0(modelname, "_err"))
   p  <- .petab_build_trafo(
           sub_cond_map  = meas_info$sub_cond_map,
@@ -991,7 +1012,7 @@ importPEtab <- function(yaml_path, solver, amicipath = NULL,
           scales        = param_meta$scales,
           obs_inner     = obs_inner,
           reactions     = sbml$reactions,
-          compile       = compile,
+          compile       = FALSE,
           modelname     = paste0(modelname, "_trafo"),
           preeqMethod   = preeqMethod)
 
@@ -1000,10 +1021,15 @@ importPEtab <- function(yaml_path, solver, amicipath = NULL,
 
   prd <- g * ode * p
 
+  if (isTRUE(compile)) {
+    if (is.null(err)) dMod::compile(prd, cores = cores)
+    else              dMod::compile(prd, err, cores = cores)
+  }
+
   obj <- .petab_build_objective(data = dat, prd = prd, errmodel = err,
                                 obs_meta = obs_meta)
 
-  # 6) assemble petab_problem
+  # 6) assemble petabProblem
   pouter <- param_meta$pouter
   attr(pouter, "petab_scales") <- param_meta$scales[names(pouter)]
 
@@ -1028,17 +1054,17 @@ importPEtab <- function(yaml_path, solver, amicipath = NULL,
     obs_meta       = obs_meta,
     param_meta     = param_meta
   )
-  class(out) <- "petab_problem"
+  class(out) <- "petabProblem"
   out
 }
 
 
-#' Print method for `petab_problem`
-#' @param x A `petab_problem`.
+#' Print method for `petabProblem`
+#' @param x A `petabProblem`.
 #' @param ... Unused.
 #' @export
-print.petab_problem <- function(x, ...) {
-  cat("<petab_problem ", x$model_id, ">\n", sep = "")
+print.petabProblem <- function(x, ...) {
+  cat("<petabProblem ", x$model_id, ">\n", sep = "")
   cat("  source:        ", x$source_yaml, "\n", sep = "")
   cat("  conditions:    ", nrow(x$sub_cond_map),
       " (", length(unique(x$sub_cond_map$simulationConditionId)),
@@ -1340,7 +1366,7 @@ print.petab_problem <- function(x, ...) {
 #' @section Limitations:
 #' \itemize{
 #'   \item Pre-equilibration is not yet roundtrippable through `p`. Use
-#'         [exportPEtabObject()] on the original `petab_problem` if you
+#'         [exportPEtabObject()] on the original `petabProblem` if you
 #'         need it.
 #'   \item Per-row data sigmas are not preserved; supply an explicit
 #'         `errors` formula (e.g. parameterised noise) if you need
@@ -1384,7 +1410,7 @@ print.petab_problem <- function(x, ...) {
 #' @param overwrite Whether to overwrite existing PEtab files in `dir`.
 #' @return Path to the written YAML manifest, invisibly.
 #' @seealso [exportPEtabObject()] for the lower-level entry that takes a
-#'   pre-assembled `petab_problem` list. [importPEtab()] for the inverse.
+#'   pre-assembled `petabProblem` list. [importPEtab()] for the inverse.
 #' @export
 exportPEtab <- function(data, reactions, observables, p, pouter,
                         errors = NULL,
@@ -1578,9 +1604,11 @@ exportPEtab <- function(data, reactions, observables, p, pouter,
       sig_str <- ifelse(is.na(d$sigma), "1", formatC(d$sigma, digits = 17,
                                                      format = "g"))
       noi_h   <- .petab_subcond_hash(sig_str)
-      for (h in unique(noi_h)) {
+      uniq_h  <- unique(noi_h)
+      single  <- length(uniq_h) <= 1L
+      for (h in uniq_h) {
         sel  <- which(noi_h == h)
-        sub_name <- if (h == "") c else paste0(c, "__", h)
+        sub_name <- if (single || h == "") c else paste0(c, "__", h)
         d_sub <- d[sel, , drop = FALSE]
         d_sub$sigma <- NA_real_  # importer rebuilds from noiseParameters
         data_filtered[[sub_name]] <- d_sub
@@ -1641,11 +1669,11 @@ exportPEtab <- function(data, reactions, observables, p, pouter,
 }
 
 
-#' Export a dMod `petab_problem` back to PEtab v1
+#' Export a dMod `petabProblem` back to PEtab v1
 #'
 #' Low-level exporter that writes the four PEtab tables (parameters,
 #' observables, conditions, measurements) plus the SBML model and a YAML
-#' manifest, given a fully-populated `petab_problem`-shaped list (i.e. an
+#' manifest, given a fully-populated `petabProblem`-shaped list (i.e. an
 #' object as produced by [importPEtab()]). Sub-conditions synthesised by the
 #' importer are collapsed back to their PEtab condition + per-row
 #' `observableParameters` / `noiseParameters` representation.
@@ -1669,7 +1697,7 @@ exportPEtab <- function(data, reactions, observables, p, pouter,
 #'         this attribute default to `"lin"`.
 #' }
 #'
-#' @param petab A `petab_problem` produced by [importPEtab()] (or hand-built
+#' @param petab A `petabProblem` produced by [importPEtab()] (or hand-built
 #'   list with the same slot names).
 #' @param dir Output directory; created if missing.
 #' @param model_id SBML model identifier (defaults to `petab$model_id` or
@@ -1684,7 +1712,7 @@ exportPEtab <- function(data, reactions, observables, p, pouter,
 exportPEtabObject <- function(petab, dir, model_id = NULL, amicipath = NULL,
                               overwrite = FALSE) {
 
-  stopifnot(inherits(petab, "petab_problem") || is.list(petab))
+  stopifnot(inherits(petab, "petabProblem") || is.list(petab))
   if (is.null(model_id)) model_id <- petab$model_id %||% "dMod_export"
 
   if (!dir.exists(dir)) dir.create(dir, recursive = TRUE)

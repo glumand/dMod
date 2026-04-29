@@ -24,7 +24,7 @@
                rinit = 1, rmax = 10)
 
   ## Round-trip back to PEtab on disk. exportPEtabObject takes the full
-  ## petab_problem list; for a dMod-native problem (no PEtab origin), use
+  ## petabProblem list; for a dMod-native problem (no PEtab origin), use
   ## exportPEtab(data, obj, model, g, x, p, pouter, lower, upper, ...).
   out_dir <- file.path(tempdir(), "petab_export")
   yaml_out <- exportPEtabObject(petab, out_dir, overwrite = TRUE)
