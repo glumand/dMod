@@ -51,8 +51,18 @@ import_sbml <- function(modelpath, amicipath = NULL) {
          "Check that ~/.virtualenvs/amici/ has python-libsbml installed.")
   json_content <- rjson::fromJSON(file = tmpfile_json)
 
-  S <- do.call(cbind, json_content[["S"]])
-  S[S==0] <- NA
+  # `S` from the python side is a list-of-lists with shape
+  # `[n_species][n_reactions]`. rjson::fromJSON collapses fully-nested
+  # arrays whose inner length is 1 into a bare vector, which breaks
+  # `cbind`'s list-of-columns contract. We reshape against the known
+  # state/reaction counts so the resulting matrix is always
+  # `[n_reactions rows x n_states cols]`, matching `eqnlist`'s convention.
+  S_raw <- json_content[["S"]]
+  n_states <- length(json_content[["stateNames"]])
+  n_rxns   <- length(json_content[["v"]])
+  S <- if (is.list(S_raw)) do.call(cbind, S_raw)
+       else matrix(unlist(S_raw), nrow = n_rxns, ncol = n_states)
+  S[S == 0] <- NA
 
   # libsbml L3 emits natural log as `ln(x)`, but both R's stats::D() and the
   # C math library expect `log(x)` for natural log. Apply this normalisation

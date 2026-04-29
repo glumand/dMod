@@ -456,3 +456,281 @@ test_that("export_sbml emits InitialAssignment for symbolic state initials", {
 
   unlink(out_xml)
 })
+
+
+## --- trafo-aware exportPEtab: pure-R helper unit tests --------------------
+##
+## The strip + classify decomposer should be unit-testable without AMICI
+## because it operates only on character RHSes and named eqnvecs.
+
+test_that(".petab_strip_param_scale compensates the chain rule per-occurrence", {
+  # Clean wrap stays clean (importer chain rule re-wraps it)
+  expect_equal(
+    dMod:::.petab_strip_param_scale("10^(K_REFLUX)", c(K_REFLUX = "log10")),
+    "K_REFLUX")
+  # Steady-state-like product of clean wraps
+  expect_equal(
+    dMod:::.petab_strip_param_scale(
+      "10^(TCA_CELL) * 10^(K_EXPORT_CANA) / 10^(K_REFLUX)",
+      c(TCA_CELL = "log10", K_EXPORT_CANA = "log10", K_REFLUX = "log10")),
+    "TCA_CELL * K_EXPORT_CANA/K_REFLUX")
+  # Compound expression: bare KM inside is compensated with log10(KM)
+  expect_equal(
+    dMod:::.petab_strip_param_scale("10^(KM + 5)", c(KM = "log10")),
+    "10^(log10(KM) + 5)")
+  # Mixed wrap: clean wrap stripped, bare occurrence compensated
+  expect_equal(
+    dMod:::.petab_strip_param_scale("10^(K) + K", c(K = "log10")),
+    "K + log10(K)")
+  # exp(.) for log scale, with compensation
+  expect_equal(
+    dMod:::.petab_strip_param_scale("exp(K)", c(K = "log")),
+    "K")
+  expect_equal(
+    dMod:::.petab_strip_param_scale("exp(KM + 5)", c(KM = "log")),
+    "exp(log(KM) + 5)")
+  # lin parameters unchanged
+  expect_equal(
+    dMod:::.petab_strip_param_scale("K1 * K2 + offset",
+      c(K1 = "log10", K2 = "log10", offset = "lin")),
+    "log10(K1) * log10(K2) + offset")
+  # Pure numeric literal — passes through
+  expect_equal(
+    dMod:::.petab_strip_param_scale("0", c()), "0")
+})
+
+
+test_that(".petab_classify_lhs categorizes per-condition RHSes", {
+  conds <- c("c1", "c2")
+  stripped <- list(
+    c1 = c(s = "1", k = "K", state = "0", iden = "iden", v = "K"),
+    c2 = c(s = "1", k = "K", state = "0", iden = "iden", v = "K2"))
+  # all-numeric constant
+  expect_equal(dMod:::.petab_classify_lhs(stripped, "s", conds),
+               list(kind = "const_numeric", value = 1))
+  # all-symbolic constant
+  expect_equal(dMod:::.petab_classify_lhs(stripped, "k", conds),
+               list(kind = "const_symbolic", formula = "K"))
+  # numeric-zero (state init)
+  expect_equal(dMod:::.petab_classify_lhs(stripped, "state", conds),
+               list(kind = "const_numeric", value = 0))
+  # identity (RHS == LHS)
+  expect_equal(dMod:::.petab_classify_lhs(stripped, "iden", conds),
+               list(kind = "identity"))
+  # varying
+  res <- dMod:::.petab_classify_lhs(stripped, "v", conds)
+  expect_equal(res$kind, "varying")
+  expect_equal(res$per_cond, c(c1 = "K", c2 = "K2"))
+  # missing
+  expect_equal(dMod:::.petab_classify_lhs(stripped, "absent", conds),
+               list(kind = "missing"))
+})
+
+
+test_that(".petab_classify_lhs collapses 10^0 -> 1 via eval_constant", {
+  conds <- c("c1", "c2")
+  stripped <- list(c1 = c(s = "10^0"), c2 = c(s = "10^0"))
+  res <- dMod:::.petab_classify_lhs(stripped, "s", conds)
+  expect_equal(res, list(kind = "const_numeric", value = 1))
+})
+
+
+## --- trafo-aware exportPEtab: native roundtrip ----------------------------
+
+test_that("native exportPEtab roundtrips outer pouter on log10 scale (1-cond)", {
+
+  setwd(tempdir())
+  if (!.amici_works()) skip("AMICI / Python virtualenv not available")
+
+  # Tiny 2-state model, single condition. Build the trafo via explicit
+  # eqnvec literals to avoid `define`'s NSE which can't see test_that locals.
+  reactions <- eqnlist() %>%
+    addReaction("A", "B", rate = "k1*A", description = "fwd") %>%
+    addReaction("B", "A", rate = "k2*B", description = "rev")
+
+  m <- odemodel(reactions, modelname = "rt1_ode", compile = FALSE,
+                solver = "deSolve")
+  x_native <- Xs(m)
+
+  obs <- eqnvec(obs_a = "A", obs_b = "B")
+  g_native <- Y(obs, f = x_native, condition = NULL,
+                compile = FALSE, modelname = "rt1_obs", attach.input = FALSE)
+
+  trafo <- as.eqnvec(c(A = "10^(A)", B = "10^(B)",
+                       k1 = "10^(K1)", k2 = "10^(K2)"))
+  p_native <- P(trafo, condition = "c1", compile = FALSE,
+                modelname = "rt1_par")
+  compile(g_native, x_native, p_native, cores = 1)
+
+  data <- as.datalist(data.frame(
+    name = c("obs_a", "obs_b"), time = c(1, 1),
+    value = c(0.5, 0.3), sigma = c(1, 1),
+    condition = c("c1", "c1"), stringsAsFactors = FALSE))
+
+  pouter <- c(A = -1, B = -1, K1 = -1, K2 = -1)
+  obj_native <- normL2(data, g_native * x_native * p_native)
+
+  out_dir <- file.path(tempdir(), "petab_rt1")
+  yaml_out <- exportPEtab(
+    data = data, reactions = reactions, observables = obs,
+    p = p_native, pouter = pouter,
+    parameterScale = "log10", model_id = "rt1_export",
+    dir = out_dir, overwrite = TRUE)
+
+  petab <- importPEtab(yaml_out, solver = "deSolve",
+                       modelname = "rt1_imp")
+
+  expect_setequal(names(petab$pouter), names(pouter))
+  expect_true(all(attr(petab$pouter, "petab_scales") == "log10"))
+
+  v_native <- obj_native(pouter, deriv = FALSE)$value
+  v_petab  <- petab$obj(pouter[names(petab$pouter)],
+                        fixed = petab$fixed, deriv = FALSE)$value
+  expect_lt(abs(v_native - v_petab), 1e-3)
+
+  unlink("rt1_*"); unlink("*.c"); unlink("*.cpp")
+  unlink("*.o"); unlink("*.so")
+})
+
+
+test_that("native exportPEtab roundtrips per-condition k override (2-cond)", {
+
+  setwd(tempdir())
+  if (!.amici_works()) skip("AMICI / Python virtualenv not available")
+
+  reactions <- eqnlist() %>%
+    addReaction("A", "B", rate = "k*A", description = "fwd")
+
+  m <- odemodel(reactions, modelname = "rt2_ode", compile = FALSE,
+                solver = "deSolve")
+  x_native <- Xs(m)
+  obs <- eqnvec(obs_a = "A")
+  g_native <- Y(obs, f = x_native, condition = NULL, compile = FALSE,
+                modelname = "rt2_obs", attach.input = FALSE)
+
+  # Two conditions with different k mapping (closed→K, open→K_OPEN).
+  trafo_closed <- as.eqnvec(c(A = "10^(A)", B = "10^(B)", k = "10^(K)"))
+  trafo_open   <- as.eqnvec(c(A = "10^(A)", B = "10^(B)", k = "10^(K_OPEN)"))
+  p_native <- P(trafo_closed, condition = "closed", compile = FALSE,
+                modelname = "rt2_par_c") +
+              P(trafo_open,   condition = "open",   compile = FALSE,
+                modelname = "rt2_par_o")
+  compile(g_native, x_native, p_native, cores = 1)
+
+  data <- as.datalist(data.frame(
+    name = c("obs_a", "obs_a"), time = c(1, 1),
+    value = c(0.5, 0.5), sigma = c(1, 1),
+    condition = c("closed", "open"), stringsAsFactors = FALSE))
+
+  pouter <- c(A = -1, B = -1, K = -1, K_OPEN = -0.5)
+  obj_native <- normL2(data, g_native * x_native * p_native)
+
+  out_dir <- file.path(tempdir(), "petab_rt2")
+  yaml_out <- exportPEtab(
+    data = data, reactions = reactions, observables = obs,
+    p = p_native, pouter = pouter,
+    parameterScale = "log10", model_id = "rt2_export",
+    dir = out_dir, overwrite = TRUE)
+
+  # conditions.tsv must have a `k` column distinguishing closed from open.
+  cond_df <- read.delim(file.path(out_dir, "conditions_rt2_export.tsv"),
+                        stringsAsFactors = FALSE)
+  expect_true("k" %in% colnames(cond_df))
+  expect_setequal(cond_df$k, c("K", "K_OPEN"))
+
+  petab <- importPEtab(yaml_out, solver = "deSolve",
+                       modelname = "rt2_imp")
+  expect_setequal(names(petab$pouter), c("A", "B", "K", "K_OPEN"))
+
+  v_native <- obj_native(pouter, deriv = FALSE)$value
+  v_petab  <- petab$obj(pouter[names(petab$pouter)],
+                        fixed = petab$fixed, deriv = FALSE)$value
+  expect_lt(abs(v_native - v_petab), 1e-3)
+
+  unlink("rt2_*"); unlink("*.c"); unlink("*.cpp")
+  unlink("*.o"); unlink("*.so")
+})
+
+
+test_that("exportPEtab errors on undeclared free symbol after strip", {
+
+  setwd(tempdir())
+  if (!.amici_works()) skip("AMICI / Python virtualenv not available")
+
+  reactions <- eqnlist() %>%
+    addReaction("A", "B", rate = "k*A", description = "fwd")
+  m <- odemodel(reactions, modelname = "err1_ode", compile = FALSE,
+                solver = "deSolve")
+  x <- Xs(m)
+  obs <- eqnvec(obs_a = "A")
+  g <- Y(obs, f = x, compile = FALSE, modelname = "err1_obs",
+         attach.input = FALSE)
+  trafo <- as.eqnvec(c(A = "10^(A)", B = "10^(B)",
+                       k = "10^(K) + UNDECLARED"))
+  p <- P(trafo, condition = "c1", compile = FALSE, modelname = "err1_par")
+
+  data <- as.datalist(data.frame(
+    name = "obs_a", time = 1, value = 0.5, sigma = 1, condition = "c1",
+    stringsAsFactors = FALSE))
+
+  expect_error(
+    exportPEtab(data = data, reactions = reactions, observables = obs,
+                p = p, pouter = c(A = 0, B = 0, K = -1),
+                parameterScale = "log10",
+                dir = tempfile("err1_"), overwrite = TRUE),
+    "undeclared symbol")
+
+  unlink("err1_*"); unlink("*.c"); unlink("*.cpp")
+  unlink("*.o"); unlink("*.so")
+})
+
+
+test_that("native exportPEtab roundtrips compound trafos like 10^(KM + 5)", {
+
+  setwd(tempdir())
+  if (!.amici_works()) skip("AMICI / Python virtualenv not available")
+
+  # 1-state, 1-reaction with a non-trivial compound mapping for the rate:
+  #   k = 10^(K + 5) — chain-rule "compensation" path, not strippable.
+  reactions <- eqnlist() %>%
+    addReaction("A", "B", rate = "k*A", description = "fwd")
+  m <- odemodel(reactions, modelname = "rt3_ode", compile = FALSE,
+                solver = "deSolve")
+  x <- Xs(m)
+  obs <- eqnvec(obs_a = "A")
+  g <- Y(obs, f = x, compile = FALSE, modelname = "rt3_obs",
+         attach.input = FALSE)
+  trafo <- as.eqnvec(c(A = "10^(A)", B = "10^(B)", k = "10^(K + 5)"))
+  p <- P(trafo, condition = "c1", compile = FALSE, modelname = "rt3_par")
+  compile(g, x, p, cores = 1)
+
+  data <- as.datalist(data.frame(
+    name = "obs_a", time = 1, value = 0.5, sigma = 1, condition = "c1",
+    stringsAsFactors = FALSE))
+
+  pouter <- c(A = 0, B = 0, K = -1)
+  obj_native <- normL2(data, g * x * p)
+
+  out_dir <- file.path(tempdir(), "petab_rt3")
+  yaml_out <- exportPEtab(
+    data = data, reactions = reactions, observables = obs,
+    p = p, pouter = pouter,
+    parameterScale = "log10", model_id = "rt3_export",
+    dir = out_dir, overwrite = TRUE)
+
+  # The conditions.tsv cell for k must contain the compensated form
+  # `10^(log10(K) + 5)` so the importer's chain rule reproduces 10^(K+5).
+  cond_df <- read.delim(file.path(out_dir, "conditions_rt3_export.tsv"),
+                        stringsAsFactors = FALSE)
+  expect_match(as.character(cond_df$k[[1L]]), "log10\\(K\\)")
+
+  petab <- importPEtab(yaml_out, solver = "deSolve",
+                       modelname = "rt3_imp")
+  v_native <- obj_native(pouter, deriv = FALSE)$value
+  v_petab  <- petab$obj(pouter[names(petab$pouter)],
+                        fixed = petab$fixed, deriv = FALSE)$value
+  expect_lt(abs(v_native - v_petab), 1e-3)
+
+  unlink("rt3_*"); unlink("*.c"); unlink("*.cpp")
+  unlink("*.o"); unlink("*.so")
+})

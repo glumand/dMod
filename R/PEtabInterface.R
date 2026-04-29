@@ -1040,166 +1040,432 @@ print.petab_problem <- function(x, ...) {
 
 
 ## --- exporter --------------------------------------------------------------
+##
+## The forward direction is the symbolic inverse of `.petab_build_trafo`
+## (line 441). Given a dMod parfn `p`, we read its per-condition LHS=RHS
+## eqnvec via `getEquations(p)`, strip the parameter-scale chain rule
+## (replacing `10^(op)` / `exp(op)` subexpressions with bare `op`), and
+## classify each LHS — the resulting (a) constants land as SBML defaults
+## or initialConcentrations, (b) constant symbolic mappings land as
+## conditions.tsv columns or initialAssignments, (c) per-condition-varying
+## mappings land as conditions.tsv override columns, (d) identity mappings
+## are the importer's default and need no emission. The single source of
+## truth is `getEquations(p)`; `attr(data, "condition.grid")` is ignored.
+
+# Internal: does `e` syntactically match the bare symbol `op_sym`, possibly
+# wrapped in redundant parentheses (`(X)` parses as a call to `(`)? dMod's
+# `repar` emits `10^(K)` which parses as `^(10, (K))` — i.e. the exponent
+# slot is the parenthesis-call, not the bare K symbol. We treat both forms
+# as equivalent.
+.petab_is_bare <- function(e, op_sym) {
+  if (is.symbol(e) && identical(e, op_sym)) return(TRUE)
+  if (is.call(e) && length(e) == 2L &&
+      identical(e[[1L]], as.symbol("(")) &&
+      .petab_is_bare(e[[2L]], op_sym)) return(TRUE)
+  FALSE
+}
+
+# Compensate every occurrence of a single log/log10-scaled outer parameter
+# `op` inside `expr` for the importer's chain rule wrap (which substitutes
+# `op → 10^(op)` for log10 / `op → exp(op)` for log on every RHS). Two
+# cases per occurrence:
+#
+#   - Direct exponent of `10^(.)` for log10 (or argument of `exp(.)` for
+#     log): leave the inner symbol bare. After import, chain rule re-wraps
+#     it so the original `10^(op)` form is reproduced verbatim.
+#
+#   - Anywhere else (compound expression, bare symbol elsewhere): wrap
+#     with `log10(.)` (or `log(.)`). After chain rule, `log10(10^(op))`
+#     simplifies (numerically) to `op`, leaving the surrounding compound
+#     expression untouched. This makes round-trip work for any
+#     algebraic combination, e.g. `10^(KM + 5)` or `K1 * K2 + offset`.
+#
+# Mixed wrap (e.g. `10^(K) + K`) is no longer ambiguous — the clean wrap
+# stays clean, the bare K gets compensated independently.
+.petab_compensate_chain_rule <- function(expr, op, scale) {
+  op_sym  <- as.symbol(op)
+  if (scale == "log10") {
+    inv_head     <- as.symbol("log10")
+    is_clean_wrap <- function(e) {
+      is.call(e) && length(e) == 3L && identical(e[[1L]], as.symbol("^")) &&
+      is.numeric(e[[2L]]) && length(e[[2L]]) == 1L && e[[2L]] == 10 &&
+      .petab_is_bare(e[[3L]], op_sym)
+    }
+  } else {  # "log"
+    inv_head     <- as.symbol("log")
+    is_clean_wrap <- function(e) {
+      is.call(e) && length(e) == 2L && identical(e[[1L]], as.symbol("exp")) &&
+      .petab_is_bare(e[[2L]], op_sym)
+    }
+  }
+  walk <- function(e) {
+    if (is_clean_wrap(e)) return(op_sym)
+    if (is.call(e)) {
+      for (i in seq_along(e)[-1L]) e[[i]] <- walk(e[[i]])
+      return(e)
+    }
+    if (is.symbol(e) && identical(e, op_sym))
+      return(call(as.character(inv_head), op_sym))
+    e
+  }
+  walk(expr)
+}
+
+# Compensate a single RHS string for the importer's chain rule, for every
+# log/log10-scaled outer parameter at once. Pure numeric literals pass
+# through unchanged.
+.petab_strip_param_scale <- function(rhs_str, scales) {
+  s <- as.character(rhs_str)
+  if (!is.na(suppressWarnings(as.numeric(s)))) return(s)
+  expr <- tryCatch(parse(text = s, keep.source = FALSE)[[1L]],
+                   error = function(e)
+                     stop("Cannot parse trafo RHS `", s, "`: ",
+                          conditionMessage(e), call. = FALSE))
+  log10_pars <- names(scales)[scales == "log10"]
+  log_pars   <- names(scales)[scales == "log"]
+  for (op in log10_pars)
+    expr <- .petab_compensate_chain_rule(expr, op, "log10")
+  for (op in log_pars)
+    expr <- .petab_compensate_chain_rule(expr, op, "log")
+  paste(deparse(expr, width.cutoff = 500L), collapse = "")
+}
+
+# Apply the strip to every per-condition eqnvec.
+.petab_strip_trafo <- function(eqs, scales) {
+  lapply(eqs, function(eqv) {
+    nm  <- names(eqv)
+    raw <- as.character(unclass(eqv))
+    out <- vapply(raw,
+                  function(rhs) .petab_strip_param_scale(rhs, scales),
+                  character(1))
+    names(out) <- nm
+    out
+  })
+}
+
+# Classify a single LHS across conditions:
+#   "missing"        — at least one condition has no entry for this LHS
+#   "identity"       — every condition's RHS == LHS (importer's build_default)
+#   "const_numeric"  — every condition's RHS is the same numeric literal
+#   "const_symbolic" — every condition's RHS is the same symbolic formula
+#   "varying"        — RHS differs across conditions
+.petab_classify_lhs <- function(stripped_eqs, lhs, conds) {
+  rhs <- vapply(conds, function(c) {
+    e <- stripped_eqs[[c]]
+    v <- if (lhs %in% names(e)) e[[lhs]] else NA_character_
+    if (length(v) == 0L || is.na(v)) NA_character_ else as.character(v)
+  }, character(1))
+  if (any(is.na(rhs))) return(list(kind = "missing"))
+  if (all(rhs == lhs)) return(list(kind = "identity"))
+  # Try to collapse closed-form numeric expressions (e.g. "10^0" → 1) so they
+  # land as SBML defaults / initialConcentrations rather than conditions.tsv
+  # columns referencing literal arithmetic.
+  vals <- vapply(rhs, .petab_eval_constant, numeric(1))
+  if (length(unique(rhs)) == 1L) {
+    if (!is.na(vals[[1L]]))
+      return(list(kind = "const_numeric", value = unname(vals[[1L]])))
+    return(list(kind = "const_symbolic", formula = unname(rhs[[1L]])))
+  }
+  # Per-condition values: if every cell evaluates to a constant, store the
+  # numeric values; otherwise pass the raw formulas through.
+  if (all(!is.na(vals)))
+    return(list(kind = "varying",
+                per_cond = setNames(as.character(unname(vals)), conds)))
+  list(kind = "varying", per_cond = rhs)
+}
+
+# Decompose the per-condition trafo into PEtab v1 building blocks.
+# Returns:
+#   conditions_df   data.frame with conditionId column + override columns
+#                   (NA where no override). Rownames = condition names.
+#   inits           named list keyed by state — numeric (initialConcentration)
+#                   or character (initialAssignment formula).
+#   sbml_extra_pars named numeric — additional fixed-default parameters that
+#                   must appear in SBML so condition.tsv columns and
+#                   collapsed inner_pars resolve to a declared SId.
+.petab_decompose_trafo <- function(eqs, states, inner_pars, obs_inner,
+                                   pouter_names, fixed, scales) {
+
+  conds        <- names(eqs)
+  stripped     <- .petab_strip_trafo(eqs, scales)
+  inner_targets <- unique(c(states, inner_pars, obs_inner))
+
+  inits          <- list()
+  cond_overrides <- list()
+  sbml_extra_pars <- numeric(0)
+
+  declare_extra <- function(nm, val) {
+    if (!nm %in% c(pouter_names, names(fixed)))
+      sbml_extra_pars[[nm]] <<- val
+  }
+
+  for (lhs in inner_targets) {
+    cls    <- .petab_classify_lhs(stripped, lhs, conds)
+    state  <- lhs %in% states
+
+    switch(cls$kind,
+      missing = stop(sprintf(
+        "Trafo does not cover %s `%s` for at least one condition. Every state and inner parameter must appear on the trafo's LHS.",
+        if (state) "state" else "inner parameter", lhs), call. = FALSE),
+
+      identity = {
+        if (state) {
+          # State LHS = bare RHS of the same name. The trafo will resolve
+          # this at runtime via an outer parameter (or fixed) of the same
+          # name. Emit as an SBML <initialAssignment> referencing that
+          # parameter; the importer's chain rule will then reproduce
+          # `state = 10^(state)` (when the parameter is on log10 scale).
+          if (lhs %in% pouter_names || lhs %in% names(fixed))
+            inits[[lhs]] <- lhs
+          # otherwise leave to the post-loop default (0) — undeclared
+          # identity on a state means "init = 0 unless the user pouter has
+          # a name match", and the trafo's getSymbols would already have
+          # raised it as an undeclared symbol.
+        } else {
+          declare_extra(lhs, 1)
+        }
+      },
+
+      const_numeric = {
+        if (state) inits[[lhs]] <- cls$value
+        else       declare_extra(lhs, cls$value)
+      },
+
+      const_symbolic = {
+        if (state) {
+          inits[[lhs]] <- cls$formula
+        } else {
+          # Constant-across-conditions inner_par mapping. Emit as a
+          # conditions.tsv column with the same value in every row, and
+          # register the inner par as an SBML SId (placeholder default).
+          cond_overrides[[lhs]] <- setNames(rep(cls$formula, length(conds)),
+                                            conds)
+          declare_extra(lhs, 1)
+        }
+      },
+
+      varying = {
+        cond_overrides[[lhs]] <- cls$per_cond[conds]
+        if (state) {
+          # SBML default for a per-condition state init: a placeholder; the
+          # importer reads the per-row override anyway.
+          v0 <- suppressWarnings(as.numeric(cls$per_cond[[1L]]))
+          inits[[lhs]] <- if (!is.na(v0)) v0 else 0
+        } else {
+          declare_extra(lhs, 1)
+        }
+      }
+    )
+
+    # Free-symbol sanity check on the post-strip RHS.
+    if (cls$kind %in% c("const_symbolic", "varying")) {
+      rhs_strs <- if (cls$kind == "varying") cls$per_cond else cls$formula
+      free <- unique(unlist(lapply(rhs_strs, function(s) {
+        if (!is.na(suppressWarnings(as.numeric(s)))) character(0)
+        else getSymbols(s, exclude = c(states, "time"))
+      })))
+      declared <- c(pouter_names, names(fixed), names(sbml_extra_pars))
+      miss <- setdiff(free, declared)
+      if (length(miss))
+        stop(sprintf(
+          "Trafo RHS for `%s` references undeclared symbol(s): %s. Add to `pouter` or `fixed`.",
+          lhs, paste(miss, collapse = ", ")), call. = FALSE)
+    }
+  }
+
+  # Every state must have an init recorded (default 0).
+  for (st in setdiff(states, names(inits))) inits[[st]] <- 0
+
+  conditions_df <- data.frame(conditionId      = conds,
+                              row.names        = conds,
+                              stringsAsFactors = FALSE)
+  for (cn in names(cond_overrides))
+    conditions_df[[cn]] <- unname(cond_overrides[[cn]])
+
+  list(conditions_df   = conditions_df,
+       inits           = inits,
+       sbml_extra_pars = sbml_extra_pars)
+}
+
 
 #' Export a dMod problem to PEtab v1
 #'
-#' High-level exporter for problems assembled from native dMod pieces — an
-#' [eqnlist], an observation function (or eqnvec / named character vector of
-#' observable formulas), a [datalist], and an outer parameter vector — without
-#' going through [importPEtab()] first. Synthesises the missing PEtab metadata
-#' (one PEtab condition per datalist condition, no `observableParameters`/
-#' `noiseParameters` substitution, no pre-equilibration) and dispatches to
-#' [exportPEtabObject()] which writes the four TSV tables, the SBML model and
-#' a YAML manifest.
+#' Symbolically decomposes a dMod parameter transformation `p` and writes
+#' the corresponding PEtab v1 problem (parameters / observables / conditions
+#' / measurements TSVs, an SBML model, and a YAML manifest). The decomposer
+#' inverts the importer's [importPEtab()] trafo construction so the
+#' roundtrip preserves outer parameter names, scales, and per-condition
+#' overrides; the imported PEtab problem is fitted on the same outer
+#' parameter vector as the dMod-native problem.
 #'
-#' If you already have a `petab_problem` produced by [importPEtab()], call
-#' [exportPEtabObject()] directly — that path preserves the importer's
-#' sub-condition map and parameter-scale attribute verbatim.
-#'
-#' Limitations carried over from [exportPEtabObject()]:
+#' @section Algorithm:
+#' Given `p`, the exporter reads `getEquations(p)` (one eqnvec per
+#' condition keyed by inner-side LHS), strips the parameter-scale chain
+#' rule (replacing `10^(op)` with `op` for each `op` declared on log10
+#' scale; symmetric for `log`), and classifies each LHS. The
+#' classification drives where the mapping is emitted:
 #' \itemize{
-#'   \item Each datalist condition becomes one PEtab condition; per-row
-#'         `observableParameters`/`noiseParameters` substitutions and
-#'         pre-equilibration cannot be reconstructed from a dMod-native
-#'         problem. Build a `petab_problem` by hand if you need them.
-#'   \item Per-row data sigmas in the datalist are *not* written to
-#'         measurements.tsv — `noiseFormula` (set from `errors`) is the
-#'         single source of noise on the PEtab side.
-#'   \item Data values are written verbatim to `measurement`. PEtab v1
-#'         specifies `measurement` is on the linear scale regardless of
-#'         `observableTransformation`; if your datalist already holds
-#'         log-transformed values, invert them before calling.
+#'   \item Constant-numeric state inits → SBML `<initialConcentration>`.
+#'   \item Constant-symbolic state inits → SBML `<initialAssignment>`.
+#'   \item Constant-symbolic inner-parameter mappings → conditions.tsv
+#'         column with the same value in every row.
+#'   \item Per-condition-varying mappings → conditions.tsv column with
+#'         per-row values.
+#'   \item Identity mappings (RHS == LHS) → emitted nowhere; the importer's
+#'         `build_default` reproduces them.
+#' }
+#' Inner parameters that survive only as conditions.tsv overrides (or
+#' collapsed-numeric SBML defaults) are appended to `fixed` with placeholder
+#' values so the SBML model declares them as SIds and the importer's
+#' required-symbol check finds them.
+#'
+#' @section Limitations:
+#' \itemize{
+#'   \item Pre-equilibration is not yet roundtrippable through `p`. Use
+#'         [exportPEtabObject()] on the original `petab_problem` if you
+#'         need it.
+#'   \item Per-row data sigmas are not preserved; supply an explicit
+#'         `errors` formula (e.g. parameterised noise) if you need
+#'         non-constant noise.
+#'   \item Fixed parameters are always written with `parameterScale = "lin"`
+#'         (PEtab+dMod convention; cf. `exportPEtabObject` line 1387).
+#'         Wrapping a fixed-name in `10^(.)` inside the trafo will trigger
+#'         the mixed-wrap error.
 #' }
 #'
 #' @param data A [datalist] (or a list of data.frames keyed by condition,
 #'   each with `name`, `time`, `value` columns; or a long-format data.frame
-#'   that [as.datalist()] accepts).
-#' @param reactions An [eqnlist] describing the ODE network. Required because
-#'   SBML serialisation needs the stoichiometry / compartment metadata that
-#'   the compiled odemodel object does not retain.
+#'   that [as.datalist()] accepts). Only used as the measurement source —
+#'   `attr(data, "condition.grid")` is ignored.
+#' @param reactions An [eqnlist] describing the ODE network.
 #' @param observables Observable formulas keyed by observableId. Accepts a
 #'   named character vector, an [eqnvec], or an observation function produced
 #'   by [Y()] (formulas read from `attr(observables, "equations")`).
-#' @param pouter Named numeric vector of estimated parameters, on the chosen
-#'   `parameterScale`. Names become `parameterId`s in parameters.tsv.
-#' @param lower,upper Named numeric vectors of bounds, on the same scale as
-#'   `pouter`. If `NULL`, written as `-Inf`/`Inf`.
-#' @param fixed Optional named numeric vector of non-estimated parameters
-#'   (linear scale; written with `estimate = 0`).
-#' @param dir Output directory; created if missing.
+#' @param p A `parfn` produced by [P()]. Required: the symbolic trafo is
+#'   the source of truth for parameters.tsv, conditions.tsv, and
+#'   `<initialAssignment>` formulas.
+#' @param pouter Named numeric vector of estimated outer parameters, on the
+#'   chosen `parameterScale`. Names become `parameterId`s in parameters.tsv.
 #' @param errors Noise formulas keyed by observableId. Accepts a named
 #'   character vector, [eqnvec], or a Y-built error function. If `NULL`,
 #'   defaults to `"1"` per observable (constant unit noise).
-#' @param condition.grid Optional `data.frame` of per-condition overrides
-#'   (one row per condition, indexed by condition name; columns name model
-#'   symbols whose values vary across conditions). If `NULL`, falls back to
-#'   `attr(data, "condition.grid")`, then to a trivial grid.
-#' @param inits Optional named numeric or character vector of state initial
-#'   values keyed by state name. Defaults to `0` for every state. Character
-#'   entries are emitted as SBML `<initialAssignment>` formulas.
+#' @param lower,upper Named numeric vectors of bounds, on the same scale as
+#'   `pouter`. If `NULL`, written as `-Inf`/`Inf`.
+#' @param fixed Optional named numeric vector of non-estimated parameters
+#'   on the linear scale.
 #' @param parameterScale Scalar `"lin"`/`"log"`/`"log10"` (broadcast to all
-#'   parameters in `pouter` + `fixed`) or a named character vector keyed by
-#'   parameterId.
-#' @param observableTransformation Scalar or named character — the PEtab
-#'   `observableTransformation` per observableId. `"lin"`/`"log"`/`"log10"`.
-#' @param noiseDistribution Scalar or named character — the PEtab
-#'   `noiseDistribution` per observableId. `"normal"`/`"laplace"`/
-#'   `"log-normal"`.
+#'   names in `pouter`) or a named character vector keyed by parameterId.
+#'   Defaults to `"log10"` (matches dMod's `insert("x ~ 10^X", ...)` idiom).
+#' @param observableTransformation Scalar or named character —
+#'   `"lin"`/`"log"`/`"log10"` per observableId.
+#' @param noiseDistribution Scalar or named character — `"normal"`/
+#'   `"laplace"`/`"log-normal"` per observableId.
 #' @param model_id SBML model identifier; defaults to `"dMod_export"`.
 #' @param amicipath Forwarded to [export_sbml()].
+#' @param dir Output directory; created if missing.
 #' @param overwrite Whether to overwrite existing PEtab files in `dir`.
 #' @return Path to the written YAML manifest, invisibly.
 #' @seealso [exportPEtabObject()] for the lower-level entry that takes a
 #'   pre-assembled `petab_problem` list. [importPEtab()] for the inverse.
 #' @export
-exportPEtab <- function(data, reactions, observables,
-                        pouter, lower = NULL, upper = NULL, fixed = NULL,
-                        dir,
+exportPEtab <- function(data, reactions, observables, p, pouter,
                         errors = NULL,
-                        condition.grid = NULL,
-                        inits = NULL,
-                        parameterScale = "lin",
+                        lower = NULL, upper = NULL, fixed = NULL,
+                        parameterScale = "log10",
                         observableTransformation = "lin",
                         noiseDistribution = "normal",
                         model_id = "dMod_export",
                         amicipath = NULL,
-                        overwrite = FALSE) {
+                        dir, overwrite = FALSE) {
 
-  ## --- 1) datalist normalisation ------------------------------------------
+  ## --- 1. datalist normalisation ------------------------------------------
   if (is.data.frame(data)) data <- as.datalist(data)
   if (is.list(data) && !inherits(data, "datalist")) data <- as.datalist(data)
   if (!inherits(data, "datalist"))
     stop("`data` must be a datalist, list of data.frames, or long-format data.frame.")
-  cond_ids <- names(data)
-  if (is.null(cond_ids) || any(!nzchar(cond_ids)))
-    stop("Every entry in `data` must have a non-empty condition name.")
 
-  ## --- 2) observable / error formulas -------------------------------------
+  ## --- 2. extract per-condition trafo from p ------------------------------
+  if (!is.function(p) || is.null(attr(p, "mappings")))
+    stop("`p` must be a parfn produced by P() — needed to decompose the parameter trafo.")
+  eqs <- getEquations(p)
+  if (!is.list(eqs)) eqs <- list(eqs)
+  conds <- names(eqs)
+  if (is.null(conds) || any(!nzchar(conds)))
+    stop("`getEquations(p)` returned an unnamed list — every condition must have a name.")
+
+  ## --- 3. reactions / observables / errors --------------------------------
+  if (!inherits(reactions, "eqnlist"))
+    stop("`reactions` must be an eqnlist (the ODE network with stoichiometry).")
+  states <- reactions$states
+
   pull_eqns <- function(obj, what) {
     if (is.function(obj)) {
       eqns <- attr(obj, "equations")
       if (is.null(eqns))
         stop(sprintf(
-          "`%s` is a function but carries no `equations` attribute. Pass an explicit named character vector instead.",
-          what))
-      if (is.list(eqns)) eqns <- eqns[[1]]
+          "`%s` is a function but carries no `equations` attribute.", what))
+      if (is.list(eqns)) eqns <- eqns[[1L]]
       return(setNames(as.character(eqns), names(eqns)))
     }
     if (inherits(obj, "eqnvec"))
       return(setNames(as.character(unclass(obj)), names(obj)))
     if (is.character(obj) && !is.null(names(obj))) return(obj)
-    stop(sprintf("`%s` must be a named character vector, an eqnvec, or a Y-built function.",
-                 what))
+    stop(sprintf("`%s` must be a named character vector, eqnvec, or Y-built fn.", what))
   }
   obs_eqns <- pull_eqns(observables, "observables")
   if (is.null(names(obs_eqns)) || any(!nzchar(names(obs_eqns))))
     stop("`observables` entries must be named (observableId -> formula).")
   obs_ids <- names(obs_eqns)
 
-  if (is.null(errors)) {
-    err_eqns <- setNames(rep("1", length(obs_ids)), obs_ids)
-  } else {
-    err_eqns <- pull_eqns(errors, "errors")
-    miss <- setdiff(obs_ids, names(err_eqns))
-    if (length(miss))
-      stop("`errors` is missing entries for observable(s): ",
-           paste(miss, collapse = ", "))
-    err_eqns <- err_eqns[obs_ids]
-  }
+  err_eqns <- if (is.null(errors)) setNames(rep("1", length(obs_ids)), obs_ids)
+              else pull_eqns(errors, "errors")
+  miss <- setdiff(obs_ids, names(err_eqns))
+  if (length(miss))
+    stop("`errors` is missing entries for: ", paste(miss, collapse = ", "))
+  err_eqns <- err_eqns[obs_ids]
 
-  ## --- 3) PEtab metadata broadcasts ---------------------------------------
-  broadcast_named <- function(x, ids, what, allowed) {
-    if (length(x) == 1L && (is.null(names(x)) || !nzchar(names(x)))) {
-      x <- setNames(rep(unname(x), length(ids)), ids)
-    } else {
-      miss <- setdiff(ids, names(x))
-      if (length(miss))
-        stop(sprintf("`%s` is missing entries for: %s",
-                     what, paste(miss, collapse = ", ")))
-      x <- x[ids]
-    }
-    bad <- setdiff(unique(x), allowed)
-    if (length(bad))
-      stop(sprintf("Unknown %s value(s): %s. Allowed: %s.",
-                   what, paste(bad, collapse = ", "),
-                   paste(allowed, collapse = ", ")))
-    x
-  }
+  ## --- 4. inner_pars / obs_inner (mirror importer logic) ------------------
+  rate_syms <- unique(unlist(lapply(reactions$rates, function(r)
+                getSymbols(r, exclude = c(states, "time")))))
+  inner_pars <- setdiff(rate_syms, states)
+  obs_syms <- unique(unlist(lapply(obs_eqns, function(f)
+                getSymbols(f, exclude = c(states, "time")))))
+  noise_syms <- unique(unlist(lapply(err_eqns, function(f) {
+                if (is.na(suppressWarnings(as.numeric(f)))) getSymbols(f)
+                else character(0)
+              })))
+  obs_inner <- setdiff(unique(c(obs_syms, noise_syms)),
+                       c(states, inner_pars, "time"))
 
-  ## --- 4) parameter scales / bounds ---------------------------------------
+  ## --- 5. validate pouter / fixed / scales --------------------------------
   pouter_ids <- names(pouter)
   if (is.null(pouter_ids) || any(!nzchar(pouter_ids)))
     stop("`pouter` must be a named numeric vector.")
   if (is.null(fixed)) fixed <- numeric(0)
   if (length(fixed) > 0L && (is.null(names(fixed)) || any(!nzchar(names(fixed)))))
     stop("`fixed` must be a named numeric vector.")
-  all_ids <- c(pouter_ids, names(fixed))
-  if (anyDuplicated(all_ids))
-    stop("Parameter ids overlap between `pouter` and `fixed`: ",
-         paste(all_ids[duplicated(all_ids)], collapse = ", "))
-  param_scales <- broadcast_named(parameterScale, all_ids,
-                                  "parameterScale", c("lin", "log", "log10"))
+  if (anyDuplicated(c(pouter_ids, names(fixed))))
+    stop("Parameter ids overlap between `pouter` and `fixed`.")
 
+  broadcast_scale <- function(s, ids) {
+    if (length(s) == 1L && (is.null(names(s)) || !nzchar(names(s))))
+      return(setNames(rep(unname(s), length(ids)), ids))
+    miss <- setdiff(ids, names(s))
+    if (length(miss))
+      stop("`parameterScale` is missing entries for: ", paste(miss, collapse = ", "))
+    s[ids]
+  }
+  scales_pouter <- broadcast_scale(parameterScale, pouter_ids)
+  bad <- setdiff(unique(scales_pouter), c("lin", "log", "log10"))
+  if (length(bad))
+    stop("Unknown parameterScale(s): ", paste(bad, collapse = ", "))
+
+  # Fixed parameters MUST be linear (PEtab+dMod convention; see
+  # exportPEtabObject:1387 — fixed always written as parameterScale="lin").
+  scales_fixed <- setNames(rep("lin", length(fixed)), names(fixed))
+  scales_all   <- c(scales_pouter, scales_fixed)
+
+  ## --- 6. bounds ----------------------------------------------------------
   if (is.null(lower)) lower <- setNames(rep(-Inf, length(pouter_ids)), pouter_ids)
   if (is.null(upper)) upper <- setNames(rep( Inf, length(pouter_ids)), pouter_ids)
   if (!setequal(names(lower), pouter_ids))
@@ -1208,82 +1474,87 @@ exportPEtab <- function(data, reactions, observables,
     stop("`upper` must be named like `pouter`.")
   lower <- lower[pouter_ids]; upper <- upper[pouter_ids]
 
-  attr(pouter, "petab_scales") <- param_scales[pouter_ids]
+  ## --- 7. decompose trafo -------------------------------------------------
+  decomp <- .petab_decompose_trafo(
+    eqs          = eqs,
+    states       = states,
+    inner_pars   = inner_pars,
+    obs_inner    = obs_inner,
+    pouter_names = pouter_ids,
+    fixed        = fixed,
+    scales       = scales_all)
 
-  ## --- 5) observable metadata ---------------------------------------------
-  obs_trafo  <- broadcast_named(observableTransformation, obs_ids,
-                                "observableTransformation",
-                                c("lin", "log", "log10"))
-  noise_dist <- broadcast_named(noiseDistribution, obs_ids,
-                                "noiseDistribution",
-                                c("normal", "laplace", "log-normal"))
+  fixed_full <- c(fixed, decomp$sbml_extra_pars)
+  if (anyDuplicated(names(fixed_full)))
+    stop("Internal error: duplicate fixed parameter id after decomposition: ",
+         paste(names(fixed_full)[duplicated(names(fixed_full))], collapse = ", "))
+
+  ## --- 8. observable metadata --------------------------------------------
+  broadcast_obs <- function(x, ids, what, allowed) {
+    if (length(x) == 1L && (is.null(names(x)) || !nzchar(names(x))))
+      x <- setNames(rep(unname(x), length(ids)), ids)
+    else {
+      miss <- setdiff(ids, names(x))
+      if (length(miss))
+        stop(sprintf("`%s` is missing entries for: %s", what,
+                     paste(miss, collapse = ", ")))
+      x <- x[ids]
+    }
+    bad <- setdiff(unique(x), allowed)
+    if (length(bad))
+      stop(sprintf("Unknown %s value(s): %s", what, paste(bad, collapse = ", ")))
+    x
+  }
+  obs_trafo  <- broadcast_obs(observableTransformation, obs_ids,
+                              "observableTransformation",
+                              c("lin", "log", "log10"))
+  noise_dist <- broadcast_obs(noiseDistribution, obs_ids,
+                              "noiseDistribution",
+                              c("normal", "laplace", "log-normal"))
   obs_meta <- list(obs        = obs_eqns,
                    noise      = err_eqns,
                    obs_trafo  = obs_trafo,
                    noise_dist = noise_dist)
 
-  ## --- 6) condition.grid + identity sub_cond_map --------------------------
-  if (is.null(condition.grid)) condition.grid <- attr(data, "condition.grid")
-  if (is.null(condition.grid)) {
-    condition.grid <- data.frame(conditionId = cond_ids,
-                                 row.names    = cond_ids,
-                                 stringsAsFactors = FALSE)
-  } else {
-    condition.grid <- as.data.frame(condition.grid, stringsAsFactors = FALSE)
-    if (!setequal(rownames(condition.grid), cond_ids)) {
-      if (!"conditionId" %in% colnames(condition.grid))
-        stop("`condition.grid` rownames don't match the datalist condition ",
-             "names and the data.frame has no `conditionId` column to ",
-             "dispatch on.")
-      if (!setequal(condition.grid$conditionId, cond_ids))
-        stop("`condition.grid$conditionId` does not match the datalist ",
-             "condition names.")
-      rownames(condition.grid) <- as.character(condition.grid$conditionId)
-    }
-    condition.grid <- condition.grid[cond_ids, , drop = FALSE]
-    if (!"conditionId" %in% colnames(condition.grid))
-      condition.grid$conditionId <- rownames(condition.grid)
+  ## --- 9. drive condition set from p (not from data) ----------------------
+  data_conds <- names(data)
+  miss_in_data <- setdiff(conds, data_conds)
+  miss_in_p    <- setdiff(data_conds, conds)
+  if (length(miss_in_p))
+    warning("data has condition(s) not covered by p (dropped): ",
+            paste(miss_in_p, collapse = ", "))
+  data_filtered <- data[intersect(conds, data_conds)]
+  for (c in miss_in_data) {
+    data_filtered[[c]] <- data.frame(
+      name = character(0), time = numeric(0),
+      value = numeric(0), sigma = numeric(0),
+      stringsAsFactors = FALSE)
   }
+  attr(data_filtered, "class") <- attr(data, "class")  # preserve datalist
+
   sub_cond_map <- data.frame(
-    simulationConditionId       = cond_ids,
+    simulationConditionId       = conds,
     preequilibrationConditionId = "",
     observableParameters        = "",
     noiseParameters             = "",
-    sub_condition               = cond_ids,
-    stringsAsFactors            = FALSE
-  )
+    sub_condition               = conds,
+    stringsAsFactors            = FALSE)
 
-  ## --- 7) reactions + inits -----------------------------------------------
-  if (!inherits(reactions, "eqnlist"))
-    stop("`reactions` must be an eqnlist (the ODE network with stoichiometry).")
-  states <- reactions$states
-  if (is.null(inits)) {
-    inits <- setNames(rep(0, length(states)), states)
-  } else {
-    if (is.null(names(inits)) || any(!nzchar(names(inits))))
-      stop("`inits` must be a named vector keyed by state name.")
-    miss <- setdiff(states, names(inits))
-    if (length(miss)) {
-      filled <- setNames(rep(0, length(miss)), miss)
-      inits  <- c(inits, filled)
-    }
-    inits <- inits[states]
-  }
+  ## --- 10. tag pouter with scales attr (consumed by exportPEtabObject) ---
+  attr(pouter, "petab_scales") <- scales_pouter
 
-  ## --- 8) assemble & dispatch ---------------------------------------------
   petab <- list(
     pouter         = pouter,
     lower          = lower,
     upper          = upper,
-    fixed          = fixed,
+    fixed          = fixed_full,
     obs_meta       = obs_meta,
     sub_cond_map   = sub_cond_map,
-    condition.grid = condition.grid,
-    data           = data,
+    condition.grid = decomp$conditions_df,
+    data           = data_filtered,
     reactions      = reactions,
-    inits          = inits,
-    model_id       = model_id
-  )
+    inits          = decomp$inits,
+    model_id       = model_id)
 
   exportPEtabObject(petab, dir, model_id = model_id,
                     amicipath = amicipath, overwrite = overwrite)
