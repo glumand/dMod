@@ -303,6 +303,41 @@ read_petab_tables <- function(yaml_path) {
              as.character(m$noiseParameters))
     else rep("", nrow(m))
 
+  # Sigma per row: take the observable's noiseFormula, apply per-row
+  # observable / noise parameter substitutions, then try to evaluate as a
+  # constant. If all symbols are eliminated and the result is finite, use it
+  # as sigma directly (fast path through normL2's data sigma column). If
+  # symbols remain (case 0015's "noise"), leave sigma = NA — the err model
+  # built by .petab_build_error_fn handles the per-condition formula.
+  sigma <- vapply(seq_len(nrow(m)), function(i) {
+    obsId <- m$observableId[i]
+    f <- obs_meta$noise[obsId]
+    if (is.na(f) || !nzchar(f)) return(NA_real_)
+    f <- .petab_substitute_param_string(f, m$observableParameters[i],
+                                        prefix = "observableParameter")
+    f <- .petab_substitute_param_string(f, m$noiseParameters[i],
+                                        prefix = "noiseParameter")
+    .petab_eval_constant(f)
+  }, numeric(1))
+
+  # When the per-row noise resolves to a finite numeric, the value is carried
+  # by the `sigma` column and consumed via normL2's fast path; the trafo's
+  # placeholder substitution is dead code (errmodel will be NULL for such
+  # observables). Collapse those rows' `noiseParameters` strings to a
+  # uniform literal so they share one sub-condition rather than spawning one
+  # compiled parameter trafo per unique sigma value. The literal preserves
+  # the original ";"-separated arity so any K-th placeholder reference still
+  # resolves cleanly.
+  numeric_noise <- !is.na(sigma) & nzchar(m$noiseParameters)
+  if (any(numeric_noise)) {
+    n_parts <- lengths(strsplit(m$noiseParameters[numeric_noise],
+                                ";", fixed = TRUE))
+    m$noiseParameters[numeric_noise] <- vapply(
+      pmax(n_parts, 1L),
+      function(n) paste(rep("1", n), collapse = ";"),
+      character(1))
+  }
+
   # Sub-condition key: (simCondId, peq, obsParStr, noiseParStr).
   # Empty strings collapse to a single key per sim cond. Hashes only kick in
   # when at least one of obs/noise param strings is non-empty AND varies.
@@ -331,23 +366,6 @@ read_petab_tables <- function(yaml_path) {
   if (anyDuplicated(sub_cond_map$sub_condition))
     stop("Internal: sub-condition map has duplicate sub_condition rows. ",
          "This indicates inconsistent observable/noise parameter strings.")
-
-  # Sigma per row: take the observable's noiseFormula, apply per-row
-  # observable / noise parameter substitutions, then try to evaluate as a
-  # constant. If all symbols are eliminated and the result is finite, use it
-  # as sigma directly (fast path through normL2's data sigma column). If
-  # symbols remain (case 0015's "noise"), leave sigma = NA — the err model
-  # built by .petab_build_error_fn handles the per-condition formula.
-  sigma <- vapply(seq_len(nrow(m)), function(i) {
-    obsId <- m$observableId[i]
-    f <- obs_meta$noise[obsId]
-    if (is.na(f) || !nzchar(f)) return(NA_real_)
-    f <- .petab_substitute_param_string(f, m$observableParameters[i],
-                                        prefix = "observableParameter")
-    f <- .petab_substitute_param_string(f, m$noiseParameters[i],
-                                        prefix = "noiseParameter")
-    .petab_eval_constant(f)
-  }, numeric(1))
 
   # Apply observable transformations to data values. PEtab convention: the
   # measurement column is on the linear scale even when
@@ -1417,12 +1435,27 @@ exportPEtab <- function(data, reactions, observables, p, pouter,
     stop("`observables` entries must be named (observableId -> formula).")
   obs_ids <- names(obs_eqns)
 
-  err_eqns <- if (is.null(errors)) setNames(rep("1", length(obs_ids)), obs_ids)
-              else pull_eqns(errors, "errors")
+  # Default error model: if the datalist carries a non-NA `sigma` column,
+  # encode per-row sigmas via PEtab's `noiseParameter1_<obsId>` placeholder
+  # so per-row noise survives the round-trip (the importer reads
+  # `noiseParameters` column from measurements.tsv and substitutes it back
+  # in). Falls back to constant `"1"` only if the datalist has no sigma.
+  has_per_row_sigma <- any(vapply(data, function(d) {
+    "sigma" %in% colnames(d) && any(!is.na(d$sigma))
+  }, logical(1)))
+  if (is.null(errors)) {
+    err_eqns <- if (has_per_row_sigma)
+      setNames(paste0("noiseParameter1_", obs_ids), obs_ids)
+    else
+      setNames(rep("1", length(obs_ids)), obs_ids)
+  } else {
+    err_eqns <- pull_eqns(errors, "errors")
+  }
   miss <- setdiff(obs_ids, names(err_eqns))
   if (length(miss))
     stop("`errors` is missing entries for: ", paste(miss, collapse = ", "))
   err_eqns <- err_eqns[obs_ids]
+  use_per_row_noise <- is.null(errors) && has_per_row_sigma
 
   ## --- 4. inner_pars / obs_inner (mirror importer logic) ------------------
   rate_syms <- unique(unlist(lapply(reactions$rates, function(r)
@@ -1436,6 +1469,13 @@ exportPEtab <- function(data, reactions, observables, p, pouter,
               })))
   obs_inner <- setdiff(unique(c(obs_syms, noise_syms)),
                        c(states, inner_pars, "time"))
+  # PEtab placeholders (`observableParameter<k>_<obsId>` /
+  # `noiseParameter<k>_<obsId>`) are spec sentinels bound per-row in
+  # measurements.tsv, not real inner parameters — strip them so the
+  # trafo decomposer doesn't expect a mapping for them. Mirror of the
+  # importer's filter at the required-symbol gap-fill (line 935-938).
+  obs_inner <- obs_inner[!grepl(
+    "^(observable|noise)Parameter[0-9]+_", obs_inner)]
 
   ## --- 5. validate pouter / fixed / scales --------------------------------
   pouter_ids <- names(pouter)
@@ -1516,29 +1556,69 @@ exportPEtab <- function(data, reactions, observables, p, pouter,
                    obs_trafo  = obs_trafo,
                    noise_dist = noise_dist)
 
-  ## --- 9. drive condition set from p (not from data) ----------------------
+  ## --- 9. drive condition set from p (not from data); split sub-conds -----
+  ## When per-row sigmas vary inside a single condition, encode them by
+  ## splitting the data into one sub-condition per unique sigma value (the
+  ## noiseParameters string). Sub-condition naming matches the importer's
+  ## `<sim_cond>__<noi_hash>` convention so a roundtrip yields the same
+  ## sub_cond_map shape on both sides.
   data_conds <- names(data)
   miss_in_data <- setdiff(conds, data_conds)
   miss_in_p    <- setdiff(data_conds, conds)
   if (length(miss_in_p))
     warning("data has condition(s) not covered by p (dropped): ",
             paste(miss_in_p, collapse = ", "))
-  data_filtered <- data[intersect(conds, data_conds)]
+
+  data_filtered <- list()
+  scm_rows      <- list()
+
+  for (c in intersect(conds, data_conds)) {
+    d <- data[[c]]
+    if (use_per_row_noise && "sigma" %in% colnames(d) && nrow(d) > 0L) {
+      sig_str <- ifelse(is.na(d$sigma), "1", formatC(d$sigma, digits = 17,
+                                                     format = "g"))
+      noi_h   <- .petab_subcond_hash(sig_str)
+      for (h in unique(noi_h)) {
+        sel  <- which(noi_h == h)
+        sub_name <- if (h == "") c else paste0(c, "__", h)
+        d_sub <- d[sel, , drop = FALSE]
+        d_sub$sigma <- NA_real_  # importer rebuilds from noiseParameters
+        data_filtered[[sub_name]] <- d_sub
+        scm_rows[[length(scm_rows) + 1L]] <- data.frame(
+          simulationConditionId       = c,
+          preequilibrationConditionId = "",
+          observableParameters        = "",
+          noiseParameters             = sig_str[sel[[1L]]],
+          sub_condition               = sub_name,
+          stringsAsFactors            = FALSE)
+      }
+    } else {
+      data_filtered[[c]] <- d
+      scm_rows[[length(scm_rows) + 1L]] <- data.frame(
+        simulationConditionId       = c,
+        preequilibrationConditionId = "",
+        observableParameters        = "",
+        noiseParameters             = "",
+        sub_condition               = c,
+        stringsAsFactors            = FALSE)
+    }
+  }
   for (c in miss_in_data) {
     data_filtered[[c]] <- data.frame(
       name = character(0), time = numeric(0),
       value = numeric(0), sigma = numeric(0),
       stringsAsFactors = FALSE)
+    scm_rows[[length(scm_rows) + 1L]] <- data.frame(
+      simulationConditionId       = c,
+      preequilibrationConditionId = "",
+      observableParameters        = "",
+      noiseParameters             = "",
+      sub_condition               = c,
+      stringsAsFactors            = FALSE)
   }
   attr(data_filtered, "class") <- attr(data, "class")  # preserve datalist
-
-  sub_cond_map <- data.frame(
-    simulationConditionId       = conds,
-    preequilibrationConditionId = "",
-    observableParameters        = "",
-    noiseParameters             = "",
-    sub_condition               = conds,
-    stringsAsFactors            = FALSE)
+  sub_cond_map <- do.call(rbind, scm_rows)
+  rownames(sub_cond_map) <- NULL
 
   ## --- 10. tag pouter with scales attr (consumed by exportPEtabObject) ---
   attr(pouter, "petab_scales") <- scales_pouter

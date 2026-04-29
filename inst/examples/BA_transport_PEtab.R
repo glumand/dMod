@@ -52,14 +52,11 @@ compile(g, x, p, cores = 4)
 ## --- 2. Data + fit -------------------------------------------------------
 
 data(badata)
-## Force constant unit noise (sigma = 1) so the dMod-native objective uses
-## the same noise model as the round-tripped PEtab objective (whose
-## noiseFormula is "1" per observable). dMod-native otherwise reads sigma
-## from the `sigma` column of the datalist row-by-row, which exportPEtab
-## cannot preserve as PEtab v1 noiseParameters placeholders without an
-## explicit error model.
-badata$sigma <- 1
 data <- as.datalist(badata)
+## badata carries per-row sigmas in the `sigma` column. exportPEtab
+## auto-encodes them via PEtab's `noiseParameter1_<obsId>` placeholder,
+## writing per-row sigma values into `noiseParameters` of measurements.tsv
+## — the round-trip preserves the data-side noise model exactly.
 
 outerpars <- getParameters(p)
 pouter    <- structure(rep(-1, length(outerpars)), names = outerpars)
@@ -70,6 +67,9 @@ fit <- trust(obj, pouter, rinit = 0.1, rmax = 5,
 phat <- fit$argument
 
 cat("dMod-native obj(phat) =", obj(phat)$value, "\n")
+
+times <- seq(0, 45, len = 300)
+plot((g*x*p)(times, phat), data)
 
 ## --- 3. Export to PEtab v1 ----------------------------------------------
 ## `exportPEtab` reads `getEquations(p)` and decomposes each per-condition
@@ -88,7 +88,6 @@ yaml_out <- exportPEtab(
   observables    = observables,
   p              = p,
   pouter         = phat,
-  errors         = c(buffer = "1", cellular = "1"),
   parameterScale = "log10",
   model_id       = "BileAcid",
   dir            = out_dir,

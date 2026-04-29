@@ -685,6 +685,62 @@ test_that("exportPEtab errors on undeclared free symbol after strip", {
 })
 
 
+test_that("native exportPEtab roundtrips per-row sigma via noiseParameters column", {
+
+  setwd(tempdir())
+  if (!.amici_works()) skip("AMICI / Python virtualenv not available")
+
+  reactions <- eqnlist() %>%
+    addReaction("A", "B", rate = "k*A", description = "fwd")
+  m <- odemodel(reactions, modelname = "rt_sig_ode", compile = FALSE,
+                solver = "deSolve")
+  x <- Xs(m)
+  obs <- eqnvec(obs_a = "A")
+  g <- Y(obs, f = x, condition = NULL, compile = FALSE,
+         modelname = "rt_sig_obs", attach.input = FALSE)
+  trafo <- as.eqnvec(c(A = "10^(A)", B = "10^(B)", k = "10^(K)"))
+  p <- P(trafo, condition = "c1", compile = FALSE, modelname = "rt_sig_par")
+  compile(g, x, p, cores = 1)
+
+  # Three measurements with three different sigmas — exercise the
+  # noiseParameter1_<obsId> placeholder + per-row noiseParameters path.
+  data <- as.datalist(data.frame(
+    name = "obs_a", time = c(1, 2, 3),
+    value = c(0.5, 0.3, 0.2), sigma = c(0.5, 1.0, 2.0),
+    condition = "c1", stringsAsFactors = FALSE))
+
+  pouter <- c(A = 0, B = 0, K = -1)
+  obj_native <- normL2(data, g * x * p)
+
+  out_dir <- file.path(tempdir(), "petab_rt_sig")
+  yaml_out <- exportPEtab(
+    data = data, reactions = reactions, observables = obs,
+    p = p, pouter = pouter,
+    parameterScale = "log10", model_id = "rt_sig_export",
+    dir = out_dir, overwrite = TRUE)
+
+  # observables.tsv must declare the placeholder noiseFormula.
+  obs_tsv <- read.delim(file.path(out_dir, "observables_rt_sig_export.tsv"),
+                        stringsAsFactors = FALSE)
+  expect_equal(obs_tsv$noiseFormula, "noiseParameter1_obs_a")
+
+  # measurements.tsv must carry per-row noiseParameters values.
+  meas_tsv <- read.delim(file.path(out_dir, "measurements_rt_sig_export.tsv"),
+                         stringsAsFactors = FALSE)
+  expect_setequal(as.numeric(meas_tsv$noiseParameters), c(0.5, 1.0, 2.0))
+
+  petab <- importPEtab(yaml_out, solver = "deSolve",
+                       modelname = "rt_sig_imp")
+  v_native <- obj_native(pouter, deriv = FALSE)$value
+  v_petab  <- petab$obj(pouter[names(petab$pouter)],
+                        fixed = petab$fixed, deriv = FALSE)$value
+  expect_lt(abs(v_native - v_petab), 1e-3)
+
+  unlink("rt_sig_*"); unlink("*.c"); unlink("*.cpp")
+  unlink("*.o"); unlink("*.so")
+})
+
+
 test_that("native exportPEtab roundtrips compound trafos like 10^(KM + 5)", {
 
   setwd(tempdir())

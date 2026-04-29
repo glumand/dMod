@@ -8,73 +8,65 @@ exportPEtab(
   data,
   reactions,
   observables,
+  p,
   pouter,
+  errors = NULL,
   lower = NULL,
   upper = NULL,
   fixed = NULL,
-  dir,
-  errors = NULL,
-  condition.grid = NULL,
-  inits = NULL,
-  parameterScale = "lin",
+  parameterScale = "log10",
   observableTransformation = "lin",
   noiseDistribution = "normal",
   model_id = "dMod_export",
   amicipath = NULL,
+  dir,
   overwrite = FALSE
 )
 }
 \arguments{
 \item{data}{A \link{datalist} (or a list of data.frames keyed by condition,
 each with \code{name}, \code{time}, \code{value} columns; or a long-format data.frame
-that \code{\link[=as.datalist]{as.datalist()}} accepts).}
+that \code{\link[=as.datalist]{as.datalist()}} accepts). Only used as the measurement source —
+\code{attr(data, "condition.grid")} is ignored.}
 
-\item{reactions}{An \link{eqnlist} describing the ODE network. Required because
-SBML serialisation needs the stoichiometry / compartment metadata that
-the compiled odemodel object does not retain.}
+\item{reactions}{An \link{eqnlist} describing the ODE network.}
 
 \item{observables}{Observable formulas keyed by observableId. Accepts a
 named character vector, an \link{eqnvec}, or an observation function produced
 by \code{\link[=Y]{Y()}} (formulas read from \code{attr(observables, "equations")}).}
 
-\item{pouter}{Named numeric vector of estimated parameters, on the chosen
-\code{parameterScale}. Names become \code{parameterId}s in parameters.tsv.}
+\item{p}{A \code{parfn} produced by \code{\link[=P]{P()}}. Required: the symbolic trafo is
+the source of truth for parameters.tsv, conditions.tsv, and
+\verb{<initialAssignment>} formulas.}
 
-\item{lower, upper}{Named numeric vectors of bounds, on the same scale as
-\code{pouter}. If \code{NULL}, written as \code{-Inf}/\code{Inf}.}
-
-\item{fixed}{Optional named numeric vector of non-estimated parameters
-(linear scale; written with \code{estimate = 0}).}
-
-\item{dir}{Output directory; created if missing.}
+\item{pouter}{Named numeric vector of estimated outer parameters, on the
+chosen \code{parameterScale}. Names become \code{parameterId}s in parameters.tsv.}
 
 \item{errors}{Noise formulas keyed by observableId. Accepts a named
 character vector, \link{eqnvec}, or a Y-built error function. If \code{NULL},
 defaults to \code{"1"} per observable (constant unit noise).}
 
-\item{condition.grid}{Optional \code{data.frame} of per-condition overrides
-(one row per condition, indexed by condition name; columns name model
-symbols whose values vary across conditions). If \code{NULL}, falls back to
-\code{attr(data, "condition.grid")}, then to a trivial grid.}
+\item{lower, upper}{Named numeric vectors of bounds, on the same scale as
+\code{pouter}. If \code{NULL}, written as \code{-Inf}/\code{Inf}.}
 
-\item{inits}{Optional named numeric or character vector of state initial
-values keyed by state name. Defaults to \code{0} for every state. Character
-entries are emitted as SBML \verb{<initialAssignment>} formulas.}
+\item{fixed}{Optional named numeric vector of non-estimated parameters
+on the linear scale.}
 
 \item{parameterScale}{Scalar \code{"lin"}/\code{"log"}/\code{"log10"} (broadcast to all
-parameters in \code{pouter} + \code{fixed}) or a named character vector keyed by
-parameterId.}
+names in \code{pouter}) or a named character vector keyed by parameterId.
+Defaults to \code{"log10"} (matches dMod's \code{insert("x ~ 10^X", ...)} idiom).}
 
-\item{observableTransformation}{Scalar or named character — the PEtab
-\code{observableTransformation} per observableId. \code{"lin"}/\code{"log"}/\code{"log10"}.}
+\item{observableTransformation}{Scalar or named character —
+\code{"lin"}/\code{"log"}/\code{"log10"} per observableId.}
 
-\item{noiseDistribution}{Scalar or named character — the PEtab
-\code{noiseDistribution} per observableId. \code{"normal"}/\code{"laplace"}/
-\code{"log-normal"}.}
+\item{noiseDistribution}{Scalar or named character — \code{"normal"}/
+\code{"laplace"}/\code{"log-normal"} per observableId.}
 
 \item{model_id}{SBML model identifier; defaults to \code{"dMod_export"}.}
 
 \item{amicipath}{Forwarded to \code{\link[=export_sbml]{export_sbml()}}.}
+
+\item{dir}{Output directory; created if missing.}
 
 \item{overwrite}{Whether to overwrite existing PEtab files in \code{dir}.}
 }
@@ -82,35 +74,53 @@ parameterId.}
 Path to the written YAML manifest, invisibly.
 }
 \description{
-High-level exporter for problems assembled from native dMod pieces — an
-\link{eqnlist}, an observation function (or eqnvec / named character vector of
-observable formulas), a \link{datalist}, and an outer parameter vector — without
-going through \code{\link[=importPEtab]{importPEtab()}} first. Synthesises the missing PEtab metadata
-(one PEtab condition per datalist condition, no \code{observableParameters}/
-\code{noiseParameters} substitution, no pre-equilibration) and dispatches to
-\code{\link[=exportPEtabObject]{exportPEtabObject()}} which writes the four TSV tables, the SBML model and
-a YAML manifest.
+Symbolically decomposes a dMod parameter transformation \code{p} and writes
+the corresponding PEtab v1 problem (parameters / observables / conditions
+/ measurements TSVs, an SBML model, and a YAML manifest). The decomposer
+inverts the importer's \code{\link[=importPEtab]{importPEtab()}} trafo construction so the
+roundtrip preserves outer parameter names, scales, and per-condition
+overrides; the imported PEtab problem is fitted on the same outer
+parameter vector as the dMod-native problem.
 }
-\details{
-If you already have a \code{petab_problem} produced by \code{\link[=importPEtab]{importPEtab()}}, call
-\code{\link[=exportPEtabObject]{exportPEtabObject()}} directly — that path preserves the importer's
-sub-condition map and parameter-scale attribute verbatim.
+\section{Algorithm}{
 
-Limitations carried over from \code{\link[=exportPEtabObject]{exportPEtabObject()}}:
+Given \code{p}, the exporter reads \code{getEquations(p)} (one eqnvec per
+condition keyed by inner-side LHS), strips the parameter-scale chain
+rule (replacing \code{10^(op)} with \code{op} for each \code{op} declared on log10
+scale; symmetric for \code{log}), and classifies each LHS. The
+classification drives where the mapping is emitted:
 \itemize{
-\item Each datalist condition becomes one PEtab condition; per-row
-\code{observableParameters}/\code{noiseParameters} substitutions and
-pre-equilibration cannot be reconstructed from a dMod-native
-problem. Build a \code{petab_problem} by hand if you need them.
-\item Per-row data sigmas in the datalist are \emph{not} written to
-measurements.tsv — \code{noiseFormula} (set from \code{errors}) is the
-single source of noise on the PEtab side.
-\item Data values are written verbatim to \code{measurement}. PEtab v1
-specifies \code{measurement} is on the linear scale regardless of
-\code{observableTransformation}; if your datalist already holds
-log-transformed values, invert them before calling.
+\item Constant-numeric state inits → SBML \verb{<initialConcentration>}.
+\item Constant-symbolic state inits → SBML \verb{<initialAssignment>}.
+\item Constant-symbolic inner-parameter mappings → conditions.tsv
+column with the same value in every row.
+\item Per-condition-varying mappings → conditions.tsv column with
+per-row values.
+\item Identity mappings (RHS == LHS) → emitted nowhere; the importer's
+\code{build_default} reproduces them.
+}
+Inner parameters that survive only as conditions.tsv overrides (or
+collapsed-numeric SBML defaults) are appended to \code{fixed} with placeholder
+values so the SBML model declares them as SIds and the importer's
+required-symbol check finds them.
+}
+
+\section{Limitations}{
+
+\itemize{
+\item Pre-equilibration is not yet roundtrippable through \code{p}. Use
+\code{\link[=exportPEtabObject]{exportPEtabObject()}} on the original \code{petab_problem} if you
+need it.
+\item Per-row data sigmas are not preserved; supply an explicit
+\code{errors} formula (e.g. parameterised noise) if you need
+non-constant noise.
+\item Fixed parameters are always written with \code{parameterScale = "lin"}
+(PEtab+dMod convention; cf. \code{exportPEtabObject} line 1387).
+Wrapping a fixed-name in \code{10^(.)} inside the trafo will trigger
+the mixed-wrap error.
 }
 }
+
 \seealso{
 \code{\link[=exportPEtabObject]{exportPEtabObject()}} for the lower-level entry that takes a
 pre-assembled \code{petab_problem} list. \code{\link[=importPEtab]{importPEtab()}} for the inverse.
