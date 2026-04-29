@@ -38,9 +38,9 @@ test_that("explicit compartments/compartmentOf are respected", {
 test_that("unassigned states fall into an implicit default compartment", {
   f <- NULL
   f <- addReaction(f, "A", "B", "k*A")
-  expect_equal(names(f$compartments), "default")
-  expect_equal(f$compartments$default$volume, "1")
-  expect_true(all(f$compartmentOf %in% "default"))
+  expect_equal(names(f$compartments), "defaultComp")
+  expect_equal(f$compartments$defaultComp$volume, "1")
+  expect_true(all(f$compartmentOf %in% "defaultComp"))
 })
 
 test_that("is.eqnlist rejects broken compartmentOf references", {

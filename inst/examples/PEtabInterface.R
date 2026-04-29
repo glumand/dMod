@@ -23,8 +23,10 @@
   fit <- trust(petab$obj, petab$pouter, fixed = petab$fixed,
                rinit = 1, rmax = 10)
 
-  ## Round-trip back to PEtab on disk:
+  ## Round-trip back to PEtab on disk. exportPEtabObject takes the full
+  ## petab_problem list; for a dMod-native problem (no PEtab origin), use
+  ## exportPEtab(data, obj, model, g, x, p, pouter, lower, upper, ...).
   out_dir <- file.path(tempdir(), "petab_export")
-  yaml_out <- exportPEtab(petab, out_dir, overwrite = TRUE)
+  yaml_out <- exportPEtabObject(petab, out_dir, overwrite = TRUE)
   petab2 <- importPEtab(yaml_out, solver = "deSolve")
 }

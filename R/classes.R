@@ -323,7 +323,7 @@ eqnvec <- function(...) {
 #' for future dynamic-volume support and must be `NULL` in the current version.
 #' @param compartmentOf Named character vector keyed by state; value = compartment
 #' ID from `names(compartments)`. States not present are assigned to an implicit
-#' `"default"` compartment with volume `"1"`.
+#' `"defaultComp"` compartment with volume `"1"`.
 #' @param reactionCompartment Optional character vector of length `nrow(smatrix)`
 #' giving, per reaction, the compartment ID in which the rate expression is a
 #' concentration-rate (the "reference" compartment for that reaction). Use `NA`
@@ -406,9 +406,9 @@ eqnlist <- function(smatrix = NULL, states = colnames(smatrix), rates = NULL,
       stop("`compartmentOf` must be a fully named character vector (names = state IDs).")
     missing_states <- setdiff(states, names(compartmentOf))
     if (length(missing_states) > 0L) {
-      if (!"default" %in% names(compartments))
-        compartments[["default"]] <- list(volume = "1", rule = NULL)
-      compartmentOf <- c(compartmentOf, setNames(rep("default", length(missing_states)), missing_states))
+      if (!"defaultComp" %in% names(compartments))
+        compartments[["defaultComp"]] <- list(volume = "1", rule = NULL)
+      compartmentOf <- c(compartmentOf, setNames(rep("defaultComp", length(missing_states)), missing_states))
     }
     bad <- setdiff(compartmentOf, names(compartments))
     if (length(bad) > 0L)
@@ -430,13 +430,13 @@ eqnlist <- function(smatrix = NULL, states = colnames(smatrix), rates = NULL,
     }
     missing_states <- setdiff(states, names(compartmentOf))
     if (length(missing_states) > 0L) {
-      compartments[["default"]] <- list(volume = "1", rule = NULL)
-      compartmentOf <- c(compartmentOf, setNames(rep("default", length(missing_states)), missing_states))
+      compartments[["defaultComp"]] <- list(volume = "1", rule = NULL)
+      compartmentOf <- c(compartmentOf, setNames(rep("defaultComp", length(missing_states)), missing_states))
     }
     compartmentOf <- compartmentOf[states]
   } else {
-    compartments <- list(default = list(volume = "1", rule = NULL))
-    compartmentOf <- setNames(rep("default", length(states)), states)
+    compartments <- list(defaultComp = list(volume = "1", rule = NULL))
+    compartmentOf <- setNames(rep("defaultComp", length(states)), states)
   }
 
   vols <- vapply(compartmentOf, function(id) compartments[[id]]$volume, character(1))

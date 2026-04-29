@@ -20,7 +20,7 @@
 #' @importFrom stringr str_replace_all
 import_sbml <- function(modelpath, amicipath = NULL) {
 
-  importscript <- system.file("code/sbmlAmiciDmod.py", package = "dMod")
+  importscript <- system.file("code/sbmlAmicidMod.py", package = "dMod")
   tmpfile_json <- tempfile()
   modelpath <- normalizePath(modelpath, mustWork = TRUE)
 

@@ -364,7 +364,7 @@ test_that("two-condition roundtrip preserves objective value", {
   v1 <- petab1$obj(petab1$pouter, fixed = petab1$fixed, deriv = FALSE)$value
 
   out_dir <- file.path(tempdir(), "petab_roundtrip")
-  yaml2 <- exportPEtab(petab1, out_dir, model_id = "rt_out", overwrite = TRUE)
+  yaml2 <- exportPEtabObject(petab1, out_dir, model_id = "rt_out", overwrite = TRUE)
 
   petab2 <- importPEtab(yaml2, solver = "deSolve",
                         modelname = "rt_back")

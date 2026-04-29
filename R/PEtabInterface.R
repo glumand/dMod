@@ -3,7 +3,8 @@
 ## PEtab v1 importer / exporter, layered on top of dMod's existing
 ## SBML interface (R/SBMLinterface.R) and high-level APIs (Y, P, normL2, ...).
 ##
-## Public API: importPEtab, exportPEtab, read_petab_yaml, read_petab_tables.
+## Public API: importPEtab, exportPEtab, exportPEtabObject,
+##             read_petab_yaml, read_petab_tables.
 ## Internal helpers prefixed `.petab_*` are unexported and may change shape.
 ##
 ## See https://petab.readthedocs.io/en/latest/v1/documentation_data_format.html
@@ -863,7 +864,7 @@ read_petab_tables <- function(yaml_path) {
 #'   `condition.grid`, `observables`, `reactions`, `inits`, `model_id`,
 #'   `source_yaml`, `sub_cond_map`, `obs_meta`, `param_meta`. The `inits`
 #'   slot is a named character vector of (possibly symbolic) species initial
-#'   expressions sourced from SBML; [exportPEtab()] re-emits non-numeric
+#'   expressions sourced from SBML; [exportPEtabObject()] re-emits non-numeric
 #'   entries as `<initialAssignment>` elements so the roundtrip preserves
 #'   parameter-bound initials. The `pouter` vector carries
 #'   `attr(., "petab_scales")` recording each parameter's PEtab scale,
@@ -1040,14 +1041,268 @@ print.petab_problem <- function(x, ...) {
 
 ## --- exporter --------------------------------------------------------------
 
+#' Export a dMod problem to PEtab v1
+#'
+#' High-level exporter for problems assembled from native dMod pieces — an
+#' [eqnlist], an observation function (or eqnvec / named character vector of
+#' observable formulas), a [datalist], and an outer parameter vector — without
+#' going through [importPEtab()] first. Synthesises the missing PEtab metadata
+#' (one PEtab condition per datalist condition, no `observableParameters`/
+#' `noiseParameters` substitution, no pre-equilibration) and dispatches to
+#' [exportPEtabObject()] which writes the four TSV tables, the SBML model and
+#' a YAML manifest.
+#'
+#' If you already have a `petab_problem` produced by [importPEtab()], call
+#' [exportPEtabObject()] directly — that path preserves the importer's
+#' sub-condition map and parameter-scale attribute verbatim.
+#'
+#' Limitations carried over from [exportPEtabObject()]:
+#' \itemize{
+#'   \item Each datalist condition becomes one PEtab condition; per-row
+#'         `observableParameters`/`noiseParameters` substitutions and
+#'         pre-equilibration cannot be reconstructed from a dMod-native
+#'         problem. Build a `petab_problem` by hand if you need them.
+#'   \item Per-row data sigmas in the datalist are *not* written to
+#'         measurements.tsv — `noiseFormula` (set from `errors`) is the
+#'         single source of noise on the PEtab side.
+#'   \item Data values are written verbatim to `measurement`. PEtab v1
+#'         specifies `measurement` is on the linear scale regardless of
+#'         `observableTransformation`; if your datalist already holds
+#'         log-transformed values, invert them before calling.
+#' }
+#'
+#' @param data A [datalist] (or a list of data.frames keyed by condition,
+#'   each with `name`, `time`, `value` columns; or a long-format data.frame
+#'   that [as.datalist()] accepts).
+#' @param reactions An [eqnlist] describing the ODE network. Required because
+#'   SBML serialisation needs the stoichiometry / compartment metadata that
+#'   the compiled odemodel object does not retain.
+#' @param observables Observable formulas keyed by observableId. Accepts a
+#'   named character vector, an [eqnvec], or an observation function produced
+#'   by [Y()] (formulas read from `attr(observables, "equations")`).
+#' @param pouter Named numeric vector of estimated parameters, on the chosen
+#'   `parameterScale`. Names become `parameterId`s in parameters.tsv.
+#' @param lower,upper Named numeric vectors of bounds, on the same scale as
+#'   `pouter`. If `NULL`, written as `-Inf`/`Inf`.
+#' @param fixed Optional named numeric vector of non-estimated parameters
+#'   (linear scale; written with `estimate = 0`).
+#' @param dir Output directory; created if missing.
+#' @param errors Noise formulas keyed by observableId. Accepts a named
+#'   character vector, [eqnvec], or a Y-built error function. If `NULL`,
+#'   defaults to `"1"` per observable (constant unit noise).
+#' @param condition.grid Optional `data.frame` of per-condition overrides
+#'   (one row per condition, indexed by condition name; columns name model
+#'   symbols whose values vary across conditions). If `NULL`, falls back to
+#'   `attr(data, "condition.grid")`, then to a trivial grid.
+#' @param inits Optional named numeric or character vector of state initial
+#'   values keyed by state name. Defaults to `0` for every state. Character
+#'   entries are emitted as SBML `<initialAssignment>` formulas.
+#' @param parameterScale Scalar `"lin"`/`"log"`/`"log10"` (broadcast to all
+#'   parameters in `pouter` + `fixed`) or a named character vector keyed by
+#'   parameterId.
+#' @param observableTransformation Scalar or named character — the PEtab
+#'   `observableTransformation` per observableId. `"lin"`/`"log"`/`"log10"`.
+#' @param noiseDistribution Scalar or named character — the PEtab
+#'   `noiseDistribution` per observableId. `"normal"`/`"laplace"`/
+#'   `"log-normal"`.
+#' @param model_id SBML model identifier; defaults to `"dMod_export"`.
+#' @param amicipath Forwarded to [export_sbml()].
+#' @param overwrite Whether to overwrite existing PEtab files in `dir`.
+#' @return Path to the written YAML manifest, invisibly.
+#' @seealso [exportPEtabObject()] for the lower-level entry that takes a
+#'   pre-assembled `petab_problem` list. [importPEtab()] for the inverse.
+#' @export
+exportPEtab <- function(data, reactions, observables,
+                        pouter, lower = NULL, upper = NULL, fixed = NULL,
+                        dir,
+                        errors = NULL,
+                        condition.grid = NULL,
+                        inits = NULL,
+                        parameterScale = "lin",
+                        observableTransformation = "lin",
+                        noiseDistribution = "normal",
+                        model_id = "dMod_export",
+                        amicipath = NULL,
+                        overwrite = FALSE) {
+
+  ## --- 1) datalist normalisation ------------------------------------------
+  if (is.data.frame(data)) data <- as.datalist(data)
+  if (is.list(data) && !inherits(data, "datalist")) data <- as.datalist(data)
+  if (!inherits(data, "datalist"))
+    stop("`data` must be a datalist, list of data.frames, or long-format data.frame.")
+  cond_ids <- names(data)
+  if (is.null(cond_ids) || any(!nzchar(cond_ids)))
+    stop("Every entry in `data` must have a non-empty condition name.")
+
+  ## --- 2) observable / error formulas -------------------------------------
+  pull_eqns <- function(obj, what) {
+    if (is.function(obj)) {
+      eqns <- attr(obj, "equations")
+      if (is.null(eqns))
+        stop(sprintf(
+          "`%s` is a function but carries no `equations` attribute. Pass an explicit named character vector instead.",
+          what))
+      if (is.list(eqns)) eqns <- eqns[[1]]
+      return(setNames(as.character(eqns), names(eqns)))
+    }
+    if (inherits(obj, "eqnvec"))
+      return(setNames(as.character(unclass(obj)), names(obj)))
+    if (is.character(obj) && !is.null(names(obj))) return(obj)
+    stop(sprintf("`%s` must be a named character vector, an eqnvec, or a Y-built function.",
+                 what))
+  }
+  obs_eqns <- pull_eqns(observables, "observables")
+  if (is.null(names(obs_eqns)) || any(!nzchar(names(obs_eqns))))
+    stop("`observables` entries must be named (observableId -> formula).")
+  obs_ids <- names(obs_eqns)
+
+  if (is.null(errors)) {
+    err_eqns <- setNames(rep("1", length(obs_ids)), obs_ids)
+  } else {
+    err_eqns <- pull_eqns(errors, "errors")
+    miss <- setdiff(obs_ids, names(err_eqns))
+    if (length(miss))
+      stop("`errors` is missing entries for observable(s): ",
+           paste(miss, collapse = ", "))
+    err_eqns <- err_eqns[obs_ids]
+  }
+
+  ## --- 3) PEtab metadata broadcasts ---------------------------------------
+  broadcast_named <- function(x, ids, what, allowed) {
+    if (length(x) == 1L && (is.null(names(x)) || !nzchar(names(x)))) {
+      x <- setNames(rep(unname(x), length(ids)), ids)
+    } else {
+      miss <- setdiff(ids, names(x))
+      if (length(miss))
+        stop(sprintf("`%s` is missing entries for: %s",
+                     what, paste(miss, collapse = ", ")))
+      x <- x[ids]
+    }
+    bad <- setdiff(unique(x), allowed)
+    if (length(bad))
+      stop(sprintf("Unknown %s value(s): %s. Allowed: %s.",
+                   what, paste(bad, collapse = ", "),
+                   paste(allowed, collapse = ", ")))
+    x
+  }
+
+  ## --- 4) parameter scales / bounds ---------------------------------------
+  pouter_ids <- names(pouter)
+  if (is.null(pouter_ids) || any(!nzchar(pouter_ids)))
+    stop("`pouter` must be a named numeric vector.")
+  if (is.null(fixed)) fixed <- numeric(0)
+  if (length(fixed) > 0L && (is.null(names(fixed)) || any(!nzchar(names(fixed)))))
+    stop("`fixed` must be a named numeric vector.")
+  all_ids <- c(pouter_ids, names(fixed))
+  if (anyDuplicated(all_ids))
+    stop("Parameter ids overlap between `pouter` and `fixed`: ",
+         paste(all_ids[duplicated(all_ids)], collapse = ", "))
+  param_scales <- broadcast_named(parameterScale, all_ids,
+                                  "parameterScale", c("lin", "log", "log10"))
+
+  if (is.null(lower)) lower <- setNames(rep(-Inf, length(pouter_ids)), pouter_ids)
+  if (is.null(upper)) upper <- setNames(rep( Inf, length(pouter_ids)), pouter_ids)
+  if (!setequal(names(lower), pouter_ids))
+    stop("`lower` must be named like `pouter`.")
+  if (!setequal(names(upper), pouter_ids))
+    stop("`upper` must be named like `pouter`.")
+  lower <- lower[pouter_ids]; upper <- upper[pouter_ids]
+
+  attr(pouter, "petab_scales") <- param_scales[pouter_ids]
+
+  ## --- 5) observable metadata ---------------------------------------------
+  obs_trafo  <- broadcast_named(observableTransformation, obs_ids,
+                                "observableTransformation",
+                                c("lin", "log", "log10"))
+  noise_dist <- broadcast_named(noiseDistribution, obs_ids,
+                                "noiseDistribution",
+                                c("normal", "laplace", "log-normal"))
+  obs_meta <- list(obs        = obs_eqns,
+                   noise      = err_eqns,
+                   obs_trafo  = obs_trafo,
+                   noise_dist = noise_dist)
+
+  ## --- 6) condition.grid + identity sub_cond_map --------------------------
+  if (is.null(condition.grid)) condition.grid <- attr(data, "condition.grid")
+  if (is.null(condition.grid)) {
+    condition.grid <- data.frame(conditionId = cond_ids,
+                                 row.names    = cond_ids,
+                                 stringsAsFactors = FALSE)
+  } else {
+    condition.grid <- as.data.frame(condition.grid, stringsAsFactors = FALSE)
+    if (!setequal(rownames(condition.grid), cond_ids)) {
+      if (!"conditionId" %in% colnames(condition.grid))
+        stop("`condition.grid` rownames don't match the datalist condition ",
+             "names and the data.frame has no `conditionId` column to ",
+             "dispatch on.")
+      if (!setequal(condition.grid$conditionId, cond_ids))
+        stop("`condition.grid$conditionId` does not match the datalist ",
+             "condition names.")
+      rownames(condition.grid) <- as.character(condition.grid$conditionId)
+    }
+    condition.grid <- condition.grid[cond_ids, , drop = FALSE]
+    if (!"conditionId" %in% colnames(condition.grid))
+      condition.grid$conditionId <- rownames(condition.grid)
+  }
+  sub_cond_map <- data.frame(
+    simulationConditionId       = cond_ids,
+    preequilibrationConditionId = "",
+    observableParameters        = "",
+    noiseParameters             = "",
+    sub_condition               = cond_ids,
+    stringsAsFactors            = FALSE
+  )
+
+  ## --- 7) reactions + inits -----------------------------------------------
+  if (!inherits(reactions, "eqnlist"))
+    stop("`reactions` must be an eqnlist (the ODE network with stoichiometry).")
+  states <- reactions$states
+  if (is.null(inits)) {
+    inits <- setNames(rep(0, length(states)), states)
+  } else {
+    if (is.null(names(inits)) || any(!nzchar(names(inits))))
+      stop("`inits` must be a named vector keyed by state name.")
+    miss <- setdiff(states, names(inits))
+    if (length(miss)) {
+      filled <- setNames(rep(0, length(miss)), miss)
+      inits  <- c(inits, filled)
+    }
+    inits <- inits[states]
+  }
+
+  ## --- 8) assemble & dispatch ---------------------------------------------
+  petab <- list(
+    pouter         = pouter,
+    lower          = lower,
+    upper          = upper,
+    fixed          = fixed,
+    obs_meta       = obs_meta,
+    sub_cond_map   = sub_cond_map,
+    condition.grid = condition.grid,
+    data           = data,
+    reactions      = reactions,
+    inits          = inits,
+    model_id       = model_id
+  )
+
+  exportPEtabObject(petab, dir, model_id = model_id,
+                    amicipath = amicipath, overwrite = overwrite)
+}
+
+
 #' Export a dMod `petab_problem` back to PEtab v1
 #'
-#' Writes the five PEtab tables (parameters, observables, conditions,
-#' measurements) plus the SBML model and a YAML manifest, recovering the
-#' problem produced by [importPEtab()] up to algebraic equivalence on the
-#' SBML side. Sub-conditions synthesised by the importer are collapsed back
-#' to their PEtab condition + per-row `observableParameters` /
-#' `noiseParameters` representation.
+#' Low-level exporter that writes the four PEtab tables (parameters,
+#' observables, conditions, measurements) plus the SBML model and a YAML
+#' manifest, given a fully-populated `petab_problem`-shaped list (i.e. an
+#' object as produced by [importPEtab()]). Sub-conditions synthesised by the
+#' importer are collapsed back to their PEtab condition + per-row
+#' `observableParameters` / `noiseParameters` representation.
+#'
+#' If you have only the dMod-native pieces (datalist, odemodel, observation
+#' / parameter / prediction functions, and a numeric `pouter`) and never went
+#' through `importPEtab()`, use the higher-level [exportPEtab()] adapter,
+#' which synthesises the missing PEtab metadata and dispatches here.
 #'
 #' Symbolic species initials (SBML `<initialAssignment>` elements) survive
 #' the roundtrip: they are carried as-is on `petab$inits` and re-emitted by
@@ -1072,10 +1327,11 @@ print.petab_problem <- function(x, ...) {
 #' @param overwrite Logical. If `FALSE` (default) errors when files already
 #'   exist in `dir`.
 #' @return Path to the written YAML manifest, invisibly.
+#' @seealso [exportPEtab()] for a dMod-native entry point.
 #' @export
 #' @importFrom yaml write_yaml
-exportPEtab <- function(petab, dir, model_id = NULL, amicipath = NULL,
-                        overwrite = FALSE) {
+exportPEtabObject <- function(petab, dir, model_id = NULL, amicipath = NULL,
+                              overwrite = FALSE) {
 
   stopifnot(inherits(petab, "petab_problem") || is.list(petab))
   if (is.null(model_id)) model_id <- petab$model_id %||% "dMod_export"

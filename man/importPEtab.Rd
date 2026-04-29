@@ -44,7 +44,7 @@ A list with class \code{"petab_problem"} holding \code{prd}, \code{p}, \code{g},
 \code{condition.grid}, \code{observables}, \code{reactions}, \code{inits}, \code{model_id},
 \code{source_yaml}, \code{sub_cond_map}, \code{obs_meta}, \code{param_meta}. The \code{inits}
 slot is a named character vector of (possibly symbolic) species initial
-expressions sourced from SBML; \code{\link[=exportPEtab]{exportPEtab()}} re-emits non-numeric
+expressions sourced from SBML; \code{\link[=exportPEtabObject]{exportPEtabObject()}} re-emits non-numeric
 entries as \verb{<initialAssignment>} elements so the roundtrip preserves
 parameter-bound initials. The \code{pouter} vector carries
 \code{attr(., "petab_scales")} recording each parameter's PEtab scale,
@@ -90,9 +90,11 @@ currently raise a clear "Stage 2" error.
   fit <- trust(petab$obj, petab$pouter, fixed = petab$fixed,
                rinit = 1, rmax = 10)
 
-  ## Round-trip back to PEtab on disk:
+  ## Round-trip back to PEtab on disk. exportPEtabObject takes the full
+  ## petab_problem list; for a dMod-native problem (no PEtab origin), use
+  ## exportPEtab(data, obj, model, g, x, p, pouter, lower, upper, ...).
   out_dir <- file.path(tempdir(), "petab_export")
-  yaml_out <- exportPEtab(petab, out_dir, overwrite = TRUE)
+  yaml_out <- exportPEtabObject(petab, out_dir, overwrite = TRUE)
   petab2 <- importPEtab(yaml_out, solver = "deSolve")
 }
 }

@@ -217,7 +217,7 @@ getReactions <- function(eqnlist) {
 #' of the reaction.
 #' @param description Optional description instead of `names(rate)`.
 #' @param compartment Character, compartment ID to which any *new* states introduced
-#' by this reaction are assigned. Defaults to `"default"`. If the compartment does
+#' by this reaction are assigned. Defaults to `"defaultComp"`. If the compartment does
 #' not yet exist on `eqnlist`, it is created with volume `"1"`.
 #' @param rateCompartment Optional compartment ID naming the frame in which `rate`
 #' is a concentration-rate. Required when educts span multiple compartments
@@ -234,7 +234,7 @@ getReactions <- function(eqnlist) {
 #' @export
 #' @rdname addReaction
 addReaction <- function(eqnlist, from, to, rate, description = names(rate),
-                         compartment = "default", rateCompartment = NA_character_) {
+                         compartment = "defaultComp", rateCompartment = NA_character_) {
 
 
   if (missing(eqnlist)) eqnlist <- eqnlist()
@@ -334,11 +334,11 @@ getFluxes <- function(eqnlist, type = c("conc", "amount")) {
   if (is.null(SMatrix)) return()
 
   # Defensive fallback: an eqnlist constructed outside our constructor may have
-  # NULL compartment info. Treat every state as living in an implicit "default"
+  # NULL compartment info. Treat every state as living in an implicit "defaultComp"
   # compartment with volume "1" — matches legacy behavior.
   if (is.null(compartments) || is.null(compartmentOf)) {
-    compOf <- setNames(rep("default", length(variables)), variables)
-    compartments <- list(default = list(volume = "1", rule = NULL))
+    compOf <- setNames(rep("defaultComp", length(variables)), variables)
+    compartments <- list(defaultComp = list(volume = "1", rule = NULL))
   } else {
     compOf <- compartmentOf[variables]
   }

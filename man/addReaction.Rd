@@ -10,7 +10,7 @@ addReaction(
   to,
   rate,
   description = names(rate),
-  compartment = "default",
+  compartment = "defaultComp",
   rateCompartment = NA_character_
 )
 }
@@ -27,7 +27,7 @@ of the reaction.}
 \item{description}{Optional description instead of \code{names(rate)}.}
 
 \item{compartment}{Character, compartment ID to which any \emph{new} states introduced
-by this reaction are assigned. Defaults to \code{"default"}. If the compartment does
+by this reaction are assigned. Defaults to \code{"defaultComp"}. If the compartment does
 not yet exist on \code{eqnlist}, it is created with volume \code{"1"}.}
 
 \item{rateCompartment}{Optional compartment ID naming the frame in which \code{rate}

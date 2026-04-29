@@ -55,7 +55,7 @@ for future dynamic-volume support and must be \code{NULL} in the current version
 
 \item{compartmentOf}{Named character vector keyed by state; value = compartment
 ID from \code{names(compartments)}. States not present are assigned to an implicit
-\code{"default"} compartment with volume \code{"1"}.}
+\code{"defaultComp"} compartment with volume \code{"1"}.}
 
 \item{reactionCompartment}{Optional character vector of length \code{nrow(smatrix)}
 giving, per reaction, the compartment ID in which the rate expression is a

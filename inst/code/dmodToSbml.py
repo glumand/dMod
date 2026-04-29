@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Build an SBML Level 3 Version 2 document from a JSON spec produced by
-dMod's `export_sbml()`. Mirrors the import helper `sbmlAmiciDmod.py` but in
+dMod's `export_sbml()`. Mirrors the import helper `sbmlAmicidMod.py` but in
 the opposite direction. Uses `libsbml.parseL3Formula` to lift the text-form
 kinetic laws into MathML ASTs.
 """
