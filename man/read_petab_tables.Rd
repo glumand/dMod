@@ -4,16 +4,22 @@
 \alias{read_petab_tables}
 \title{Read PEtab TSV tables (no SBML)}
 \usage{
-read_petab_tables(yaml_path)
+read_petab_tables(yamlPath)
 }
 \arguments{
-\item{yaml_path}{Path to the PEtab YAML manifest.}
+\item{yamlPath}{Path to the PEtab YAML manifest.}
 }
 \value{
 A list with \code{parameters}, \code{conditions}, \code{measurements},
-\code{observables} (data frames) and \code{sbml_path} (character).
+\code{observables}, optional \code{experiments} and \code{mapping} (data frames or
+\code{NULL}), \code{sbmlPath} (character), and \code{formatVersion} (integer).
 }
 \description{
-Reads the four PEtab tables referenced by a YAML manifest into base R
-data frames. Useful for inspecting a problem without invoking AMICI.
+Reads the PEtab tables referenced by a YAML manifest into base R data
+frames. Useful for inspecting a problem without invoking AMICI.
+}
+\details{
+For v2 manifests, \code{experiments} and \code{mapping} slots are populated when
+the corresponding files are present, otherwise \code{NULL}. The \code{conditions}
+slot is also \code{NULL} when v2 declares no condition file.
 }

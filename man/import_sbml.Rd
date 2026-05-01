@@ -4,12 +4,10 @@
 \alias{import_sbml}
 \title{Import an SMBL model}
 \usage{
-import_sbml(modelpath, amicipath = NULL)
+import_sbml(modelpath)
 }
 \arguments{
 \item{modelpath}{Path to the sbml file}
-
-\item{amicipath}{Path to your amici-python-installation, e.g.: AMICIPATH/python}
 }
 \value{
 list of eqnlist, parameters and inits

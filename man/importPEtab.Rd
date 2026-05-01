@@ -2,12 +2,11 @@
 % Please edit documentation in R/PEtabInterface.R
 \name{importPEtab}
 \alias{importPEtab}
-\title{Import a PEtab v1 problem into dMod}
+\title{Import a PEtab v1 or v2 problem into dMod}
 \usage{
 importPEtab(
-  yaml_path,
+  yamlPath,
   solver,
-  amicipath = NULL,
   compile = TRUE,
   cores = 1L,
   modelname = NULL,
@@ -15,13 +14,10 @@ importPEtab(
 )
 }
 \arguments{
-\item{yaml_path}{Path to the PEtab YAML manifest.}
+\item{yamlPath}{Path to the PEtab YAML manifest.}
 
 \item{solver}{Required: one of \code{"deSolve"} or \code{"CppODE"}. Forwarded to
 \code{\link[=odemodel]{odemodel()}}.}
-
-\item{amicipath}{Optional \code{PYTHONPATH} for AMICI; forwarded to
-\code{\link[=import_sbml]{import_sbml()}}.}
 
 \item{compile}{Logical. If \code{TRUE} (default) the generated trafo,
 observation function, and ODE model are compiled to native code. Set to
@@ -53,55 +49,77 @@ closure has the PEtab fixed parameters baked in, so calling
 without the user having to pass \code{fixed = ...}. The \code{bestfit} vector
 carries \code{attr(., "petab_scales")} recording each parameter's PEtab
 scale (the exporter reads it back). Internal metadata needed for
-the round-trip exporter (\code{fixed}, \code{inits}, \code{model_id},
+the round-trip exporter (\code{fixed}, \code{inits}, \code{modelID},
 \code{source_yaml}, \code{sub_cond_map}, \code{obs_meta}, \code{param_meta}) lives on
 \code{attr(., "petab_meta")}.
 }
 \description{
-Reads a PEtab YAML manifest plus the associated SBML model and four TSV
-tables, and assembles a fully-composed dMod problem: prediction function,
+Reads a PEtab YAML manifest plus the associated SBML model and TSV tables,
+and assembles a fully-composed dMod problem: prediction function,
 observation function, parameter transformation, datalist, and objective.
-The SBML side is delegated to \code{\link[=import_sbml]{import_sbml()}} (AMICI-based).
+The SBML side is delegated to \code{\link[=import_sbml]{import_sbml()}} (libsbml-based).
 }
 \details{
-Stage 1 supports test cases 0001–0006 of the PEtab test suite: single or
-multi-condition models, condition-table parameter overrides (numeric or
-parameter-symbol valued), per-row \code{observableParameters}, and Gaussian
-likelihood on linear observables. Pre-equilibration, non-Gaussian noise,
-observable transformations (log/log10) and symbolic noise formulas
-currently raise a clear "Stage 2" error.
+Dispatch is on \code{format_version}. v2 manifests are translated to the
+internal v1 shapes by an adapter (see \code{.petab_v2_normalize_tables} in
+\code{R/PEtabInterface.R}) so the downstream trafo / observation / objective
+machinery is shared.
+
+v2 specifics handled here: long-format conditions are pivoted to wide,
+the \code{experiments.tsv} \verb{(time, conditionId)} sequences are mapped to
+dMod's \verb{(simulationConditionId, preequilibrationConditionId)} pair (max
+two periods), the combined \code{noiseDistribution} (\code{normal}/\code{log-normal}/
+\code{laplace}/\code{log-laplace}) is split into observable transformation +
+distribution, explicit \code{observablePlaceholders} / \code{noisePlaceholders}
+are rewritten to v1's \verb{observableParameter$\{k\}_$\{id\}} sentinels, and an
+optional \code{mapping.tsv} is applied as a textual rewrite of PEtab entity
+IDs into model entity IDs.
+
+Out of scope (Stage 2): v2 priors (\code{priorDistribution} /
+\code{priorParameters} columns), multi-model problems via the \code{modelId}
+column, non-SBML model languages (BNGL / CellML / PySB), and
+multi-period experiments (>2 periods).
 }
 \examples{
 \dontrun{
-  ## Import a PEtab v1 problem from disk. The YAML manifest lives next to
-  ## the four TSVs and the SBML model file. Native artefacts (`.c`, `.cpp`,
-  ## `.so`) land in the current working directory — set tempdir() first
-  ## to avoid polluting the project tree.
+  ## Import a PEtab problem from disk. importPEtab dispatches on the YAML's
+  ## `format_version` key, so v1 and v2 manifests are both supported. The
+  ## TSVs and the SBML model live next to the YAML; native artefacts
+  ## (`.c`, `.cpp`, `.so`) land in the current working directory —
+  ## `setwd(tempdir())` keeps them out of the project tree.
   setwd(tempdir())
 
-  yaml_path <- system.file("PEtabTests/0001/_0001.yaml", package = "dMod")
-  petab <- importPEtab(yaml_path, solver = "deSolve")
+  ## v2 example (the bundled v2 test suite):
+  yamlPath <- system.file("PEtabTests/v2/0001/_0001.yaml", package = "dMod")
+  petab <- importPEtab(yamlPath, solver = "deSolve")
+
+  ## v1 still works — same call, different YAML schema:
+  ## yamlPath <- system.file("PEtabTests/0001/_0001.yaml", package = "dMod")
 
   print(petab)
 
   ## petab is a plain list — every slot is a regular dMod object.
-  ## Evaluate the objective at the nominal pouter values:
-  petab$obj(petab$pouter, fixed = petab$fixed)$value
+  ## The objective has the PEtab `fixed` parameters baked in, so calling
+  ## obj(bestfit) evaluates the likelihood at the nominal estimate:
+  petab$obj(petab$bestfit)$value
 
   ## Predict and plot:
   times <- seq(0, 10, length.out = 51)
-  prediction <- petab$prd(times, c(petab$pouter, petab$fixed))
-  plot(prediction, petab$data)
+  prediction <- petab$prd(times, c(petab$bestfit,
+                                   attr(petab, "petab_meta")$fixed))
+  plot(prediction, petab$dataList)
 
   ## Fit:
-  fit <- trust(petab$obj, petab$pouter, fixed = petab$fixed,
-               rinit = 1, rmax = 10)
+  fit <- trust(petab$obj, petab$bestfit, rinit = 1, rmax = 10)
 
   ## Round-trip back to PEtab on disk. exportPEtabObject takes the full
   ## petabProblem list; for a dMod-native problem (no PEtab origin), use
-  ## exportPEtab(data, obj, model, g, x, p, pouter, lower, upper, ...).
-  out_dir <- file.path(tempdir(), "petab_export")
-  yaml_out <- exportPEtabObject(petab, out_dir, overwrite = TRUE)
-  petab2 <- importPEtab(yaml_out, solver = "deSolve")
+  ## exportPEtab(data, reactions, observables, p, pouter, ...).
+  ## formatVersion defaults to "2.0.0"; pass "1" to write the legacy
+  ## schema instead.
+  outDir <- file.path(tempdir(), "petab_export")
+  yamlOut <- exportPEtabObject(petab, outDir, formatVersion = "2.0.0",
+                               overwrite = TRUE)
+  petab2 <- importPEtab(yamlOut, solver = "deSolve")
 }
 }

@@ -1,5 +1,0 @@
-"Description","Rate","Tca_buffer","Tca_cyto","Tca_canalicular"
-"Basolateral uptake","import_Tca*Tca_buffer",-1,1,
-"Basolateral efflux","export_Tca_baso*Tca_cyto",1,-1,
-"Canalicular efflux","export_Tca_cana*Tca_cyto",,-1,1
-"Transport bile","transport_Tca*Tca_canalicular",1,,-1

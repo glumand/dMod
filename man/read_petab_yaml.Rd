@@ -4,20 +4,28 @@
 \alias{read_petab_yaml}
 \title{Read a PEtab YAML manifest}
 \usage{
-read_petab_yaml(yaml_path)
+read_petab_yaml(yamlPath)
 }
 \arguments{
-\item{yaml_path}{Path to the PEtab YAML manifest.}
+\item{yamlPath}{Path to the PEtab YAML manifest.}
 }
 \value{
-A list with \code{base_dir}, \code{format_version}, \code{parameter_file}, and a
-one-element \code{problems} list whose entry holds resolved (absolute) paths
-for \code{sbml_file}, \code{condition_file}, \code{measurement_file}, \code{observable_file}.
-PEtab allows multiple problems and multiple files per slot; the current
-reader supports a single problem with one file per slot and errors
-otherwise.
+A list with \code{baseDir}, \code{formatVersion} (integer major version),
+\code{parameterFile}, and a one-element \code{problems} list whose entry holds
+resolved (absolute) paths for \code{sbmlFile}, \code{conditionFile},
+\code{measurementFile}, \code{observableFile}. v2 manifests additionally fill
+\code{experimentFile}, \code{mappingFile} (both possibly \code{NULL}) and \code{modelID}
+in the same problem entry. PEtab allows multiple problems and multiple
+files per slot; the current reader supports a single problem with one
+file per slot and errors otherwise.
 }
 \description{
-Parses a PEtab v1 YAML file and resolves the paths of the referenced
+Parses a PEtab v1 or v2 YAML file and resolves the paths of the referenced
 tables. No SBML or TSV is touched at this stage.
+}
+\details{
+Dispatch is on the YAML \code{format_version} key: values starting with "1"
+use the v1 schema (\code{problems} list, \code{sbml_files} per problem); values
+starting with "2" use the v2 schema (flat top-level \code{model_files},
+optional \code{experiment_files} and \code{mapping_files}).
 }

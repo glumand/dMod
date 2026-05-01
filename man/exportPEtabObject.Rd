@@ -2,13 +2,13 @@
 % Please edit documentation in R/PEtabInterface.R
 \name{exportPEtabObject}
 \alias{exportPEtabObject}
-\title{Export a dMod \code{petabProblem} back to PEtab v1}
+\title{Export a dMod \code{petabProblem} to a PEtab problem on disk}
 \usage{
 exportPEtabObject(
   petab,
   dir,
-  model_id = NULL,
-  amicipath = NULL,
+  modelID = NULL,
+  formatVersion = "2.0.0",
   overwrite = FALSE
 )
 }
@@ -18,10 +18,12 @@ list with the same slot names).}
 
 \item{dir}{Output directory; created if missing.}
 
-\item{model_id}{SBML model identifier (defaults to \code{petab$model_id} or
+\item{modelID}{SBML model identifier (defaults to \code{petab$modelID} or
 \code{"dMod_export"}).}
 
-\item{amicipath}{Forwarded to \code{\link[=export_sbml]{export_sbml()}}.}
+\item{formatVersion}{Output format. One of \code{"2.0.0"} (default) or
+\code{"1"}. v2 writes the new YAML schema with \code{model_files} /
+\code{experiment_files} and a long-format conditions table.}
 
 \item{overwrite}{Logical. If \code{FALSE} (default) errors when files already
 exist in \code{dir}.}
@@ -30,12 +32,13 @@ exist in \code{dir}.}
 Path to the written YAML manifest, invisibly.
 }
 \description{
-Low-level exporter that writes the four PEtab tables (parameters,
-observables, conditions, measurements) plus the SBML model and a YAML
-manifest, given a fully-populated \code{petabProblem}-shaped list (i.e. an
-object as produced by \code{\link[=importPEtab]{importPEtab()}}). Sub-conditions synthesised by the
-importer are collapsed back to their PEtab condition + per-row
-\code{observableParameters} / \code{noiseParameters} representation.
+Low-level exporter that writes the PEtab tables (parameters, observables,
+conditions, measurements; v2 additionally writes experiments) plus the
+SBML model and a YAML manifest, given a fully-populated \code{petabProblem}-
+shaped list (i.e. an object as produced by \code{\link[=importPEtab]{importPEtab()}}).
+Sub-conditions synthesised by the importer are collapsed back to their
+PEtab condition + per-row \code{observableParameters} / \code{noiseParameters}
+representation.
 }
 \details{
 If you have only the dMod-native pieces (datalist, odemodel, observation
@@ -54,6 +57,13 @@ Lossy steps documented:
 models that rely on them are out of scope.
 \item Parameter scales survive only via \code{attr(petab$pouter, "petab_scales")} set by the importer; hand-built problems lacking
 this attribute default to \code{"lin"}.
+\item v2 has no \code{parameterScale} column. When exporting to v2, scales
+other than \code{"lin"} are linearised on disk (values \emph{and} bounds)
+with a one-time warning. The information is not roundtrippable
+through v2.
+\item v2 has no \code{log10} observable transformation. When exporting an
+observable with \code{obs_trafo == "log10"}, dMod warns and emits
+\code{noiseDistribution = "log-normal"} (mathematically \code{log}).
 }
 }
 \seealso{

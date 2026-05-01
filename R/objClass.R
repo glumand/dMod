@@ -553,6 +553,16 @@ nll <- function(nout, pars, deriv, opt.BLOQ = "M3", opt.hessian = c(
     objlist(value = 0, gradient = gr, hessian = he)
   }
   
+  # When the caller asked only for the value, drop the deriv matrices so
+  # nll_ALOQ / nll_BLOQ skip the gradient branch entirely. Important for
+  # error models where derivs.err can have NULL colnames (e.g. PEtab case
+  # 0015 with a single symbolic noise parameter), which otherwise trigger
+  # a non-conformable-arrays error in the dwrdp/dlogsdp arithmetic.
+  if (!isTRUE(deriv)) {
+    derivs.aloq <- NULL; derivs.bloq <- NULL
+    derivs.err.aloq <- NULL; derivs.err.bloq <- NULL
+  }
+
   nll_ALOQ_result <- NULL
   if (!all(is.bloq)) {
     nll_ALOQ_result <- nll_ALOQ(nout.aloq, derivs.aloq, derivs.err.aloq,
@@ -561,7 +571,7 @@ nll <- function(nout, pars, deriv, opt.BLOQ = "M3", opt.hessian = c(
                                 bessel.correction = bessel.correction)
   }
   mywrss <- mywrss + nll_ALOQ_result
-  
+
   if (any(is.bloq) && opt.BLOQ != "M1") {
     mywrss <- mywrss + nll_BLOQ(nout.bloq, derivs.bloq, derivs.err.bloq,
                                 par_names = par_names,

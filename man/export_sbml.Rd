@@ -9,8 +9,7 @@ export_sbml(
   parameters = NULL,
   inits = NULL,
   filepath,
-  model_id = "dMod_export",
-  amicipath = NULL
+  modelID = "dMod_export"
 )
 }
 \arguments{
@@ -29,10 +28,7 @@ Missing states default to 0.}
 
 \item{filepath}{Path to the SBML output file.}
 
-\item{model_id}{SBML model identifier. Defaults to \code{"dMod_export"}.}
-
-\item{amicipath}{Optional \code{PYTHONPATH} entry prepended to the python call,
-matching the knob on \code{\link[=import_sbml]{import_sbml()}}.}
+\item{modelID}{SBML model identifier. Defaults to \code{"dMod_export"}.}
 }
 \value{
 \code{filepath}, invisibly.

@@ -2,7 +2,7 @@
 % Please edit documentation in R/PEtabInterface.R
 \name{exportPEtab}
 \alias{exportPEtab}
-\title{Export a dMod problem to PEtab v1}
+\title{Export a dMod problem to PEtab v1 or v2}
 \usage{
 exportPEtab(
   data,
@@ -17,8 +17,8 @@ exportPEtab(
   parameterScale = "log10",
   observableTransformation = "lin",
   noiseDistribution = "normal",
-  model_id = "dMod_export",
-  amicipath = NULL,
+  modelID = "dMod_export",
+  formatVersion = "2.0.0",
   dir,
   overwrite = FALSE
 )
@@ -62,9 +62,10 @@ Defaults to \code{"log10"} (matches dMod's \code{insert("x ~ 10^X", ...)} idiom)
 \item{noiseDistribution}{Scalar or named character — \code{"normal"}/
 \code{"laplace"}/\code{"log-normal"} per observableId.}
 
-\item{model_id}{SBML model identifier; defaults to \code{"dMod_export"}.}
+\item{modelID}{SBML model identifier; defaults to \code{"dMod_export"}.}
 
-\item{amicipath}{Forwarded to \code{\link[=export_sbml]{export_sbml()}}.}
+\item{formatVersion}{Output format. One of \code{"2.0.0"} (default) or
+\code{"1"}. Forwarded to \code{\link[=exportPEtabObject]{exportPEtabObject()}}.}
 
 \item{dir}{Output directory; created if missing.}
 
@@ -75,8 +76,10 @@ Path to the written YAML manifest, invisibly.
 }
 \description{
 Symbolically decomposes a dMod parameter transformation \code{p} and writes
-the corresponding PEtab v1 problem (parameters / observables / conditions
-/ measurements TSVs, an SBML model, and a YAML manifest). The decomposer
+the corresponding PEtab problem (parameters / observables / conditions
+/ measurements TSVs, an SBML model, and a YAML manifest; v2 additionally
+writes an experiments TSV). Output format is selected via
+\code{format_version} (default \code{"2.0.0"}). The decomposer
 inverts the importer's \code{\link[=importPEtab]{importPEtab()}} trafo construction so the
 roundtrip preserves outer parameter names, scales, and per-condition
 overrides; the imported PEtab problem is fitted on the same outer

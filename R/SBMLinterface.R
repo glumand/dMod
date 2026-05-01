@@ -12,13 +12,12 @@
 #' `K_SBML = rate_dMod * V`.
 #'
 #' @param modelpath Path to the sbml file
-#' @param amicipath Path to your amici-python-installation, e.g.: AMICIPATH/python
 #'
 #' @return list of eqnlist, parameters and inits
 #' @export
 #' @importFrom rjson fromJSON
 #' @importFrom stringr str_replace_all
-import_sbml <- function(modelpath, amicipath = NULL) {
+import_sbml <- function(modelpath) {
 
   importscript <- system.file("code/sbmlAmicidMod.py", package = "dMod")
   tmpfile_json <- tempfile()
@@ -26,26 +25,16 @@ import_sbml <- function(modelpath, amicipath = NULL) {
 
   # Call the virtualenv's python directly — that python knows its own
   # site-packages via pyvenv.cfg, no `source activate` gymnastics needed.
-  # `amicipath` (when set) is prepended to PYTHONPATH so users can mix in a
-  # libsbml install that lives outside the venv.
   venv_python <- path.expand("~/.virtualenvs/amici/bin/python")
   if (!file.exists(venv_python))
     stop("dMod expects a Python virtualenv at ~/.virtualenvs/amici/. ",
          "Create one with `python3 -m venv ~/.virtualenvs/amici && ",
          "~/.virtualenvs/amici/bin/pip install python-libsbml`.")
 
-  pyenv <- if (!is.null(amicipath))
-             paste0("PYTHONPATH=",
-                    paste(c(amicipath,
-                            Sys.getenv("PYTHONPATH", unset = "")),
-                          collapse = ":"))
-           else character(0)
-
   status <- system2(venv_python,
                     args = c(shQuote(importscript),
                              shQuote(modelpath),
-                             shQuote(tmpfile_json)),
-                    env = pyenv)
+                             shQuote(tmpfile_json)))
   if (status != 0L || !file.exists(tmpfile_json))
     stop("SBML import failed (exit ", status, "). ",
          "Check that ~/.virtualenvs/amici/ has python-libsbml installed.")
@@ -87,11 +76,14 @@ import_sbml <- function(modelpath, amicipath = NULL) {
   spc_json  <- json_content[["speciesCompartments"]]
   if (!is.null(comp_json) && length(comp_json) > 0L) {
     for (c in comp_json) {
-      # Use the SBML compartment ID as the volume expression: it appears as a
-      # parameter symbol, so numeric assignment happens through the standard
-      # parameter transformation. Leaves cancellation opportunities with any
-      # `compartment * ...` factors still embedded in the kinetic law.
-      compartments[[c$id]] <- list(volume = c$id, rule = NULL)
+      # Compartments with size = 1 (and no rule) carry no symbolic content —
+      # storing them as the literal "1" keeps the compartment ID out of the
+      # kinetic laws, which is what dMod's roundtrip expects when the source
+      # eqnlist had volume "1". Otherwise use the SBML compartment ID as the
+      # volume symbol so the trafo can override it.
+      trivial <- !is.null(c$size) && is.numeric(c$size) && isTRUE(c$size == 1)
+      compartments[[c$id]] <- list(volume = if (trivial) "1" else c$id,
+                                   rule   = NULL)
     }
     if (!is.null(spc_json) && length(spc_json) > 0L) {
       compartmentOf <- unlist(spc_json)
@@ -116,7 +108,9 @@ import_sbml <- function(modelpath, amicipath = NULL) {
                    else if (length(product_idx) > 0) unique(compartmentOf[states[product_idx]])
                    else character(0)
       if (length(home_cids) == 1L) {
-        v[i] <- paste0("(", v[i], ")/(", compartments[[home_cids]]$volume, ")")
+        home_vol <- compartments[[home_cids]]$volume
+        if (!identical(home_vol, "1"))
+          v[i] <- paste0("(", v[i], ")/(", home_vol, ")")
       } else if (length(home_cids) > 1L) {
         warning(sprintf("Reaction %d spans compartments (%s); kinetic law stored as-is.",
                         i, paste(home_cids, collapse = ", ")))
@@ -181,14 +175,12 @@ import_sbml <- function(modelpath, amicipath = NULL) {
 #'   simulator resolve the expression against `parameters` at sim time.
 #'   Missing states default to 0.
 #' @param filepath Path to the SBML output file.
-#' @param model_id SBML model identifier. Defaults to `"dMod_export"`.
-#' @param amicipath Optional `PYTHONPATH` entry prepended to the python call,
-#'   matching the knob on [import_sbml()].
+#' @param modelID SBML model identifier. Defaults to `"dMod_export"`.
 #' @return `filepath`, invisibly.
 #' @export
 #' @importFrom rjson toJSON
 export_sbml <- function(eqnlist, parameters = NULL, inits = NULL, filepath,
-                         model_id = "dMod_export", amicipath = NULL) {
+                         modelID = "dMod_export") {
 
   stopifnot(is.eqnlist(eqnlist))
   if (is.null(eqnlist$compartments) || is.null(eqnlist$compartmentOf))
@@ -251,7 +243,7 @@ export_sbml <- function(eqnlist, parameters = NULL, inits = NULL, filepath,
          kineticLaw = kinetic_law)
   })
 
-  spec <- list(modelId = model_id,
+  spec <- list(modelId = modelID,
                compartments = comp_list,
                species = species_list,
                parameters = param_list,
@@ -265,14 +257,7 @@ export_sbml <- function(eqnlist, parameters = NULL, inits = NULL, filepath,
   venv_python <- path.expand("~/.virtualenvs/amici/bin/python")
   if (!file.exists(venv_python))
     stop("dMod expects a Python virtualenv at ~/.virtualenvs/amici/.")
-  pyenv <- if (!is.null(amicipath))
-             paste0("PYTHONPATH=",
-                    paste(c(amicipath,
-                            Sys.getenv("PYTHONPATH", unset = "")),
-                          collapse = ":"))
-           else character(0)
-  status <- system2(venv_python, args = c(shQuote(script), shQuote(spec_json)),
-                    env = pyenv)
+  status <- system2(venv_python, args = c(shQuote(script), shQuote(spec_json)))
   if (status != 0L) stop("SBML export failed (exit ", status, ").")
 
   invisible(filepath)

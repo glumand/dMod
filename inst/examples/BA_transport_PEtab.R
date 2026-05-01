@@ -1,11 +1,13 @@
-## Round-trip the BileAcid (TCA transport) model through PEtab v1
+## Round-trip the BileAcid (TCA transport) model through PEtab v2
 ## ---------------------------------------------------------------
 ## 1. Build the dMod-native model (reactions, observables, steady-state
 ##    trafo, log10 outer parameters, branched closed/open conditions).
 ## 2. Fit it on `badata`.
-## 3. Export the fitted problem to PEtab v1 — `exportPEtab` symbolically
+## 3. Export the fitted problem to PEtab v2 — `exportPEtab` symbolically
 ##    decomposes the trafo `p` into parameters / conditions / SBML
-##    initialAssignments. No numeric snapshot, no manual condition.grid.
+##    initialAssignments. The `10^(...)` wraps stay intact in
+##    conditions.tsv:targetValue / SBML initialAssignment, so PEtab
+##    parameters live on the linear log10-domain (parameterScale = "lin").
 ## 4. Re-import the YAML manifest and verify the objective at the same
 ##    *outer* parameter vector matches the dMod-native one.
 
@@ -25,7 +27,7 @@ reactions <- eqnlist() %>%
   addReaction("TCA_cana",   "TCA_buffer", rate = "k_reflux*TCA_cana",       description = "Reflux into the buffer")
 
 mymodel <- odemodel(reactions, modelname = "bamodel",
-                    compile = FALSE, solver = "CppODE")
+                    compile = FALSE, solver = "Sundials")
 x <- Xs(mymodel)
 
 observables <- eqnvec(buffer   = "s*TCA_buffer",
@@ -47,7 +49,7 @@ trafo <- eqnvec() %>%
 
 p <- P(trafo, modelname = "parfn", compile = FALSE)
 
-compile(g, x, p, cores = 4)
+compile(g, x, p, cores = 5)
 
 ## --- 2. Data + fit -------------------------------------------------------
 
@@ -71,16 +73,21 @@ cat("dMod-native obj(phat) =", obj(phat)$value, "\n")
 times <- seq(0, 45, len = 300)
 plot((g*x*p)(times, phat), data)
 
-## --- 3. Export to PEtab v1 ----------------------------------------------
+## --- 3. Export to PEtab v2 ----------------------------------------------
 ## `exportPEtab` reads `getEquations(p)` and decomposes each per-condition
-## eqnvec by stripping the log10 chain rule and classifying each LHS:
+## eqnvec, classifying each LHS:
 ##   - state with constant numeric RHS  -> SBML <initialConcentration>
 ##   - state with constant symbolic RHS -> SBML <initialAssignment>
 ##   - inner_par varying across conds   -> conditions.tsv parameter column
 ##   - inner_par with constant RHS      -> conditions.tsv (or SBML default)
-## The conditions.tsv columns reference parameter IDs from parameters.tsv
-## (e.g. closed: k_reflux=K_REFLUX, open: k_reflux=K_REFLUX_OPEN), and the
-## importer rebuilds the original outer-parameter trafo on the way back.
+## In v2 the `10^(...)` chain-rule wraps from `p` are kept verbatim in
+## conditions.tsv:targetValue / SBML initialAssignment (PEtab v2 dropped
+## parameterScale, so the trafo lives entirely in the model).
+## parameters.tsv contains only estimated parameters (matching the v2
+## reference test suite); inner symbols referenced by conditions.tsv
+## targetIds (k_import, k_export_*, k_reflux) and identity-mapped outer
+## pars (s) live in the SBML <parameter> table and are recovered by the
+## importer's SBML-default-as-fixed gap.
 out_dir  <- file.path(tempdir(), "BA_PEtab_export")
 yaml_out <- exportPEtab(
   data           = data,
@@ -88,8 +95,8 @@ yaml_out <- exportPEtab(
   observables    = observables,
   p              = p,
   pouter         = phat,
-  parameterScale = "log10",
-  model_id       = "BileAcid",
+  parameterScale = "lin",
+  modelID        = "BileAcid",
   dir            = out_dir,
   overwrite      = TRUE
 )
@@ -117,7 +124,11 @@ cat("Difference          =", val_petab - val_native, "\n")
 stopifnot(abs(val_petab - val_native) < 1e-3)
 
 ## And compare predictions across conditions. `petab$prd` is the raw
-## composite g * x * p, so it expects the full parameter vector.
+## composite g * x * p; pass the estimated bestfit plus any fixed outer
+## parameters of `p` (here `s = 1`, an identity outer that the native
+## trafo collapsed via `insert("S~0")`). `petab_meta$fixed` holds exactly
+## those — inner symbols pulled from SBML defaults are stashed in
+## `petab_meta$sbml_only_pars` and not needed at the prd boundary.
 fixed_petab <- attr(petab, "petab_meta")$fixed
 times       <- seq(0, 45, length.out = 200)
 pred_native <- (g * x * p)(times, phat)
