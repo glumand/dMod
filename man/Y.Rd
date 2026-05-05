@@ -46,7 +46,7 @@ for the generated C file.}
 
 \item{verbose}{Logical, print compiler output to the R console.}
 
-\item{derivMode}{Character. Selects the derivative backend used by \link[CppODE:funCpp]{CppODE::funCpp}
+\item{derivMode}{Character. Selects the derivative backend used by \link{funCpp}
 to evaluate observation Jacobians. One of \code{"dual"} (default, in-tree
 forward-mode AD via \code{jac_chain} — typically faster when the number of
 fitted parameters is large; requires \code{compile = TRUE}), \code{"fadbad"}

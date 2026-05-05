@@ -57,3 +57,5 @@ deriv2Tests/wd/
 # Claude stuff
 # -------------------------------------------------
 CLAUDE.md
+/doc/
+/Meta/

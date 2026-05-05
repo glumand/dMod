@@ -32,9 +32,9 @@ context("PEtab importer / exporter")
   ""
 }
 
-# AMICI is a heavy GitHub-only dependency. Skip integration tests that need
-# it if we cannot run import_sbml() at all.
-.amici_works <- function() {
+# Skip integration tests that need import_sbml() when the libsbml virtualenv
+# is missing.
+.libsbml_works <- function() {
   # Probe by importing case 0001 (the smallest of the bundled PEtab models).
   # Cheaper than synthesising an SBML file and avoids libsbml-strictness
   # quibbles on hand-written test XML.
@@ -183,7 +183,7 @@ test_that("read_petab_tables returns the expected slots for v1", {
   tabs <- read_petab_tables(file.path(petab_dir, "0001", "_0001.yaml"))
   expect_named(tabs, c("parameters", "conditions", "measurements",
                        "observables", "experiments", "mapping",
-                       "sbmlPath", "formatVersion"))
+                       "sbmlPath", "sbmlPaths", "formatVersion"))
   expect_s3_class(tabs$parameters,   "data.frame")
   expect_s3_class(tabs$conditions,   "data.frame")
   expect_s3_class(tabs$measurements, "data.frame")
@@ -194,17 +194,17 @@ test_that("read_petab_tables returns the expected slots for v1", {
 })
 
 
-## --- end-to-end fixture test (no AMICI required) --------------------------
+## --- end-to-end fixture test (no SBML import required) -------------------
 ##
 ## We hand-build the eqnlist that matches PEtab test case 0001's SBML model
 ## and verify the trafo+objective machinery against the published solution.
-## This avoids an AMICI dependency on every test run.
+## This avoids a libsbml dependency on every test run.
 
 test_that("hand-built case-0001 fixture produces solution-matching llh", {
 
   setwd(tempdir())
 
-  # Reaction network identical to PEtabTests/0001/_model.xml after AMICI
+  # Reaction network identical to PEtabTests/0001/_model.xml after libsbml
   # would have inlined the kinetic law's compartment factor. We use a unit
   # compartment so kinetic laws read just k1*A and k2*B.
   reactions <- eqnlist()
@@ -258,7 +258,7 @@ test_that("hand-built case-0001 fixture produces solution-matching llh", {
 })
 
 
-## --- AMICI-dependent integration tests ------------------------------------
+## --- libsbml-dependent integration tests ----------------------------------
 
 test_that("PEtab test cases 0001-0006 import and produce solution-matching llh", {
 
@@ -266,7 +266,7 @@ test_that("PEtab test cases 0001-0006 import and produce solution-matching llh",
 
   petab_dir <- .petab_repo_dir()
   if (!nzchar(petab_dir)) skip("PEtabTests/ directory not found")
-  if (!.amici_works())   skip("AMICI / Python virtualenv not available")
+  if (!.libsbml_works())   skip("libsbml virtualenv not available")
 
   for (id in sprintf("%04d", 1:6)) {
     yamlPath <- file.path(petab_dir, id, paste0("_", id, ".yaml"))
@@ -296,7 +296,7 @@ test_that("PEtab Stage-2 test cases 0007-0016 produce solution-matching llh", {
 
   petab_dir <- .petab_repo_dir()
   if (!nzchar(petab_dir)) skip("PEtabTests/ directory not found")
-  if (!.amici_works())   skip("AMICI / Python virtualenv not available")
+  if (!.libsbml_works())   skip("libsbml virtualenv not available")
 
   # Cases 0007 (log10 trafo), 0008 (replicates), 0009/0010 (preequilibration —
   # numeric Pequil fallback is exercised because steadyStates() leaves one
@@ -325,38 +325,13 @@ test_that("PEtab Stage-2 test cases 0007-0016 produce solution-matching llh", {
 })
 
 
-test_that("preeqMethod = 'numeric' forces Pequil even when analytic would work", {
-
-  setwd(tempdir())
-
-  petab_dir <- .petab_repo_dir()
-  if (!nzchar(petab_dir)) skip("PEtabTests/ directory not found")
-  if (!.amici_works())   skip("AMICI / Python virtualenv not available")
-
-  # Case 0009 has no symbolic conserved-quantity hint, so analytic falls back
-  # automatically. The explicit "numeric" override should still match.
-  yamlPath <- file.path(petab_dir, "0009", "_0009.yaml")
-  sol_path  <- file.path(petab_dir, "0009", "_0009_solution.yaml")
-  petab <- importPEtab(yamlPath, solver = "deSolve",
-                       modelname = "petab_0009_num",
-                       preeqMethod = "numeric")
-  sol <- yaml::read_yaml(sol_path)
-  out <- petab$obj(petab$bestfit, deriv = FALSE)
-  expect_lt(abs(out$value - (-2 * sol$llh)),
-            max(0.01, abs(2 * sol$tol_llh)))
-
-  unlink("petab_0009_num*"); unlink("*.c"); unlink("*.cpp")
-  unlink("*.o"); unlink("*.so")
-})
-
-
 test_that("two-condition roundtrip preserves objective value", {
 
   setwd(tempdir())
 
   petab_dir <- .petab_repo_dir()
   if (!nzchar(petab_dir)) skip("PEtabTests/ directory not found")
-  if (!.amici_works())   skip("AMICI / Python virtualenv not available")
+  if (!.libsbml_works())   skip("libsbml virtualenv not available")
 
   # Case 0002 has two conditions, an InitialAssignment binding A := a0 / B := b0
   # and exercises the condition table. The InitialAssignment roundtrip is the
@@ -407,7 +382,7 @@ test_that("Boehm_JProteomeRes2014 benchmark imports and matches published optimu
 
   bm_dir <- .benchmark_dir()
   if (!nzchar(bm_dir))  skip("BenchmarkModels/ directory not found")
-  if (!.amici_works())  skip("AMICI / Python virtualenv not available")
+  if (!.libsbml_works())  skip("libsbml virtualenv not available")
 
   yamlPath <- file.path(bm_dir, "Boehm_JProteomeRes2014",
                          "Boehm_JProteomeRes2014.yaml")
@@ -440,7 +415,7 @@ test_that("Boehm_JProteomeRes2014 benchmark imports and matches published optimu
 test_that("export_sbml emits InitialAssignment for symbolic state initials", {
 
   setwd(tempdir())
-  if (!.amici_works()) skip("Python / libsbml virtualenv not available")
+  if (!.libsbml_works()) skip("libsbml virtualenv not available")
 
   reactions <- eqnlist()
   reactions <- addReaction(reactions, "A", "B", "k1*A", "fwd",
@@ -468,7 +443,7 @@ test_that("export_sbml emits InitialAssignment for symbolic state initials", {
 
 ## --- trafo-aware exportPEtab: pure-R helper unit tests --------------------
 ##
-## The strip + classify decomposer should be unit-testable without AMICI
+## The strip + classify decomposer should be unit-testable without libsbml
 ## because it operates only on character RHSes and named eqnvecs.
 
 test_that(".petab_strip_param_scale compensates the chain rule per-occurrence", {
@@ -548,7 +523,7 @@ test_that(".petab_classify_lhs collapses 10^0 -> 1 via eval_constant", {
 test_that("native exportPEtab roundtrips outer pouter on log10 scale (1-cond)", {
 
   setwd(tempdir())
-  if (!.amici_works()) skip("AMICI / Python virtualenv not available")
+  if (!.libsbml_works()) skip("libsbml virtualenv not available")
 
   # Tiny 2-state model, single condition. Build the trafo via explicit
   # eqnvec literals to avoid `define`'s NSE which can't see test_that locals.
@@ -603,7 +578,7 @@ test_that("native exportPEtab roundtrips outer pouter on log10 scale (1-cond)", 
 test_that("native exportPEtab roundtrips per-condition k override (2-cond)", {
 
   setwd(tempdir())
-  if (!.amici_works()) skip("AMICI / Python virtualenv not available")
+  if (!.libsbml_works()) skip("libsbml virtualenv not available")
 
   reactions <- eqnlist() %>%
     addReaction("A", "B", rate = "k*A", description = "fwd")
@@ -661,7 +636,7 @@ test_that("native exportPEtab roundtrips per-condition k override (2-cond)", {
 test_that("exportPEtab errors on undeclared free symbol after strip", {
 
   setwd(tempdir())
-  if (!.amici_works()) skip("AMICI / Python virtualenv not available")
+  if (!.libsbml_works()) skip("libsbml virtualenv not available")
 
   reactions <- eqnlist() %>%
     addReaction("A", "B", rate = "k*A", description = "fwd")
@@ -694,7 +669,7 @@ test_that("exportPEtab errors on undeclared free symbol after strip", {
 test_that("native exportPEtab roundtrips per-row sigma via noiseParameters column", {
 
   setwd(tempdir())
-  if (!.amici_works()) skip("AMICI / Python virtualenv not available")
+  if (!.libsbml_works()) skip("libsbml virtualenv not available")
 
   reactions <- eqnlist() %>%
     addReaction("A", "B", rate = "k*A", description = "fwd")
@@ -749,7 +724,7 @@ test_that("native exportPEtab roundtrips per-row sigma via noiseParameters colum
 test_that("native exportPEtab roundtrips compound trafos like 10^(KM + 5)", {
 
   setwd(tempdir())
-  if (!.amici_works()) skip("AMICI / Python virtualenv not available")
+  if (!.libsbml_works()) skip("libsbml virtualenv not available")
 
   # 1-state, 1-reaction with a non-trivial compound mapping for the rate:
   #   k = 10^(K + 5) — chain-rule "compensation" path, not strippable.
@@ -1029,7 +1004,7 @@ test_that("read_petab_yaml errors on non-SBML model language", {
 
 
 test_that("exportPEtabObject v2 writes nominalValue verbatim (no parameterScale linearisation)", {
-  if (!.amici_works()) skip("AMICI / libsbml unavailable")
+  if (!.libsbml_works()) skip("libsbml virtualenv not available")
   petab_dir <- .petab_repo_dir()
   if (!nzchar(petab_dir)) skip("PEtabTests/ directory not found")
 
@@ -1060,7 +1035,7 @@ test_that("exportPEtabObject v2 writes nominalValue verbatim (no parameterScale 
 
 
 test_that("exportPEtabObject v2 writes long-format conditions and experiments", {
-  if (!.amici_works()) skip("AMICI / libsbml unavailable")
+  if (!.libsbml_works()) skip("libsbml virtualenv not available")
   petab_dir <- .petab_repo_dir()
   if (!nzchar(petab_dir)) skip("PEtabTests/ directory not found")
 
@@ -1089,7 +1064,7 @@ test_that("exportPEtabObject v2 writes long-format conditions and experiments", 
 
 
 test_that("v2 export → v2 import roundtrips the objective on case 0001", {
-  if (!.amici_works()) skip("AMICI / libsbml unavailable")
+  if (!.libsbml_works()) skip("libsbml virtualenv not available")
   petab_dir <- .petab_repo_dir()
   if (!nzchar(petab_dir)) skip("PEtabTests/ directory not found")
 
@@ -1119,7 +1094,7 @@ test_that("v2 PEtab test cases 0001/0002/0009 import and match published llh", {
   if (!nzchar(petab_dir)) skip("PEtabTests/ directory not found")
   v2_dir <- file.path(petab_dir, "v2")
   if (!dir.exists(v2_dir)) skip("PEtabTests/v2/ not present")
-  if (!.amici_works()) skip("AMICI / libsbml unavailable")
+  if (!.libsbml_works()) skip("libsbml virtualenv not available")
 
   for (case in c("0001", "0002", "0009")) {
     yamlPath <- file.path(v2_dir, case, paste0("_", case, ".yaml"))

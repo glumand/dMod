@@ -46,24 +46,30 @@ If you have only the dMod-native pieces (datalist, odemodel, observation
 through \code{importPEtab()}, use the higher-level \code{\link[=exportPEtab]{exportPEtab()}} adapter,
 which synthesises the missing PEtab metadata and dispatches here.
 
-Symbolic species initials (SBML \verb{<initialAssignment>} elements) survive
-the roundtrip: they are carried as-is on \code{petab$inits} and re-emitted by
-\code{\link[=export_sbml]{export_sbml()}}. The reimported objective therefore matches the original
-value at the same \code{pouter}.
+Symbolic species initials (SBML \verb{<initialAssignment>} elements) on
+\code{petab$inits} are written verbatim through \code{\link[=export_sbml]{export_sbml()}} into the
+new SBML model.
 
 Lossy steps documented:
 \itemize{
-\item AssignmentRules / RateRules are not yet read by \code{\link[=import_sbml]{import_sbml()}};
-models that rely on them are out of scope.
 \item Parameter scales survive only via \code{attr(petab$pouter, "petab_scales")} set by the importer; hand-built problems lacking
 this attribute default to \code{"lin"}.
 \item v2 has no \code{parameterScale} column. When exporting to v2, scales
 other than \code{"lin"} are linearised on disk (values \emph{and} bounds)
-with a one-time warning. The information is not roundtrippable
-through v2.
+with a one-time warning.
 \item v2 has no \code{log10} observable transformation. When exporting an
 observable with \code{obs_trafo == "log10"}, dMod warns and emits
 \code{noiseDistribution = "log-normal"} (mathematically \code{log}).
+\item State-init overrides that live only on the trafo \code{p} (i.e.
+\code{cond_grid} columns whose target is a state initial concentration,
+baked in by the v1 importer) are not written to the v2 long-form
+conditions table. Exporting such a problem to v2 therefore drops
+those overrides; export to \code{formatVersion = "1"} keeps them.
+The native \code{\link[=exportPEtab]{exportPEtab()}} is unaffected because state inits
+there flow through the trafo + SBML \verb{<initialAssignment>} path.
+\item SBML \verb{<algebraicRule>} elements are silently skipped on import
+(dMod has no DAE solver), so any SBML written back from such a
+problem lacks them.
 }
 }
 \seealso{

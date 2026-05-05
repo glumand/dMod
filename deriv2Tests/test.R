@@ -1,8 +1,5 @@
 rm(list = ls(all.names = TRUE))
-# Create and set a specific working directory inside your project folder
-.workingDir <- file.path(purrr::reduce(1:1, ~dirname(.x), .init = rstudioapi::getSourceEditorContext()$path), "wd")
-if (!dir.exists(.workingDir)) dir.create(.workingDir)
-setwd(.workingDir)
+setwd(tempdir())
 set.seed(5555)
 
 ## Load Libraries ---
@@ -32,7 +29,6 @@ reactions <- eqnlist() %>%
 
 # Translate reactions into ODE model object
 mymodel <- odemodel(reactions, modelname = "bamodel", compile = F, solver = "CppODE")
-# Generate trajectories for the default condition
 x <- Xs(mymodel)
 
 # Define observables buffer and cellular
@@ -49,19 +45,19 @@ trafo <- NULL %>%
 
 # # Explicit trafo (this is equivalent to the lines above)
 # trafo <- eqnvec(TCA_buffer = "0",
-#                 TCA_cell = "exp(log(10)*TCA_cell)",
-#                 TCA_cana = "exp(log(10)*TCA_cana)",
-#                 k_import = "exp(log(10)*k_import)",
-#                 k_export_sinus = "exp(log(10)*k_export_sinus)",
-#                 k_export_cana = "exp(log(10)*k_export_cana)",
-#                 k_reflux = "exp(log(10)*k_reflux)",
-#                 s = "exp(log(10)*s)")
+#                 TCA_cell = "10^TCA_cell",
+#                 TCA_cana = "10^TCA_cana",
+#                 k_import = "10^k_import",
+#                 k_export_sinus = "10^k_export_sinus",
+#                 k_export_cana = "10^k_export_cana",
+#                 k_reflux = "10^k_reflux",
+#                 s = "10^s")
 
 p <- P(trafo, condition = "closed", compile = F)
 
 
 # Compile the objects
-compile(g, x, p, cores = 8) # Compile C/C++ output of odemodel in parallel
+compile(g, x, p, output = "bamodel", cores = 4) # Compile C/C++ output of odemodel in parallel
 
 ## Use simulate data to calibrate outer model parameters ---
 outerpars <- getParameters(p)
@@ -72,8 +68,8 @@ prd <- g*x*p
 times <- seq(0, 45, len = 300)
 # debugonce(g)
 out <- prd(times, pouter)
-out %>% plot(data)
-out %>% getDerivs() %>% plot()
+plot(out, data)
+plot(getDerivs(out))
 
 myderivs <- attr(out$closed, "deriv")
 # Define objective function
@@ -108,12 +104,8 @@ p(pouter)
 # Objective function
 obj <- normL2(data, g * x * p) + constraintL2(pouter, sigma = 4)
 
-# Evaluation of obj at pouter
-system.time({obj(pouter)})
-myfit <- trust(obj, pouter, rinit = 0.1, rmax = 5, iterlim = 500, printIter = T)
-
 # # Fit 50 times, sample with sd=4 around pouter
-outms <- mstrust(obj, pouter, sd = 4, studyname = "bamodel", cores=detectFreeCores(), fits=100, iterlim = 1e3)
+outms <- mstrust(obj, pouter, sd = 4, studyname = "bamodel", cores=detectFreeCores(), fits=50, iterlim = 1e3)
 
 # ## Later: Fitting on Knecht machines
 # outknecht <- runbg({
@@ -133,18 +125,17 @@ bestfit <- as.parvec(out_frame)
 # Plot predictions along data
 plot((g*x*p)(times, bestfit), data)
 # 
-# # Plot sensis
-plot(getDerivs((g*x*p)(times, bestfit)))
-# 
 # Calculate Parameter Profiles and plot different contributions (for identifiablility only "data" is of interest)
-profiles_integrate <- profile(obj, bestfit, whichPar = names(bestfit), method = "integrate", cores = 10, limits = c(lower = -5, upper = 5), 
-                              stepControl = list(stop = "data"))
+profiles_integrate <- profile(obj, bestfit, whichPar = names(bestfit), method = "integrate", cores = detectFreeCores(), 
+                              limits = c(lower = -5, upper = 5), stepControl = list(stop = "data"))
 
-profiles_optimize <- profile(obj, bestfit, whichPar = names(bestfit), method = "optimize", cores = 10, limits = c(lower = -5, upper = 5), 
-                    stepControl = list(stepsize = 1e-4, min = 1e-4, max = Inf, atol = 1e-2, rtol = 1e-2, limit = 200, stop = "data"))
+profiles_optimize <- profile(obj, bestfit, whichPar = names(bestfit), method = "optimize", cores = detectFreeCores(), 
+                             limits = c(lower = -5, upper = 5), 
+                             stepControl = list(stepsize = 1e-4, min = 1e-4, max = Inf, 
+                                                atol = 1e-2, rtol = 1e-2, limit = 200, stop = "data"))
 
 proflist <- list(integrate = profiles_integrate, optimize = profiles_optimize) 
-# Integration based profiles past but not exakt
+# Integration based profiles fast but not exakt
 # Best practice: use method = "integrate" with reoptimize = TRUE in algoControl, then the integrate step is already close to the new optimum
 
 plotProfile(proflist, mode %in% c("data", "prior"))
@@ -182,7 +173,7 @@ plot((g*x*p)(times, pouter),data)
 obj <- normL2(data, g * x * p, attr.name = "data") + constraintL2(pouter, sigma = 20, attr.name = "prior")
 
 # Multistart fit
-outms <- mstrust(obj, pouter, sd = 4, iterlim = 1e3, studyname = "bamodel_ss", cores=20, fits=100)
+outms <- mstrust(obj, pouter, sd = 4, iterlim = 1e3, studyname = "bamodel_ss", cores = detectFreeCores(), fits = 50)
 outframe <- as.parframe(outms)
 plotValues(outframe) # Show "Waterfall" plot
 plotPars(outframe) # Show parameter plot
@@ -237,12 +228,12 @@ confint(validation_profile, val.column = "value")
 # Here we calculate a prediction CI for different timepoints. In the end we interpolate to a "prediction band"
 library(parallel)
 predprofs <- list()
-prediction_band <- do.call(rbind, mclapply(seq(0, 50, 1), function(t) {
+prediction_band <- do.call(rbind, mclapply(c(0,1,2,3,4,seq(5, 50, 5)), function(t) {
 
   cat("Computing prediction profile for t =", t, "\n")
 
   obj.validation <- normL2(data, g * x * p, times = c(t), attr.name = "data") +
-    datapointL2(name = "TCA_cell", time = t, value = "v", sigma = 0.01, attr.name = "validation", condition = "closed")
+    datapointL2(name = "TCA_cell", time = t, value = "v", sigma = 0.001, attr.name = "validation", condition = "closed")
 
   refit <- trust(obj.validation, parinit = c(v = 190, bestfit), rinit = 1, rmax = 10, iterlim = 1000)
 
@@ -258,9 +249,9 @@ prediction_band <- do.call(rbind, mclapply(seq(0, 50, 1), function(t) {
   # Output
   data.frame(time = t, condition = "closed", name = "TCA_cell",  d1[-1])
 
-}, mc.cores = 20))
+}, mc.cores = detectFreeCores()-1))
 
-times <- seq(0,51,len=300)
+times <- seq(0,50,len=300)
 prediction <- (g * x * p)(times, bestfit) %>%
   as.data.frame()
 
@@ -274,7 +265,7 @@ prediction_band_spline <- data.frame(
   upper = spline(prediction_band$time, prediction_band$upper, xout = prediction$time)$y
 )
 
-# Create the ggplot
+# Create the ggplot using dMod theme and color
 ggplot(prediction, aes(x = time, y = value, color = condition)) +
   geom_line() +  # Line connecting the points for each condition
   geom_point(data = badata, aes(x = time, y = value, color = condition)) + 
@@ -284,13 +275,13 @@ ggplot(prediction, aes(x = time, y = value, color = condition)) +
   geom_ribbon(data = prediction_band_spline, aes(x = time, ymin = lower, ymax = upper, fill = condition), lty = 0, alpha = .3, show.legend = F) +  # Show ribbon in the legend
   geom_point(data = prediction_band, aes(x = time, y = lower, color = condition), shape = 4, show.legend = F) +
   geom_point(data = prediction_band, aes(x = time, y = upper, color = condition), shape = 4, show.legend = F) +
-  facet_wrap(~ name, scales = "free_y")) +  # Facet by 'name' column
+  facet_wrap(~ name, scales = "free_y") +  # Facet by 'name' column
   labs(
     x = "Time",
     y = "Value",
     color = "Condition"
   ) +
-  dMod::theme_dMod() +  # Apply dMod theme
+  dMod::theme_dMod() +        # Apply dMod theme
   dMod::scale_color_dMod() +  # Apply dMod color scale to lines
   dMod::scale_fill_dMod()     # Apply the same color scale to the fill
 

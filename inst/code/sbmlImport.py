@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
-"""SBML -> JSON adapter for dMod's `import_sbml()`.
-
-Originally written against AMICI's symbolic SBML pipeline (Hackathon 2018);
-that pipeline is now incompatible with current AMICI releases. Since the
-R-side consumer (R/SBMLinterface.R) only needs a small subset of what AMICI
-produced — stoichiometric matrix, kinetic-law strings, parameter values,
-species initial expressions, compartment metadata — we read directly from
-libsbml here. No AMICI dependency.
+"""SBML -> JSON adapter for dMod's `import_sbml()`. Reads SBML directly via
+libsbml and emits a compact JSON payload with everything dMod needs:
+stoichiometric matrix, kinetic-law strings, parameter values, species
+initial expressions, compartment metadata.
 
 Output JSON keys (consumed unchanged by R/SBMLinterface.R):
     S                  list of n_species rows; each row is n_reactions
@@ -22,24 +18,32 @@ Output JSON keys (consumed unchanged by R/SBMLinterface.R):
     compartments       list of {id, size, spatialDimensions} dicts.
     speciesCompartments  dict mapping species ID -> compartment ID.
 
-Limitations relative to the old AMICI pipeline:
-- Function definitions are not pre-expanded. If the SBML uses
-  <functionDefinition>, references survive verbatim in the formula string;
-  dMod's downstream parser will likely fail on them. Workaround: expand
-  function definitions in the SBML file beforehand (libsbml's
-  `expandFunctionDefinitions()` converter does this in-place).
+Limitations:
 - AssignmentRules are emitted in the JSON `assignmentRules` dict (LHS -> RHS
   formula text in L3 syntax). The R-side caller is expected to inline them
   into rates / inits / observables (see import_sbml() in R/SBMLinterface.R).
+- RateRules (`<rateRule variable="X">`) are emitted in `rateRules` as
+  {variable: rhs_formula}. The R-side adds a virtual reaction with
+  stoichiometry +1 in row X, rate = rhs_formula, AFTER the kinetic-law
+  volume-division step (RateRules already define dQ/dt directly, so no
+  V-division). RateRules on non-species (parameter/compartment) are
+  skipped with a warning.
+- AlgebraicRules are NOT supported.
+- Events (`<event>`) are emitted in `events` as a list of
+  {triggerFormula, triggerTime, assignments=[{variable, formula}, ...]}.
+  The R-side translates each (event, assignment) pair into a row of
+  dMod's `eventlist` (var/time/value/root/method = "replace"). Triggers
+  of the form `time >=/== T` or `geq(time, T)` resolve to a numeric/symbolic
+  `time`; other triggers fall back to a `root` expression.
 - FunctionDefinitions are inlined via libsbml's
   SBMLFunctionDefinitionConverter before the formulas are read out — this
   unwraps `Function_for_v_15(args...)` style calls in benchmark models like
   Zheng_PNAS2012 into the underlying expressions.
-- RateRules are NOT supported.
 """
 
 import sys
 import json
+import re
 import libsbml
 
 
@@ -165,19 +169,71 @@ def parse_sbml(sbml_file):
         kl = rxn.getKineticLaw()
         flux_vector.append(_formula(kl.getMath()) if kl is not None else "0")
 
-    # --- assignment rules ---
+    # --- rules (assignment + rate; algebraic rules are unsupported) ---
     # PEtab v1 SBML may use <assignmentRule> for time-varying inputs (e.g.
     # Boehm's BaF3_Epo). The R caller substitutes them into rates / inits /
     # observables; the assigned symbol then drops out of the parameter set.
+    # <rateRule variable="X"> defines dX/dt = rhs and is mutually exclusive
+    # with X being produced/consumed by reactions per the SBML spec — the R
+    # caller adds it as a virtual reaction column on top of S/v.
     assignment_rules = {}
+    rate_rules = {}
     for i in range(model.getNumRules()):
         rule = model.getRule(i)
-        if rule.getTypeCode() != libsbml.SBML_ASSIGNMENT_RULE:
-            # RateRules and AlgebraicRules are not supported.
-            continue
+        tc = rule.getTypeCode()
         if not rule.isSetMath():
             continue
-        assignment_rules[rule.getVariable()] = _formula(rule.getMath())
+        if tc == libsbml.SBML_ASSIGNMENT_RULE:
+            assignment_rules[rule.getVariable()] = _formula(rule.getMath())
+        elif tc == libsbml.SBML_RATE_RULE:
+            rate_rules[rule.getVariable()] = _formula(rule.getMath())
+        # AlgebraicRules silently skipped (would require a DAE solver).
+
+    # --- events ---
+    # SBML <event> has a <trigger> (a boolean expression) and a list of
+    # <eventAssignment variable="V"> formulas. dMod's eventlist wants
+    # (var, time, value, root, method); we emit one row per assignment.
+    # `time` is extracted from triggers shaped like `time >= T`,
+    # `time == T`, `geq(time, T)` (and friends). T may be numeric or a
+    # symbolic parameter — both are forwarded as-is and resolved on the R
+    # side. Other trigger shapes leave `triggerTime = None` and the R caller
+    # falls back to a root expression.
+    _time_pat_infix = re.compile(
+        r'^\s*time\s*(>=|>|<=|<|==|!=)\s*(.+?)\s*$')
+    _time_pat_prefix = re.compile(
+        r'^\s*(geq|gt|leq|lt|eq|neq)\s*\(\s*time\s*,\s*(.+?)\s*\)\s*$')
+    events = []
+    for i in range(model.getNumEvents()):
+        ev = model.getEvent(i)
+        trig = ev.getTrigger()
+        trigger_formula = (_formula(trig.getMath())
+                           if trig is not None and trig.isSetMath() else None)
+        trigger_time = None
+        if trigger_formula:
+            ft = trigger_formula
+            m1 = _time_pat_infix.match(ft) or _time_pat_prefix.match(ft)
+            if m1 is not None:
+                rhs = m1.group(2).strip()
+                # Numeric or symbolic — both valid in dMod's eventlist.
+                try:
+                    trigger_time = float(rhs)
+                except ValueError:
+                    trigger_time = rhs
+        assignments = []
+        for j in range(ev.getNumEventAssignments()):
+            ea = ev.getEventAssignment(j)
+            if not ea.isSetMath():
+                continue
+            assignments.append({
+                'variable': ea.getVariable(),
+                'formula':  _formula(ea.getMath()),
+            })
+        events.append({
+            'id': ev.getId() if ev.isSetId() else 'event_%d' % i,
+            'triggerFormula': trigger_formula,
+            'triggerTime':    trigger_time,
+            'assignments':    assignments,
+        })
 
     return {
         'S': S,
@@ -190,6 +246,8 @@ def parse_sbml(sbml_file):
         'compartments': compartments,
         'speciesCompartments': species_compartments,
         'assignmentRules': assignment_rules,
+        'rateRules': rate_rules,
+        'events': events,
     }
 
 

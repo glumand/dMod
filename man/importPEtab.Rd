@@ -4,14 +4,7 @@
 \alias{importPEtab}
 \title{Import a PEtab v1 or v2 problem into dMod}
 \usage{
-importPEtab(
-  yamlPath,
-  solver,
-  compile = TRUE,
-  cores = 1L,
-  modelname = NULL,
-  preeqMethod = c("analytic", "numeric")
-)
+importPEtab(yamlPath, solver, compile = TRUE, cores = 1L, modelname = NULL)
 }
 \arguments{
 \item{yamlPath}{Path to the PEtab YAML manifest.}
@@ -30,26 +23,21 @@ concurrency.}
 
 \item{modelname}{Optional base modelname for the generated native files.
 Defaults to the YAML basename.}
-
-\item{preeqMethod}{How to compute pre-equilibration steady states for
-measurement rows that carry a \code{preequilibrationConditionId}. One of
-\code{"analytic"} (default) — solve symbolically via \code{\link[=steadyStates]{steadyStates()}} and
-inject the closed-form expressions as state initial values, falling back
-to \code{"numeric"} automatically when the symbolic solver leaves any state
-unresolved — or \code{"numeric"} — always integrate the pre-equilibration
-condition to steady state via \code{\link[=Pequil]{Pequil()}} and feed the result into the
-simulation phase.}
 }
 \value{
 A list with class \code{"PEtabProblem"} holding \code{dataList},
 \code{reactions}, \code{odemodel}, \code{g}, \code{x}, \code{p}, \code{e}, \code{prd} (the composite
 \code{g * x * p}), \code{obj}, \code{bestfit}, \code{parlower}, \code{parupper}. The \code{obj}
 closure has the PEtab fixed parameters baked in, so calling
-\code{obj(bestfit)} evaluates the likelihood at the current estimate
-without the user having to pass \code{fixed = ...}. The \code{bestfit} vector
-carries \code{attr(., "petab_scales")} recording each parameter's PEtab
-scale (the exporter reads it back). Internal metadata needed for
-the round-trip exporter (\code{fixed}, \code{inits}, \code{modelID},
+\code{obj(bestfit)} evaluates the likelihood at the published MLE
+without the user having to pass \code{fixed = ...}. \code{bestfit} is the
+PEtab \code{nominalValue} for every estimated parameter — for benchmark
+problems this is the published maximum-likelihood estimate
+transported through the manifest; for user-authored problems it is
+the current best estimate (and serves as the optimizer's starting
+point). The vector carries \code{attr(., "petab_scales")} recording each
+parameter's PEtab scale (the exporter reads it back). Internal
+metadata used by the exporter (\code{fixed}, \code{inits}, \code{modelID},
 \code{source_yaml}, \code{sub_cond_map}, \code{obs_meta}, \code{param_meta}) lives on
 \code{attr(., "petab_meta")}.
 }
@@ -75,9 +63,15 @@ are rewritten to v1's \verb{observableParameter$\{k\}_$\{id\}} sentinels, and an
 optional \code{mapping.tsv} is applied as a textual rewrite of PEtab entity
 IDs into model entity IDs.
 
-Out of scope (Stage 2): v2 priors (\code{priorDistribution} /
-\code{priorParameters} columns), multi-model problems via the \code{modelId}
-column, non-SBML model languages (BNGL / CellML / PySB), and
+L2 priors on parameters are read from \code{priorDistribution} /
+\code{priorParameters} (v2) or \code{objectivePriorType} /
+\code{objectivePriorParameters} (v1) and added to \code{obj} as a \code{constraintL2}
+term. \code{parameterScaleNormal} is mapped directly; \code{normal} is mapped on
+parameters with \code{parameterScale = lin} (where the two coincide). All
+other prior distributions raise an error: dMod's only objective is
+\code{normL2}.
+
+Out of scope: non-SBML model languages (BNGL / CellML / PySB), and
 multi-period experiments (>2 periods).
 }
 \examples{

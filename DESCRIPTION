@@ -29,7 +29,6 @@ Imports:
     rlang,
     data.table,
     purrr,
-    CppODE,
     abind,
     optimx,
     reticulate,
@@ -44,6 +43,7 @@ Suggests:
     pander,
     knitr,
     rmarkdown,
+VignetteBuilder: knitr
 RoxygenNote: 7.3.3
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)

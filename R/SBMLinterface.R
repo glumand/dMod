@@ -1,7 +1,10 @@
-#' Import an SMBL model
+#' Import an SBML model
 #'
-#' Requires AMICI https://github.com/ICB-DCM/AMICI/ and dependencies to be installed on your system
-#' Big thanks go to Daniel Weindl!
+#' Reads an SBML Level 3 file via a Python helper (`inst/code/sbmlImport.py`)
+#' that uses `python-libsbml`. dMod expects a virtualenv at
+#' `~/.virtualenvs/libsbml/` with `python-libsbml` installed; create it with
+#' `python3 -m venv ~/.virtualenvs/libsbml && ~/.virtualenvs/libsbml/bin/pip
+#' install python-libsbml`.
 #'
 #' Kinetic laws coming out of SBML are **extensive** (amount/time) by SBML
 #' convention, whereas dMod stores rates in **concentration-style**. On import,
@@ -19,17 +22,11 @@
 #' @importFrom stringr str_replace_all
 import_sbml <- function(modelpath) {
 
-  importscript <- system.file("code/sbmlAmicidMod.py", package = "dMod")
+  importscript <- system.file("code/sbmlImport.py", package = "dMod")
   tmpfile_json <- tempfile()
   modelpath <- normalizePath(modelpath, mustWork = TRUE)
 
-  # Call the virtualenv's python directly — that python knows its own
-  # site-packages via pyvenv.cfg, no `source activate` gymnastics needed.
-  venv_python <- path.expand("~/.virtualenvs/amici/bin/python")
-  if (!file.exists(venv_python))
-    stop("dMod expects a Python virtualenv at ~/.virtualenvs/amici/. ",
-         "Create one with `python3 -m venv ~/.virtualenvs/amici && ",
-         "~/.virtualenvs/amici/bin/pip install python-libsbml`.")
+  venv_python <- .dmod_libsbml_python()
 
   status <- system2(venv_python,
                     args = c(shQuote(importscript),
@@ -37,7 +34,7 @@ import_sbml <- function(modelpath) {
                              shQuote(tmpfile_json)))
   if (status != 0L || !file.exists(tmpfile_json))
     stop("SBML import failed (exit ", status, "). ",
-         "Check that ~/.virtualenvs/amici/ has python-libsbml installed.")
+         "Check that the libsbml virtualenv has python-libsbml installed.")
   json_content <- rjson::fromJSON(file = tmpfile_json)
 
   # `S` from the python side is a list-of-lists with shape
@@ -145,13 +142,94 @@ import_sbml <- function(modelpath) {
     pars <- pars[setdiff(names(pars), rule_lhs)]
   }
 
+  # --- rate rules ---
+  # `<rateRule variable="X">` defines dX/dt = rhs. Per SBML spec, X cannot
+  # also be produced/consumed by reactions, so the new column is independent
+  # of existing kinetic laws. dC/dt is intensive already, so we append the
+  # rate AFTER the volume-division loop above (no /V wrap). RateRules on
+  # non-species (parameter / compartment) are skipped with a warning.
+  rate_rules <- json_content[["rateRules"]]
+  if (length(rate_rules)) {
+    rr_lhs <- names(rate_rules)
+    rr_rhs <- .normalise_formula(unlist(rate_rules, use.names = FALSE))
+    # Inline assignment-rule LHSs into the rate-rule RHSs too, so a RateRule
+    # that references a rule-defined symbol doesn't carry it as a free var.
+    if (length(rules)) {
+      for (it in seq_len(max_iter)) {
+        new_rr <- replaceSymbols(rule_lhs, rule_rhs, rr_rhs)
+        if (identical(new_rr, rr_rhs)) break
+        rr_rhs <- new_rr
+      }
+    }
+    for (k in seq_along(rr_lhs)) {
+      var <- rr_lhs[k]; rhs <- rr_rhs[k]
+      if (!var %in% states) {
+        warning(sprintf(
+          "RateRule on `%s` ignored: only species RateRules are supported (got non-species; promote to a state in the SBML or rewrite as a reaction).",
+          var), call. = FALSE)
+        next
+      }
+      # Append a virtual reaction: stoichiometry +1 on `var`, 0 elsewhere;
+      # rate string = rhs. After eqnlist construction this contributes
+      # +rhs to the RHS row of `var`, which is exactly the rate rule.
+      new_col <- rep(NA_real_, length(states))
+      new_col[match(var, states)] <- 1
+      S <- if (is.null(S)) matrix(new_col, nrow = 1L)
+           else rbind(S, new_col)
+      v <- c(v, rhs)
+    }
+  }
+
   reactions <- eqnlist(smatrix = S, states = states, rates = v,
                        compartments = compartments, compartmentOf = compartmentOf)
 
   observables <- json_content[["observables"]]
 
+  # --- events ---
+  # SBML <event> -> dMod eventlist (one row per <eventAssignment>). Triggers
+  # of the form `time >=/== T` (numeric or symbolic T) populate `time`; other
+  # triggers fall back to a root expression of the form `lhs - (rhs)` so the
+  # ODE solver can detect the zero crossing. Method is always "replace"
+  # (SBML eventAssignments are assignment-style by spec).
+  events_json <- json_content[["events"]]
+  events_df <- NULL
+  if (length(events_json)) {
+    rows <- list()
+    cmp_pat <- "^\\s*(.+?)\\s*(>=|>|<=|<|==|!=)\\s*(.+?)\\s*$"
+    for (ev in events_json) {
+      tt <- ev[["triggerTime"]]
+      tf <- ev[["triggerFormula"]]
+      tt_num <- suppressWarnings(as.numeric(tt))
+      time_val <- if (length(tt) && !is.null(tt) && !is.na(tt_num)) tt_num
+                  else if (length(tt) && nzchar(tt)) as.character(tt)
+                  else NA
+      root_val <- NA_character_
+      if (is.na(time_val) && length(tf) && nzchar(tf)) {
+        m <- regmatches(tf, regexec(cmp_pat, tf))[[1L]]
+        root_val <- if (length(m) == 4L)
+                      paste0("(", m[2L], ") - (", m[4L], ")")
+                    else
+                      tf
+      }
+      for (a in ev$assignments) {
+        rows[[length(rows) + 1L]] <- data.frame(
+          var    = a$variable,
+          time   = time_val,
+          value  = .normalise_formula(a$formula),
+          root   = root_val,
+          method = "replace",
+          stringsAsFactors = FALSE
+        )
+      }
+    }
+    if (length(rows)) {
+      events_df <- as.eventlist(do.call(rbind, rows))
+    }
+  }
+
   out <- list(reactions = reactions, pars = pars, inits = x0,
-              observables = observables, assignmentRules = rules)
+              observables = observables, assignmentRules = rules,
+              events = events_df)
   return(out)
 }
 
@@ -254,11 +332,34 @@ export_sbml <- function(eqnlist, parameters = NULL, inits = NULL, filepath,
   writeLines(rjson::toJSON(spec), spec_json)
 
   script <- system.file("code/dmodToSbml.py", package = "dMod")
-  venv_python <- path.expand("~/.virtualenvs/amici/bin/python")
-  if (!file.exists(venv_python))
-    stop("dMod expects a Python virtualenv at ~/.virtualenvs/amici/.")
+  venv_python <- .dmod_libsbml_python()
   status <- system2(venv_python, args = c(shQuote(script), shQuote(spec_json)))
   if (status != 0L) stop("SBML export failed (exit ", status, ").")
 
   invisible(filepath)
+}
+
+
+.dmod_libsbml_python <- function() {
+  python <- path.expand("~/.virtualenvs/libsbml/bin/python")
+  if (!file.exists(python))
+    stop("dMod expects a Python virtualenv at ~/.virtualenvs/libsbml/. ",
+         "Create one with `python3 -m venv ~/.virtualenvs/libsbml && ",
+         "~/.virtualenvs/libsbml/bin/pip install python-libsbml`.")
+
+  # Probe `import libsbml` once per session. Without this, a venv that
+  # exists but lacks python-libsbml fails deep inside sbmlImport.py with
+  # an opaque exit code. Cached via an env var so the ~30 ms python
+  # spawn does not repeat across import_sbml / export_sbml calls.
+  if (!identical(Sys.getenv("DMOD_LIBSBML_OK", unset = ""), "1")) {
+    status <- suppressWarnings(
+      system2(python, args = c("-c", shQuote("import libsbml")),
+              stdout = FALSE, stderr = FALSE))
+    if (status != 0L)
+      stop("Python at ~/.virtualenvs/libsbml/ exists but `import libsbml` ",
+           "failed (status ", status, "). Install python-libsbml with ",
+           "`~/.virtualenvs/libsbml/bin/pip install python-libsbml`.")
+    Sys.setenv(DMOD_LIBSBML_OK = "1")
+  }
+  python
 }

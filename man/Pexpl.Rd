@@ -28,14 +28,14 @@ in the output vector (identity mapping).}
 
 \item{condition}{Character label for which the transformation is generated.}
 
-\item{compile}{Logical. If \code{TRUE}, compile the transformation via \link[CppODE:funCpp]{CppODE::funCpp}
+\item{compile}{Logical. If \code{TRUE}, compile the transformation via \link{funCpp}
 for faster evaluation.}
 
 \item{modelname}{Base name for generated C++ code if \code{compile = TRUE}.}
 
 \item{verbose}{Logical. Print compiler messages.}
 
-\item{derivMode}{Character. Selects the derivative backend used by \link[CppODE:funCpp]{CppODE::funCpp}
+\item{derivMode}{Character. Selects the derivative backend used by \link{funCpp}
 to evaluate the transformation Jacobian. One of \code{"dual"} (default,
 in-tree forward-mode AD via \code{jac_chain}; requires \code{compile = TRUE} to
 take effect), \code{"fadbad"} (legacy FADBAD++ AD backend), or \code{"symbolic"}

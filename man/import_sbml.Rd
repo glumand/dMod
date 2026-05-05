@@ -2,7 +2,7 @@
 % Please edit documentation in R/SBMLinterface.R
 \name{import_sbml}
 \alias{import_sbml}
-\title{Import an SMBL model}
+\title{Import an SBML model}
 \usage{
 import_sbml(modelpath)
 }
@@ -13,8 +13,10 @@ import_sbml(modelpath)
 list of eqnlist, parameters and inits
 }
 \description{
-Requires AMICI https://github.com/ICB-DCM/AMICI/ and dependencies to be installed on your system
-Big thanks go to Daniel Weindl!
+Reads an SBML Level 3 file via a Python helper (\code{inst/code/sbmlImport.py})
+that uses \code{python-libsbml}. dMod expects a virtualenv at
+\verb{~/.virtualenvs/libsbml/} with \code{python-libsbml} installed; create it with
+\verb{python3 -m venv ~/.virtualenvs/libsbml && ~/.virtualenvs/libsbml/bin/pip install python-libsbml}.
 }
 \details{
 Kinetic laws coming out of SBML are \strong{extensive} (amount/time) by SBML

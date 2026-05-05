@@ -14,10 +14,12 @@ A list with \code{baseDir}, \code{formatVersion} (integer major version),
 \code{parameterFile}, and a one-element \code{problems} list whose entry holds
 resolved (absolute) paths for \code{sbmlFile}, \code{conditionFile},
 \code{measurementFile}, \code{observableFile}. v2 manifests additionally fill
-\code{experimentFile}, \code{mappingFile} (both possibly \code{NULL}) and \code{modelID}
-in the same problem entry. PEtab allows multiple problems and multiple
-files per slot; the current reader supports a single problem with one
-file per slot and errors otherwise.
+\code{experimentFile}, \code{mappingFile} (both possibly \code{NULL}), \code{modelID}
+(the first / canonical model id), and \code{models} (a named character
+vector mapping every model id from \code{model_files} to its resolved SBML
+path; length 1 in single-model problems). PEtab allows multiple
+problems per file; the reader supports a single problem entry but any
+number of v2 model_files inside it.
 }
 \description{
 Parses a PEtab v1 or v2 YAML file and resolves the paths of the referenced

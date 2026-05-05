@@ -79,11 +79,9 @@ Symbolically decomposes a dMod parameter transformation \code{p} and writes
 the corresponding PEtab problem (parameters / observables / conditions
 / measurements TSVs, an SBML model, and a YAML manifest; v2 additionally
 writes an experiments TSV). Output format is selected via
-\code{format_version} (default \code{"2.0.0"}). The decomposer
-inverts the importer's \code{\link[=importPEtab]{importPEtab()}} trafo construction so the
-roundtrip preserves outer parameter names, scales, and per-condition
-overrides; the imported PEtab problem is fitted on the same outer
-parameter vector as the dMod-native problem.
+\code{formatVersion} (default \code{"2.0.0"}). Parameter scales, fixed values,
+and per-condition overrides are read off \code{p} and written into the
+corresponding PEtab tables.
 }
 \section{Algorithm}{
 
@@ -111,12 +109,9 @@ required-symbol check finds them.
 \section{Limitations}{
 
 \itemize{
-\item Pre-equilibration is not yet roundtrippable through \code{p}. Use
-\code{\link[=exportPEtabObject]{exportPEtabObject()}} on the original \code{petabProblem} if you
-need it.
-\item Per-row data sigmas are not preserved; supply an explicit
-\code{errors} formula (e.g. parameterised noise) if you need
-non-constant noise.
+\item Pre-equilibration cannot be expressed via the trafo \code{p} alone.
+Use \code{\link[=exportPEtabObject]{exportPEtabObject()}}, which takes a full \code{petabProblem},
+when the problem needs pre-equilibration.
 \item Fixed parameters are always written with \code{parameterScale = "lin"}
 (PEtab+dMod convention; cf. \code{exportPEtabObject} line 1387).
 Wrapping a fixed-name in \code{10^(.)} inside the trafo will trigger

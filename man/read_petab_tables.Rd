@@ -12,11 +12,13 @@ read_petab_tables(yamlPath)
 \value{
 A list with \code{parameters}, \code{conditions}, \code{measurements},
 \code{observables}, optional \code{experiments} and \code{mapping} (data frames or
-\code{NULL}), \code{sbmlPath} (character), and \code{formatVersion} (integer).
+\code{NULL}), \code{sbmlPath} (the first / canonical SBML path), \code{sbmlPaths}
+(named character vector keyed by modelId; length 1 for single-model
+problems), and \code{formatVersion} (integer).
 }
 \description{
 Reads the PEtab tables referenced by a YAML manifest into base R data
-frames. Useful for inspecting a problem without invoking AMICI.
+frames. Useful for inspecting a problem without touching the SBML model.
 }
 \details{
 For v2 manifests, \code{experiments} and \code{mapping} slots are populated when

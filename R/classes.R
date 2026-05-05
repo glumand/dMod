@@ -1108,6 +1108,12 @@ objframe <- function(mydata, deriv = NULL, deriv.err = NULL) {
       times <- arglist[[1]]
       pars <- arglist[[2]]
 
+      # Mirror prdfn's outfn: strip overlapping names so the kernels see
+      # disjoint (pars, fixed) sets.
+      if (!is.null(fixed)) {
+        pars  <- as.parvec(pars[setdiff(names(pars), names(fixed))])
+        fixed <- as.parvec(fixed, deriv = FALSE)
+      }
 
       if (is.null(conditions)) {
         available <- names(mappings)
@@ -1115,15 +1121,12 @@ objframe <- function(mydata, deriv = NULL, deriv.err = NULL) {
         available <- intersect(names(mappings), conditions)
       }
       outlist <- structure(vector("list", length(conditions)), names = conditions)
-      #outpars <- structure(vector("list", length(conditions)), names = conditions)
       for (C in available) {
-        outlist[[C]] <- mappings[[C]](times = times, pars = pars, deriv = deriv)
-        #outpars[[C]] <- attr(outlist[[C]], "pars")
-        #attr(outlist[[C]], "pars") <- NULL
+        outlist[[C]] <- mappings[[C]](times = times, pars = pars,
+                                      fixed = fixed, deriv = deriv)
       }
 
       out <- as.prdlist(outlist)
-      #attr(out, "pars") <- outpars
       return(out)
 
     }
@@ -1142,6 +1145,13 @@ objframe <- function(mydata, deriv = NULL, deriv.err = NULL) {
       out <- arglist[[1]]
       pars <- arglist[[2]]
 
+      # Mirror obsfn's outfn (R/classes.R obsfn): callers like normL2 may
+      # pass overlapping `pars` / `fixed` (pinner contains fixedinner); the
+      # X2Y kernel does `c(pars, fixed)` and would duplicate names.
+      if (!is.null(fixed)) {
+        pars  <- as.parvec(pars[setdiff(names(pars), names(fixed))])
+        fixed <- as.parvec(fixed, deriv = FALSE)
+      }
 
       if (is.null(conditions)) {
         available <- names(mappings)
@@ -1150,7 +1160,8 @@ objframe <- function(mydata, deriv = NULL, deriv.err = NULL) {
       }
       outlist <- structure(vector("list", length(conditions)), names = conditions)
       for (C in available) {
-        outlist[[C]] <- mappings[[C]](out = out, pars = pars, deriv = deriv)
+        outlist[[C]] <- mappings[[C]](out = out, pars = pars,
+                                      fixed = fixed, deriv = deriv)
       }
 
       out <- as.prdlist(outlist)
@@ -1339,8 +1350,8 @@ test_conditions <- function(c1, c2) {
     # Generate mappings for observation function
     l <- max(c(1, length(conditions.out)))
     mappings <- lapply(1:l, function(i) {
-      mapping <- function(out, pars) {
-        outfn(out = out, pars = pars, conditions = conditions.out[i])[[1]]
+      mapping <- function(out, pars, fixed = NULL, deriv = TRUE) {
+        outfn(out = out, pars = pars, fixed = fixed, deriv = deriv, conditions = conditions.out[i])[[1]]
       }
       m1 <- modelname(p1, conditions = conditions.p1[i])
       m2 <- modelname(p2, conditions = conditions.p2[i])
@@ -1390,8 +1401,8 @@ test_conditions <- function(c1, c2) {
     # Generate mappings for observation function
     l <- max(c(1, length(conditions.out)))
     mappings <- lapply(1:l, function(i) {
-      mapping <- function(out, pars) {
-        outfn(out = out, pars = pars, conditions = conditions.out[i])[[1]]
+      mapping <- function(out, pars, fixed = NULL, deriv = TRUE) {
+        outfn(out = out, pars = pars, fixed = fixed, deriv = deriv, conditions = conditions.out[i])[[1]]
       }
       m1 <- modelname(p1, conditions = conditions.p1[i])
       m2 <- modelname(p2, conditions = conditions.p2[i])
@@ -1448,8 +1459,8 @@ test_conditions <- function(c1, c2) {
     # Generate mappings for prediction function
     l <- max(c(1, length(conditions.out)))
     mappings <- lapply(1:l, function(i) {
-      mapping <- function(times, pars, deriv = TRUE) {
-        outfn(times = times, pars = pars, deriv = deriv, conditions = conditions.out[i])[[1]]
+      mapping <- function(times, pars, fixed = NULL, deriv = TRUE) {
+        outfn(times = times, pars = pars, fixed = fixed, deriv = deriv, conditions = conditions.out[i])[[1]]
       }
       m1 <- modelname(p1, conditions = conditions.p1[i])
       m2 <- modelname(p2, conditions = conditions.p2[i])
@@ -1488,10 +1499,10 @@ test_conditions <- function(c1, c2) {
 
       step1 <- p2(pars = pars, fixed = fixed, deriv = deriv, conditions = conditions)
       step2 <- do.call(c, lapply(1:length(step1), function(i) {
-        p1(times = times, 
-           pars = (step1[[i]])[setdiff(names(step1[[i]]), attr(step1[[i]], "fixed"))], 
-           fixed = (step1[[i]])[attr(step1[[i]], "fixed")], 
-           deriv = deriv, 
+        p1(times = times,
+           pars = (step1[[i]])[setdiff(names(step1[[i]]), attr(step1[[i]], "fixed"))],
+           fixed = (step1[[i]])[attr(step1[[i]], "fixed")],
+           deriv = deriv,
            conditions = names(step1)[i])
       }))
 
@@ -1504,8 +1515,8 @@ test_conditions <- function(c1, c2) {
     # Generate mappings for prediction function
     l <- max(c(1, length(conditions.out)))
     mappings <- lapply(1:l, function(i) {
-      mapping <- function(times, pars, deriv = TRUE) {
-        outfn(times = times, pars = pars, deriv = deriv, conditions = conditions.out[i])[[1]]
+      mapping <- function(times, pars, fixed = NULL, deriv = TRUE) {
+        outfn(times = times, pars = pars, fixed = fixed, deriv = deriv, conditions = conditions.out[i])[[1]]
       }
       attr(mapping, "parameters") <- getParameters(p2, conditions = conditions.out[i])
       m1 <- modelname(p1, conditions = conditions.p1[i])

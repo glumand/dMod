@@ -1,0 +1,316 @@
+---
+title: "PEtab problems with dMod"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{PEtab problems with dMod}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>",
+                      dpi = 150, fig.retina = 2, out.width = "100%")
+have_libsbml <- file.exists(path.expand("~/.virtualenvs/libsbml/bin/python"))
+```
+
+dMod reads [PEtab](https://petab.readthedocs.io/) v1 and v2 problems
+(YAML manifest + SBML model + four to six TSV tables) and turns them into
+a fully assembled fit problem in one call. This vignette walks through
+**Boehm et al. 2014** (JAK/STAT5 signalling, the canonical PEtab
+benchmark) using a bundled copy of the files, then explains what
+`importPEtab()` does under the hood.
+
+## Prerequisites
+
+`importPEtab()` reads the SBML model through a Python helper that needs
+`python-libsbml`. Create the virtualenv once:
+
+```bash
+python3 -m venv ~/.virtualenvs/libsbml
+~/.virtualenvs/libsbml/bin/pip install python-libsbml
+```
+
+The TSV / YAML readers below work without it.
+
+## The bundled example
+
+```{r files}
+petab_dir <- system.file("extdata/petab_boehm", package = "dMod")
+list.files(petab_dir)
+```
+
+```{r yaml}
+library(dMod)
+yamlPath <- file.path(petab_dir, "Boehm.yaml")
+manifest <- read_petab_yaml(yamlPath)
+str(manifest, max.level = 2)
+```
+
+```{r tables}
+tables <- read_petab_tables(yamlPath)
+head(tables$measurements)
+tables$observables
+tables$parameters[, c("parameterId", "parameterScale",
+                       "lowerBound", "upperBound", "estimate")]
+```
+
+The model has 8 STAT5 species, 6 estimated rate constants, 3 estimated
+noise SDs, and 2 fixed scaling parameters (`ratio`, `specC17`). All
+estimated parameters are on `log10` scale.
+
+## Importing the problem
+
+`importPEtab()` parses the YAML, the SBML, and all TSV tables, generates
+the ODE plus sensitivity equations, compiles them, and returns a single
+`PEtabProblem` list:
+
+```{r import, eval = have_libsbml}
+setwd(tempdir())  # native artefacts (.c, .so, ...) land in cwd
+petab <- importPEtab(yamlPath, solver = "deSolve", cores = 2L)
+print(petab)
+```
+
+The slots are plain dMod objects:
+
+| slot       | what it is                                                |
+|------------|-----------------------------------------------------------|
+| `dataList` | measurements as a `datalist`, keyed by sub-condition      |
+| `odemodel` | compiled ODE rhs + sensitivities                          |
+| `g`, `x`, `p` | observation function, prediction function, trafo       |
+| `e`        | error model (Y function over the noise formulas), or `NULL` if every noise formula collapses to a constant after substitution |
+| `prd`      | composite `g * x * p`                                     |
+| `obj`      | objective `normL2(dataList, prd, errmodel = e)` with PEtab `fixed` parameters baked in |
+| `bestfit`  | PEtab `nominalValue` per estimated parameter (the published MLE for benchmark problems, the current best estimate and optimizer starting point otherwise) |
+| `parlower`, `parupper` | bounds, on `parameterScale`                   |
+
+## Predict and plot
+
+The prediction `g * x * p` returns one observable trace per timepoint. To
+visualise the noise model, we read the per-observable $\sigma$ from
+`bestfit` (the $\sigma$ entries are estimated parameters; Boehm declares
+`parameterScale = log10`, so we linearise) and overlay $\pm\sigma$ bands
+via `geom_ribbon`.
+
+```{r predict, eval = have_libsbml, fig.width = 8, fig.height = 3.5, message = FALSE}
+library(ggplot2)
+
+fixed      <- attr(petab, "petab_meta")$fixed
+times      <- seq(0, 240, length.out = 121)
+prediction <- petab$prd(times, c(petab$bestfit, fixed))
+
+# Linearise per-observable σ from the bestfit's parameterScale.
+scales  <- attr(petab$bestfit, "petab_scales")
+unscale <- function(p, sc) ifelse(sc == "log10", 10^p,
+                           ifelse(sc == "log",   exp(p), p))
+sds     <- unscale(petab$bestfit, scales[names(petab$bestfit)])
+sd_obs  <- c(pSTAT5A_rel = unname(sds["sd_pSTAT5A_rel"]),
+             pSTAT5B_rel = unname(sds["sd_pSTAT5B_rel"]),
+             rSTAT5A_rel = unname(sds["sd_rSTAT5A_rel"]))
+
+pred_mat  <- as.data.frame(prediction[[1]])
+pred_long <- do.call(rbind, lapply(names(sd_obs), function(o)
+  data.frame(name = o, time = pred_mat$time, value = pred_mat[[o]],
+             sigma = sd_obs[[o]])))
+pred_long$lo <- pred_long$value - pred_long$sigma
+pred_long$hi <- pred_long$value + pred_long$sigma
+
+ggplot() +
+  geom_ribbon(data = pred_long,
+              aes(time, ymin = lo, ymax = hi, fill = name), alpha = 0.2) +
+  geom_line(data = pred_long, aes(time, value, color = name)) +
+  geom_point(data = petab$dataList[[1]],
+             aes(time, value, color = name), size = 1.5) +
+  facet_wrap(~ name, scales = "free_y") +
+  guides(color = "none", fill = "none") +
+  theme_bw() +
+  labs(x = "time [min]", y = "observable")
+```
+
+## Fit
+
+```{r fit, eval = have_libsbml}
+fit <- trust(petab$obj, petab$bestfit, rinit = 1, rmax = 10)
+fit$value
+```
+
+`obj()` already has the fixed parameters and PEtab parameter scales baked
+in, so the optimizer only sees the estimated outer parameters on the
+scale declared in `parameters.tsv`.
+
+## How `importPEtab()` works internally
+
+```
+   yaml + tsv + sbml
+          │
+          ▼
+   parse / normalise   (v2 → v1 if needed)
+          │
+          ├── parameters    ──▶  p  =  P(trafo)
+          ├── reactions     ──▶  odemodel  ──▶  x  =  Xs(odemodel)
+          ├── observables   ──▶  g  =  Y(observables)   +   errmodel e
+          └── measurements  ──▶  sub-condition map      +   dataList
+                                            │
+                                            ▼
+                                  prd  =  g * x * p
+                                            │
+                                            ▼
+                          obj  =  normL2(dataList, prd, errmodel = e)
+```
+
+Each box maps onto a slot of the returned `PEtabProblem`.
+
+The non-obvious pieces:
+
+**1. SBML extensive → dMod intensive flux.** SBML kinetic laws have
+units of amount/time; dMod stores rates as concentration/time. On
+import, each kinetic law is divided by the volume of its home
+compartment:
+$$\text{rate}_{\text{dMod}} \;=\; K_{\text{SBML}} \,/\, V_{\text{home}}.$$
+The home compartment is the shared compartment of the educts, falling
+back to the products for pure synthesis. AssignmentRules from SBML are
+inlined into rates and initial expressions before the eqnlist is built.
+
+**2. `parameterScale` is folded into the trafo, not into the data.**
+PEtab declares per-parameter scales (`lin`, `log`, `log10`); dMod wraps
+the trafo `p` so the optimizer sees parameters on the chosen scale
+($x = 10^{X}$ for `log10`, $x = e^{X}$ for `log`). The chain rule wraps
+through the composition automatically, so gradients stay correct. The
+wrapping only applies to estimated outer parameters; fixed parameters
+stay linear. The `bestfit` vector therefore lives on `parameterScale`,
+not on the linear scale.
+
+**3. Per-row observable / noise placeholders.** `measurements.tsv` may
+override `observableParameter${k}_${id}` and `noiseParameter${k}_${id}`
+placeholders per row (e.g. a separate noise SD per observable, as in
+Boehm). Placeholders carry the row's `observableId` as suffix, so
+substitutions across observables never collide. Within a
+`(simulationConditionId, preequilibrationConditionId)` group the
+importer merges all rows into a single sub-condition whose trafo carries
+one substitution per observableId. Boehm's three rows therefore collapse
+to one sub-condition with three independent noise substitutions. A new
+sub-condition is only spawned when the same observableId appears with
+conflicting `(observableParameters, noiseParameters)` values inside one
+group. Numeric noise placeholders fold into the data column (`data$sigma`,
+errmodel stays `NULL`); symbolic ones become inner parameters of the
+trafo.
+
+**4. Pre-equilibration.** When measurements carry a
+`preequilibrationConditionId`, the importer composes a `Pequil` stage
+into the prediction function. Each affected sub-condition runs the
+peq-row's parameter overrides through the rates, integrates to steady
+state, and feeds the result into the simulation period.
+
+**5. SBML-default-as-fixed gap.** Symbols that appear in rates, inits,
+or observables but are not in `parameters.tsv` and are not states are
+pulled from SBML's parameter table and appended to `fixed` (typically
+compartment volumes that PEtab leaves unspecified). Symbols without a
+default raise a clear error.
+
+**6. Error model wiring.** `e` is built once from the raw `noiseFormula`
+strings (e.g. Boehm's `noiseParameter1_pSTAT5A_rel`); placeholders
+survive verbatim as inner-parameter symbols of the Y function. The trafo
+`p` then carries the per-observable substitutions (in Boehm:
+`noiseParameter1_pSTAT5A_rel = sd_pSTAT5A_rel`, plus analogues for
+`pSTAT5B_rel`, `rSTAT5A_rel`, all in **one** trafo; see point 3). During
+`prd = g * x * p` the placeholders bind to the right outer parameters
+before `e` reads them, so a single `e` covers every observable in a
+merged sub-condition. When every noise formula reduces to a constant
+after substitution, `e` is `NULL` and $\sigma$ lives in
+`dataList[[…]]$sigma`, taking `normL2`'s fast path without an error
+model.
+
+**7. v2 → v1 normalisation.** `.petab_v2_normalize_tables()` adapts v2
+manifests to v1 shapes so the downstream trafo / observation / objective
+builders are shared. v2 specifics handled here: long-format conditions
+pivot to wide; `experiments.tsv` `(time, conditionId)` sequences map to
+`(simulationConditionId, preequilibrationConditionId)` (max two periods);
+the combined `noiseDistribution` splits into observable transformation +
+distribution; explicit `observablePlaceholders` / `noisePlaceholders`
+are rewritten to v1's `observableParameter${k}_${id}` sentinels; an
+optional `mapping.tsv` is applied as a textual rewrite of PEtab entity
+IDs into model entity IDs.
+
+## PEtab v2 feature coverage
+
+The tables below summarise dMod's support relative to the PEtab v2
+specification. Items marked ⚠ work with caveats; ✗ items are either
+silently ignored or rejected at import.
+
+### SBML model
+
+| feature                                          | dMod | notes                                                                 |
+|--------------------------------------------------|:----:|-----------------------------------------------------------------------|
+| reactions, kinetic laws (incl. `<power/>`)       | ✓    | extensive `K_SBML` divided by home-compartment volume on import       |
+| compartments, multi-compartment                  | ✓    | first-class on `eqnlist`                                              |
+| `<initialAssignment>`                            | ✓    | symbolic initials carried verbatim and written on export              |
+| `<assignmentRule>`                               | ✓    | inlined into rates / inits / observables before the `eqnlist` is built |
+| `<rateRule>` on a species                        | ✓    | appended as a virtual reaction (stoichiometry +1)                     |
+| `<rateRule>` on a parameter / compartment        | ⚠    | warned and skipped; promote the symbol to a state                     |
+| `<event>` with `time >= T` trigger               | ✓    | rewritten as a dMod event                                             |
+| `<event>` with non-time triggers                 | ⚠    | symbolic `root` fallback                                              |
+| `<functionDefinition>`                           | ✓    | inlined via libsbml's `SBMLFunctionDefinitionConverter`               |
+| `<algebraicRule>`                                | ✗    | silently skipped (dMod has no DAE solver)                             |
+| non-SBML model languages (BNGL / CellML / PySB)  | ✗    | only SBML is read                                                     |
+
+### PEtab tables
+
+| feature                                                      | dMod | notes                                                       |
+|--------------------------------------------------------------|:----:|-------------------------------------------------------------|
+| `parameters.tsv` with `parameterScale`                       | ✓    | `lin` / `log` / `log10`, folded into the trafo              |
+| `observables.tsv` with `observableTransformation`            | ✓    | per-observable `lin` / `log` / `log10`                      |
+| `conditions.tsv` (long-format)                               | ✓    | pivoted to wide for the trafo builder                       |
+| `measurements.tsv` per-row `noiseParameters` / `observableParameters` | ✓ | numeric and symbolic                                       |
+| `experiments.tsv` with ≤ 2 periods                           | ✓    | one pre-equilibration plus the simulation period            |
+| `experiments.tsv` with > 2 periods                           | ✗    | rejected at import                                          |
+| `mapping.tsv`                                                | ✓    | textual rewrite of `petabEntityId` → `modelEntityId`        |
+| multi-model (`model_files` with several ids)                 | ✓    | per-model `(odemodel, x, g, p)` composed via `+`; sub-condition keys are prefixed with the model id |
+| priors (`priorDistribution`, `priorParameters`)              | ⚠    | only `parameterScaleNormal` and `normal` on `lin`-scale parameters; mapped to `constraintL2` |
+| `visualisation.tsv`                                          | ✗    | ignored                                                     |
+
+### Likelihoods and noise
+
+dMod's only objective is `normL2`, so PEtab noise distributions map as:
+
+| `noiseDistribution`         | dMod | notes                                              |
+|-----------------------------|:----:|----------------------------------------------------|
+| `normal`                    | ✓    | direct                                             |
+| `log-normal`                | ✓    | via `observableTransformation = log`               |
+| `laplace`, `log-laplace`    | ✗    | rejected (dMod uses L2 only)                       |
+
+### Export caveats
+
+When writing a dMod problem to PEtab v2 via `exportPEtab()` or
+`exportPEtabObject()`, a few features cannot be expressed in the v2
+schema:
+
+| caveat                                              | notes                                                                |
+|-----------------------------------------------------|----------------------------------------------------------------------|
+| `parameterScale` on v2 export                       | linearised on disk with a one-time warning (v2 has no `parameterScale` column) |
+| `log10` `observableTransformation` on v2 export     | rewritten to `log-normal` noise (v2 has no `log10` observable transformation) |
+| state-init overrides from a v1 `conditions.tsv`     | not written to the v2 long-form conditions table; export to `formatVersion = "1"` keeps them |
+| `<algebraicRule>` in the source SBML                | absent from the dMod model and therefore from any SBML written back  |
+
+The dMod-native exporter `exportPEtab(data, reactions, observables, p,
+pouter, ...)` builds a PEtab problem from raw dMod objects rather than
+from an imported one. It supports per-row sigma via the
+`noiseParameter1_<obsId>` + `measurements.tsv$noiseParameters` path, but
+does not write pre-equilibration through `p`; go via
+`exportPEtabObject()` if the source is an imported problem.
+
+### Notes
+
+- **L2 likelihoods only.** PEtab `normal` is handled directly; `log-normal`
+  via `observableTransformation = log` (mathematically L2 on the
+  log-transformed observable). `laplace` and `log-laplace` are *not*
+  supported and won't be: dMod's only objective is `normL2`.
+- **Multi-model PEtab v2.** Multiple `model_files` entries with a
+  `modelId` column on `measurements.tsv` import as separate per-model
+  `(odemodel, x, g, e, p)` pieces, then compose via dMod's `+` so the
+  fit problem stays a single objective. Sub-condition keys are prefixed
+  with the modelId to keep them disjoint.
+- **L2 priors on parameters.** PEtab `priorDistribution` /
+  `priorParameters` (v2) and `objectivePriorType` /
+  `objectivePriorParameters` (v1) are read into a `constraintL2(mu,
+  sigma)` term that is summed into `obj`. Accepted distributions are
+  `parameterScaleNormal` (always) and `normal` on `lin`-scale parameters
+  (where the two coincide); other distributions raise an error.
