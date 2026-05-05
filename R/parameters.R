@@ -110,17 +110,17 @@ P <- function(trafo = NULL, parameters = NULL, condition = NULL,
 #' @param attach.input Logical. If `TRUE`, include unchanged input parameters
 #' in the output vector (identity mapping).
 #' @param condition Character label for which the transformation is generated.
-#' @param compile Logical. If `TRUE`, compile the transformation via [funCpp]
+#' @param compile Logical. If `TRUE`, compile the transformation via [CppODE::funCpp]
 #' for faster evaluation.
 #' @param modelname Base name for generated C++ code if `compile = TRUE`.
 #' @param verbose Logical. Print compiler messages.
-#' @param derivMode Character. Selects the derivative backend used by [funCpp]
+#' @param derivMode Character. Selects the derivative backend used by [CppODE::funCpp]
 #'   to evaluate the transformation Jacobian. One of `"dual"` (default,
 #'   in-tree forward-mode AD via `jac_chain`; requires `compile = TRUE` to
-#'   take effect), `"fadbad"` (legacy FADBAD++ AD backend), or `"symbolic"`
-#'   (classical SymPy Jacobian — appropriate for typically small parameter
-#'   transformations). When `compile = FALSE`, the AD modes silently fall
-#'   back to `"symbolic"` since the AD entry point requires compilation.
+#'   take effect) or `"symbolic"` (classical SymPy Jacobian, appropriate for
+#'   typically small parameter transformations). When `compile = FALSE`, the
+#'   AD mode silently falls back to `"symbolic"` since the AD entry point
+#'   requires compilation.
 #'
 #' @return
 #' A function of class [parfn].
@@ -133,7 +133,7 @@ P <- function(trafo = NULL, parameters = NULL, condition = NULL,
 #' @export
 Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NULL,
                   compile = FALSE, modelname = NULL, verbose = FALSE,
-                  derivMode = c("dual", "fadbad", "symbolic")) {
+                  derivMode = c("dual", "symbolic")) {
 
   derivMode <- match.arg(derivMode)
 
@@ -151,12 +151,12 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
   if (is.null(modelname)) modelname <- "expl_parfn"
   if (!is.null(condition)) modelname <- paste(modelname, sanitizeConditions(condition), sep = "_")
 
-  # funCpp's AD path has no R fallback — it requires the compiled `_eval_ad`
+  # funCpp's AD path has no R fallback: it requires the compiled `_eval_ad`
   # entry. When `compile = FALSE` no AD entry is loadable, so emit the
   # symbolic Jacobian instead. The runtime guard `is.loaded(ad_symbol)` below
   # then keeps p2p on the symbolic branch.
   effective_mode <- derivMode
-  if (!compile && derivMode %in% c("dual", "fadbad")) effective_mode <- "symbolic"
+  if (!compile && derivMode == "dual") effective_mode <- "symbolic"
 
   # Build compiled (or fallback R) evaluator for transformation
   PEval <- suppressWarnings(
@@ -177,7 +177,7 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
   fun       <- PEval$func
   jac       <- PEval$jac
   jac_chain <- PEval$jac_chain
-  use_ad    <- derivMode %in% c("dual", "fadbad")
+  use_ad    <- derivMode == "dual"
   ad_symbol <- paste0(modelname, "_eval_ad")
 
   # Define returned parameter transformation function
@@ -204,8 +204,17 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
         dP <- diag(length(active_pars))
         dimnames(dP) <- list(active_pars, active_pars)
       }
-      out <- jac_chain(NULL, p, dX = NULL, dP = dP,
-                       attach.input = attach.input, fixed = names(fixed))
+      # Restrict params + fixed to the symbols this trafo actually knows,
+      # and reorder to match the codegen parameter order. In multi-condition
+      # compositions p2p may receive a superset of pars (parameters from
+      # sibling conditions). The symbolic CppODE entry tolerates that, but
+      # jac_chain does not: it interprets `params` and `dP` positionally
+      # against the codegen ordering. A name-set or order mismatch
+      # mis-aligns the AD seed and segfaults inside CppODE.
+      p_ad <- p[parameters]
+      fixed_ad <- intersect(names(fixed), parameters)
+      out <- jac_chain(NULL, p_ad, dX = NULL, dP = dP,
+                       attach.input = attach.input, fixed = fixed_ad)
       pinnerVal <- out$y[1, ]
       if (!is.null(out$dy)) {
         Jac <- matrix(out$dy, dim(out$dy)[2], dim(out$dy)[3],
@@ -269,7 +278,7 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
 #'   \item{f}{Modified equations with substitutions applied.}
 #'   \item{parameters}{Updated parameter vector (eliminated species added).}
 #'   \item{cq_info}{List of per-CQ info: \code{total_name}, \code{elim_state},
-#'     \code{recon_expr} (the reconstruction expression as eqnvec for funCpp),
+#'     \code{recon_expr} (the reconstruction expression as eqnvec for [CppODE::funCpp]),
 #'     \code{recon_vars} (dependent species appearing in reconstruction),
 #'     \code{recon_parms} (parameters appearing in reconstruction, including total).}
 #'   \item{elim_states}{Character vector of all eliminated state names.}

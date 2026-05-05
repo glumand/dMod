@@ -20,7 +20,7 @@ A list with components:
 \item{f}{Modified equations with substitutions applied.}
 \item{parameters}{Updated parameter vector (eliminated species added).}
 \item{cq_info}{List of per-CQ info: \code{total_name}, \code{elim_state},
-\code{recon_expr} (the reconstruction expression as eqnvec for funCpp),
+\code{recon_expr} (the reconstruction expression as eqnvec for \link[CppODE:funCpp]{CppODE::funCpp}),
 \code{recon_vars} (dependent species appearing in reconstruction),
 \code{recon_parms} (parameters appearing in reconstruction, including total).}
 \item{elim_states}{Character vector of all eliminated state names.}

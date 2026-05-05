@@ -654,12 +654,14 @@ test_that("exportPEtab errors on undeclared free symbol after strip", {
     name = "obs_a", time = 1, value = 0.5, sigma = 1, condition = "c1",
     stringsAsFactors = FALSE))
 
-  expect_error(
+  # exportPEtab emits an informational warning when parameterScale is supplied
+  # to a v2 export (it is ignored on disk). The test only cares about the error.
+  suppressWarnings(expect_error(
     exportPEtab(data = data, reactions = reactions, observables = obs,
                 p = p, pouter = c(A = 0, B = 0, K = -1),
                 parameterScale = "log10",
                 dir = tempfile("err1_"), overwrite = TRUE),
-    "undeclared symbol")
+    "undeclared symbol"))
 
   unlink("err1_*"); unlink("*.c"); unlink("*.cpp")
   unlink("*.o"); unlink("*.so")

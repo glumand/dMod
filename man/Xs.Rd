@@ -10,7 +10,8 @@ Xs(odemodel, ...)
 \item{odemodel}{object of class 'odemodel' or 'odemodel++', see \link{odemodel}}
 
 \item{forcings}{data.frame with columns name (factor), time (numeric) and value (numeric).
-The ODE forcings. Not (yet) implemented for boost::odeint::rosenbrock4}
+The ODE forcings. Forcing support for the CppODE / Sundials backends depends
+on the chosen solver method; see \code{\link[CppODE:CppODE]{CppODE::CppODE()}}.}
 
 \item{events}{data.frame of events with columns "var" (character, the name of the state to be
 affected), "time" (numeric, time point), "value" (numeric, value), "method" (character, either

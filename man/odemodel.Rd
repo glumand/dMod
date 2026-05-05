@@ -38,7 +38,7 @@ If both \code{time} and \code{value} are purely numeric, such events may alterna
 be specified in \code{\link[=Xs]{Xs()}}, but this is only supported for
 \code{solver = "deSolve"}.
 See \link[deSolve:events]{events} for details on the \code{deSolve} implementation, or
-\code{\link[CppODE:CppODE]{CppODE::CppODE()}} for information on event handling in the \code{boost} solver.}
+\code{\link[CppODE:CppODE]{CppODE::CppODE()}} for event handling in the \code{CppODE} / \code{Sundials} backends.}
 
 \item{outputs}{Named character vector for additional output variables.}
 
@@ -73,7 +73,7 @@ for \code{solver = "Sundials"}) are applied to the right files only.
 Creates and compiles model objects for systems of ordinary differential equations (ODEs)
 with optional first- and second-order sensitivities. Depending on the selected solver,
 the function interfaces either to \code{\link[cOde:funC]{cOde::funC()}} (for \code{solver = "deSolve"})
-or to \code{\link[CppODE:CppODE]{CppODE::CppODE()}} (for \code{solver = "boost"}).
+or to \code{\link[CppODE:CppODE]{CppODE::CppODE()}} (for \code{solver = "CppODE"} or \code{solver = "Sundials"}).
 }
 \examples{
 

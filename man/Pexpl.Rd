@@ -12,7 +12,7 @@ Pexpl(
   compile = FALSE,
   modelname = NULL,
   verbose = FALSE,
-  derivMode = c("dual", "fadbad", "symbolic")
+  derivMode = c("dual", "symbolic")
 )
 }
 \arguments{
@@ -28,20 +28,20 @@ in the output vector (identity mapping).}
 
 \item{condition}{Character label for which the transformation is generated.}
 
-\item{compile}{Logical. If \code{TRUE}, compile the transformation via \link{funCpp}
+\item{compile}{Logical. If \code{TRUE}, compile the transformation via \link[CppODE:funCpp]{CppODE::funCpp}
 for faster evaluation.}
 
 \item{modelname}{Base name for generated C++ code if \code{compile = TRUE}.}
 
 \item{verbose}{Logical. Print compiler messages.}
 
-\item{derivMode}{Character. Selects the derivative backend used by \link{funCpp}
+\item{derivMode}{Character. Selects the derivative backend used by \link[CppODE:funCpp]{CppODE::funCpp}
 to evaluate the transformation Jacobian. One of \code{"dual"} (default,
 in-tree forward-mode AD via \code{jac_chain}; requires \code{compile = TRUE} to
-take effect), \code{"fadbad"} (legacy FADBAD++ AD backend), or \code{"symbolic"}
-(classical SymPy Jacobian — appropriate for typically small parameter
-transformations). When \code{compile = FALSE}, the AD modes silently fall
-back to \code{"symbolic"} since the AD entry point requires compilation.}
+take effect) or \code{"symbolic"} (classical SymPy Jacobian, appropriate for
+typically small parameter transformations). When \code{compile = FALSE}, the
+AD mode silently falls back to \code{"symbolic"} since the AD entry point
+requires compilation.}
 }
 \value{
 A function of class \link{parfn}.

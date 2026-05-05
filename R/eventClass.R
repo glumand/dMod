@@ -29,13 +29,19 @@
 #'   events <- addEvent(events, var = "B", time = "time_root", value = 2, root = "A - A_target", method = "replace")
 #' }
 eventlist <- function(var = NULL, time = NULL, value = NULL, root = NULL, method = NULL) {
-  
-  # root is NULL if all are NULL or NA if any is not NULL
-  # if (!is.null(var) | !is.null(time) | !is.null(value) | !is.null(method) & is.null(root)) root <- NA
-  
+
+  # If any non-root field is supplied, default root to NA so all columns share
+  # the same length. Mirrors as.eventlist.list() which fills root with NA when
+  # absent. Without this, eventlist(var = "A", time = 5, value = "x", method = "add")
+  # crashes in data.frame() with a 0-vs-1 length conflict.
+  if (is.null(root) &&
+      (!is.null(var) || !is.null(time) || !is.null(value) || !is.null(method))) {
+    root <- NA
+  }
+
   out <- data.frame(var = var,
                     time = time,
-                    value = value, 
+                    value = value,
                     root = root,
                     method = method,
                     stringsAsFactors = FALSE)

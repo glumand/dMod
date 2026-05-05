@@ -59,7 +59,7 @@ collectCompileInfo <- function(...) {
 #' Creates and compiles model objects for systems of ordinary differential equations (ODEs)
 #' with optional first- and second-order sensitivities. Depending on the selected solver,
 #' the function interfaces either to [cOde::funC()] (for `solver = "deSolve"`)
-#' or to [CppODE::CppODE()] (for `solver = "boost"`).
+#' or to [CppODE::CppODE()] (for `solver = "CppODE"` or `solver = "Sundials"`).
 #'
 #' @param f Something that can be converted to [eqnvec], e.g. a named character vector
 #'   specifying the right-hand sides of the ODE system.
@@ -76,7 +76,7 @@ collectCompileInfo <- function(...) {
 #'   be specified in [Xs()], but this is only supported for
 #'   `solver = "deSolve"`.
 #'   See [events][deSolve::events] for details on the `deSolve` implementation, or
-#'   [CppODE::CppODE()] for information on event handling in the `boost` solver.
+#'   [CppODE::CppODE()] for event handling in the `CppODE` / `Sundials` backends.
 #' @param outputs Named character vector for additional output variables.
 #' @param fixed Character vector with the names of parameters (initial values and dynamic)
 #'   for which no sensitivities are required (this speeds up integration).

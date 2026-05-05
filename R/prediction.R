@@ -5,7 +5,8 @@
 #' into one model function `x(times, pars, deriv = TRUE)` returning ODE output and sensitivities.
 #' @param odemodel object of class 'odemodel' or 'odemodel++', see [odemodel]
 #' @param forcings data.frame with columns name (factor), time (numeric) and value (numeric).
-#' The ODE forcings. Not (yet) implemented for boost::odeint::rosenbrock4
+#' The ODE forcings. Forcing support for the CppODE / Sundials backends depends
+#' on the chosen solver method; see [CppODE::CppODE()].
 #' @param events data.frame of events with columns "var" (character, the name of the state to be
 #' affected), "time" (numeric, time point), "value" (numeric, value), "method" (character, either
 #' "replace", "add" or "multiply"). See [events][deSolve::events].
@@ -120,26 +121,31 @@ Xs.deSolve <- function(odemodel, forcings = NULL, events = NULL, names = NULL, c
                                                        events = list(data = events)), optionsSens)))
       
       out <- submatrix(outSens, cols = c("time", names))
-      
+
+      # Forcings live in `names` so the value matrix can return them, but the
+      # extended ODE only carries sensitivities for state variables. Restrict
+      # the deriv axis to states that are actually requested.
+      svars <- intersect(names, variables)
+
       # Apply parameter transformation to the derivatives.
       # deSolve's outSens columns are laid out so that array() fills into
       # [time, variable, sensitivity] naturally under column-major.
-      sensNames <- as.vector(outer(names, senspars, paste, sep = "."))
+      sensNames <- as.vector(outer(svars, senspars, paste, sep = "."))
       mysensitivities <- array(outSens[, sensNames],
-                               dim = c(nrow(outSens), length(names), length(senspars)))
+                               dim = c(nrow(outSens), length(svars), length(senspars)))
 
       dP <- attr(pars, "deriv")
       if (!is.null(dP)) {
         dPsub <- dP[senspars, , drop = FALSE]
         if(any(rownames(dP) %in% senspars)) {
           myderivs <- mysensitivities %bmm% dPsub
-          dimnames(myderivs) <- list(NULL, names, colnames(dPsub))
+          dimnames(myderivs) <- list(NULL, svars, colnames(dPsub))
         } else {
           myderivs <- NULL
         }
       } else {
         myderivs <- mysensitivities
-        dimnames(myderivs) <- list(NULL, names, senspars)
+        dimnames(myderivs) <- list(NULL, svars, senspars)
       }
       
     }
@@ -337,17 +343,21 @@ Xf <- function(odemodel, forcings = NULL, events = NULL, condition = NULL, optio
     fctonrol = myfcontrol
   )
   
-  P2X <- function(times, pars, deriv = TRUE){
-    
+  P2X <- function(times, pars, fixed = NULL, deriv = TRUE){
+
     events <- controls$events
     forcings <- controls$forcings
     optionsOde <- controls$optionsOde
-    
-    # Add event time points (required by integrator) 
+
+    # Merge fixed parameters into pars; Xf does not propagate derivatives so
+    # fixed/free distinction collapses for the integration call.
+    pars <- c(unclass(pars), unclass(fixed))
+
+    # Add event time points (required by integrator)
     event.times <- unique(events$time)
     times <- sort(union(event.times, times))
-    
-    
+
+
     yini[names(pars[names(pars) %in% variables])] <- pars[names(pars) %in% variables]
     mypars <- pars[parameters]
     #alltimes <- unique(sort(c(times, forctimes)))
@@ -529,14 +539,14 @@ Xd <- function(data, condition = NULL) {
 #' @param modelname Character, used if `compile = TRUE`, specifies a fixed filename
 #' for the generated C file.
 #' @param verbose Logical, print compiler output to the R console.
-#' @param derivMode Character. Selects the derivative backend used by [funCpp]
+#' @param derivMode Character. Selects the derivative backend used by [CppODE::funCpp]
 #'   to evaluate observation Jacobians. One of `"dual"` (default, in-tree
-#'   forward-mode AD via `jac_chain` — typically faster when the number of
-#'   fitted parameters is large; requires `compile = TRUE`), `"fadbad"`
-#'   (legacy FADBAD++ AD backend), or `"symbolic"` (classical SymPy Jacobian
-#'   followed by an explicit chain rule against the upstream `dX`/`dP`).
-#'   When `compile = FALSE`, the AD modes silently fall back to `"symbolic"`
-#'   since the AD entry point is only available after compilation.
+#'   forward-mode AD via `jac_chain`, typically faster when the number of
+#'   fitted parameters is large; requires `compile = TRUE`) or `"symbolic"`
+#'   (classical SymPy Jacobian followed by an explicit chain rule against
+#'   the upstream `dX`/`dP`). When `compile = FALSE`, the AD mode silently
+#'   falls back to `"symbolic"` since the AD entry point is only available
+#'   after compilation.
 #'
 #' @return
 #' An object of class [obsfn], i.e. a function  `g(..., fixed = NULL, deriv = TRUE, condition = NULL, env = NULL)`
@@ -550,14 +560,14 @@ Xd <- function(data, condition = NULL) {
 Y <- function(g, f = NULL, states = NULL, parameters = NULL,
               condition = NULL, attach.input = TRUE,
               compile = FALSE, modelname = NULL, verbose = FALSE,
-              derivMode = c("dual", "fadbad", "symbolic")) {
+              derivMode = c("dual", "symbolic")) {
 
   derivMode <- match.arg(derivMode)
 
   # AD path requires the compiled `_eval_ad` entry; without compile = TRUE
   # the only viable runtime Jacobian is the symbolic one.
   effective_mode <- derivMode
-  if (!compile && derivMode %in% c("dual", "fadbad")) effective_mode <- "symbolic"
+  if (!compile && derivMode == "dual") effective_mode <- "symbolic"
 
   if (is.null(f) && is.null(states) && is.null(parameters))
     stop("Not all three arguments f, states and parameters can be NULL")
@@ -616,7 +626,7 @@ Y <- function(g, f = NULL, states = NULL, parameters = NULL,
   gfun       <- gEval$func
   gjac       <- gEval$jac
   gjac_chain <- gEval$jac_chain
-  use_ad     <- derivMode %in% c("dual", "fadbad")
+  use_ad     <- derivMode == "dual"
 
   controls <- list(attach.input = attach.input)
 

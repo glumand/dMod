@@ -2,8 +2,12 @@ context("Conflicting modelnames")
 test_that("modelnames behave as expected", {
   
   # What needs to be checked
-  # 1. That modelname is what goes in
-  # 2. That running the same code a second time breaks the behaviour of the objects of the first run
+  # 1. That modelname is what goes in (merged-SO: P() with multi-condition trafo
+  #    links every per-condition .cpp into one shared library named after the
+  #    `modelname` arg, and modelname() reports that library name).
+  # 2. That recompiling the same modelname is rebuild-safe: previously-built
+  #    objects keep working because their symbols re-resolve against the
+  #    (re-)loaded SO.
   # 3. That compiling the same structural model into a different modelname lets both functions intact
   
   #-!Start example code
@@ -47,14 +51,18 @@ test_that("modelnames behave as expected", {
   x3 <- odemodel(f, events = events, modelname = "odemodel3") %>% Xs
   
   # Define your expectations here
-  # 1. Modelname is what goes in
+  # 1. Modelname is what goes in. P() with compile=TRUE links the per-condition
+  #    sources into a single SO named `modelname`, so modelname(p1) is "p"
+  #    rather than the per-condition codegen names ("p_a", "p_b").
   expect_equal(modelname(x1), "odemodel")
   expect_equal(modelname(g1), "obsfn")
-  expect_equal(modelname(p1), paste("p", conditions, sep = "_"))
-  # 2. Rerunning the same parts breaks existing objects
+  expect_equal(modelname(p1), "p")
+  # 2. Recompiling the same modelname is rebuild-safe: every combination still
+  #    evaluates because compile() re-loads the merged SO and old objects
+  #    re-resolve their symbols against it.
   expect_true(!inherits(try((g2*x1*p2)(0:10,pars)), "try-error"))
-  expect_error((g1*x1*p2)(0:10, pars))
-  expect_error((g2*x1*p1)(0:10, pars))
+  expect_true(!inherits(try((g1*x1*p2)(0:10,pars)), "try-error"))
+  expect_true(!inherits(try((g2*x1*p1)(0:10,pars)), "try-error"))
   # 3. Compiling the same structural model into a different modelname lets both functions intact
   expect_true(!inherits(try((g2*x3*p2)(0:10,pars)), "try-error"))
   expect_true(!inherits(try((g3*x3*p2)(0:10,pars)), "try-error"))
