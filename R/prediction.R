@@ -544,9 +544,7 @@ Xd <- function(data, condition = NULL) {
 #'   forward-mode AD via `jac_chain`, typically faster when the number of
 #'   fitted parameters is large; requires `compile = TRUE`) or `"symbolic"`
 #'   (classical SymPy Jacobian followed by an explicit chain rule against
-#'   the upstream `dX`/`dP`). When `compile = FALSE`, the AD mode silently
-#'   falls back to `"symbolic"` since the AD entry point is only available
-#'   after compilation.
+#'   the upstream `dX`/`dP`).
 #'
 #' @return
 #' An object of class [obsfn], i.e. a function  `g(..., fixed = NULL, deriv = TRUE, condition = NULL, env = NULL)`
@@ -563,11 +561,6 @@ Y <- function(g, f = NULL, states = NULL, parameters = NULL,
               derivMode = c("dual", "symbolic")) {
 
   derivMode <- match.arg(derivMode)
-
-  # AD path requires the compiled `_eval_ad` entry; without compile = TRUE
-  # the only viable runtime Jacobian is the symbolic one.
-  effective_mode <- derivMode
-  if (!compile && derivMode == "dual") effective_mode <- "symbolic"
 
   if (is.null(f) && is.null(states) && is.null(parameters))
     stop("Not all three arguments f, states and parameters can be NULL")
@@ -619,7 +612,7 @@ Y <- function(g, f = NULL, states = NULL, parameters = NULL,
       outdir     = getwd(),
       verbose    = verbose,
       convenient = FALSE,
-      derivMode  = effective_mode
+      derivMode  = derivMode
     )
   )
 

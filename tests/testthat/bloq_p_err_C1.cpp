@@ -6,14 +6,14 @@
 #include <cppode/cppode_dual_math.hpp>
 #include <cppode/cppode_dual_expr.hpp>
 
-// Modelname: obsfn
+// Modelname: bloq_p_err_C1
 // Variables: none
-// Parameters: s0
-// Outputs: y
+// Parameters: a, b, s0
+// Outputs: a, b, s0
 
 namespace {
 template <typename T>
-inline void obsfn_eval_one(const T* x_obs, const T* p, T* y_local) {
+inline void bloq_p_err_C1_eval_one(const T* x_obs, const T* p, T* y_local) {
     using std::exp; using std::log; using std::sqrt; using std::pow;
     using std::sin; using std::cos; using std::tan;
     using std::asin; using std::acos; using std::atan; using std::atan2;
@@ -30,27 +30,29 @@ inline void obsfn_eval_one(const T* x_obs, const T* p, T* y_local) {
     (void)x_obs;
 
     y_local[0] = p[0];
+    y_local[1] = p[1];
+    y_local[2] = p[2];
 }
 } // anonymous namespace
 
 extern "C" {
 
-void obsfn_eval(double* x, double* y, double* p, int* n, int* k, int* l) {
+void bloq_p_err_C1_eval(double* x, double* y, double* p, int* n, int* k, int* l) {
     const int n_obs = *n;
     const int n_vars = *k;
     const int n_out  = *l;
     (void)n_vars;  // suppress unused warning
 
-    double y_local[1];
+    double y_local[3];
     for (int obs = 0; obs < n_obs; obs++) {
         const double* x_obs = nullptr;
-        obsfn_eval_one<double>(x_obs, p, y_local);
+        bloq_p_err_C1_eval_one<double>(x_obs, p, y_local);
         for (int i = 0; i < n_out; ++i)
             y[obs + (size_t)n_obs * i] = y_local[i];
     }
 }
 
-void obsfn_eval_ad(double* x, double* p, double* dX, double* dP,
+void bloq_p_err_C1_eval_ad(double* x, double* p, double* dX, double* dP,
                          double* y, double* dy,
                          int* n_obs_p, int* n_vars_p, int* n_params_p,
                          int* n_out_p, int* n_theta_p) {
@@ -65,8 +67,8 @@ void obsfn_eval_ad(double* x, double* p, double* dX, double* dP,
 
     cppode::dual_arena::scope _eval_ad_scope;
     std::vector<AD> x_ad(0);
-    std::vector<AD> p_ad(1);
-    std::vector<AD> y_ad(1);
+    std::vector<AD> p_ad(3);
+    std::vector<AD> y_ad(3);
 
     // Seed parameters (time-invariant).
     for (int j = 0; j < n_params; ++j) {
@@ -80,7 +82,7 @@ void obsfn_eval_ad(double* x, double* p, double* dX, double* dP,
     }
 
     for (int obs = 0; obs < n_obs; ++obs) {
-        obsfn_eval_one<AD>(x_ad.data(), p_ad.data(), y_ad.data());
+        bloq_p_err_C1_eval_one<AD>(x_ad.data(), p_ad.data(), y_ad.data());
         for (int i = 0; i < n_out; ++i) {
             y[obs + (size_t)n_obs * i] = y_ad[i].val();
             for (int k = 0; k < n_theta; ++k) {

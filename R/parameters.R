@@ -116,11 +116,9 @@ P <- function(trafo = NULL, parameters = NULL, condition = NULL,
 #' @param verbose Logical. Print compiler messages.
 #' @param derivMode Character. Selects the derivative backend used by [CppODE::funCpp]
 #'   to evaluate the transformation Jacobian. One of `"dual"` (default,
-#'   in-tree forward-mode AD via `jac_chain`; requires `compile = TRUE` to
-#'   take effect) or `"symbolic"` (classical SymPy Jacobian, appropriate for
-#'   typically small parameter transformations). When `compile = FALSE`, the
-#'   AD mode silently falls back to `"symbolic"` since the AD entry point
-#'   requires compilation.
+#'   in-tree forward-mode AD via `jac_chain`; requires `compile = TRUE`) or
+#'   `"symbolic"` (classical SymPy Jacobian, appropriate for typically small
+#'   parameter transformations).
 #'
 #' @return
 #' A function of class [parfn].
@@ -151,13 +149,6 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
   if (is.null(modelname)) modelname <- "expl_parfn"
   if (!is.null(condition)) modelname <- paste(modelname, sanitizeConditions(condition), sep = "_")
 
-  # funCpp's AD path has no R fallback: it requires the compiled `_eval_ad`
-  # entry. When `compile = FALSE` no AD entry is loadable, so emit the
-  # symbolic Jacobian instead. The runtime guard `is.loaded(ad_symbol)` below
-  # then keeps p2p on the symbolic branch.
-  effective_mode <- derivMode
-  if (!compile && derivMode == "dual") effective_mode <- "symbolic"
-
   # Build compiled (or fallback R) evaluator for transformation
   PEval <- suppressWarnings(
     CppODE::funCpp(
@@ -170,7 +161,7 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
       outdir     = getwd(),
       verbose    = verbose,
       convenient = FALSE,
-      derivMode  = effective_mode
+      derivMode  = derivMode
     )
   )
 

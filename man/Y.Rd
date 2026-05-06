@@ -51,9 +51,7 @@ to evaluate observation Jacobians. One of \code{"dual"} (default, in-tree
 forward-mode AD via \code{jac_chain}, typically faster when the number of
 fitted parameters is large; requires \code{compile = TRUE}) or \code{"symbolic"}
 (classical SymPy Jacobian followed by an explicit chain rule against
-the upstream \code{dX}/\code{dP}). When \code{compile = FALSE}, the AD mode silently
-falls back to \code{"symbolic"} since the AD entry point is only available
-after compilation.}
+the upstream \code{dX}/\code{dP}).}
 
 \item{deriv}{Logical, if \code{TRUE}, the function evaluates first-order derivatives
 of observables with respect to parameters.}

@@ -37,11 +37,9 @@ for faster evaluation.}
 
 \item{derivMode}{Character. Selects the derivative backend used by \link[CppODE:funCpp]{CppODE::funCpp}
 to evaluate the transformation Jacobian. One of \code{"dual"} (default,
-in-tree forward-mode AD via \code{jac_chain}; requires \code{compile = TRUE} to
-take effect) or \code{"symbolic"} (classical SymPy Jacobian, appropriate for
-typically small parameter transformations). When \code{compile = FALSE}, the
-AD mode silently falls back to \code{"symbolic"} since the AD entry point
-requires compilation.}
+in-tree forward-mode AD via \code{jac_chain}; requires \code{compile = TRUE}) or
+\code{"symbolic"} (classical SymPy Jacobian, appropriate for typically small
+parameter transformations).}
 }
 \value{
 A function of class \link{parfn}.

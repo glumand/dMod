@@ -7,8 +7,10 @@ test_that("safe_numerics_for_bloq", {
   #-! library(dplyr)
   library(dplyr)
   x <- Xt()
-  g <- Y(c(y = "a*time^2+b"), f = NULL, parameters = c("a", "b"))
-  p <- P(c("a" = "a", "b" = "b"), condition = "C1")
+  g <- Y(c(y = "a*time^2+b"), f = NULL, parameters = c("a", "b"),
+         compile = TRUE, modelname = "bloq_obs")
+  p <- P(c("a" = "a", "b" = "b"), condition = "C1",
+         compile = TRUE, modelname = "bloq_p")
   times <- seq(-5, 5, by = .05)
   pars <- c(a = 10, b = 1)
   sigma <- 1
@@ -41,8 +43,9 @@ test_that("safe_numerics_for_bloq", {
   fit2 <- trust(obj2, pars, 1, 10)
   #-!plot((g*x*p)(times, fit2$argument), data2)
   
-  e <- Y(c(y = "s0"), g)
-  p <- getParameters(g,x,e) %>% setNames(.,.) %>% P(condition = "C1")
+  e <- Y(c(y = "s0"), g, compile = TRUE, modelname = "bloq_err")
+  p <- getParameters(g,x,e) %>% setNames(.,.) %>%
+    P(condition = "C1", compile = TRUE, modelname = "bloq_p_err")
   obj3 <- normL2(data1, (g*x*p), e)
   objvals[[3]] <- obj3(c(a = 0, b  =100, s0 = 0.1))
   

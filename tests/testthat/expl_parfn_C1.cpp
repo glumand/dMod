@@ -2,6 +2,9 @@
 
 #include <cmath>
 #include <algorithm>
+#include <vector>
+#include <cppode/cppode_dual_math.hpp>
+#include <cppode/cppode_dual_expr.hpp>
 
 // Modelname: expl_parfn_C1
 // Variables: none
@@ -18,6 +21,12 @@ inline void expl_parfn_C1_eval_one(const T* x_obs, const T* p, T* y_local) {
     using std::asinh; using std::acosh; using std::atanh;
     using std::floor; using std::ceil;
     using std::abs; using std::max; using std::min;
+    using cppode::exp; using cppode::log; using cppode::sqrt; using cppode::pow;
+    using cppode::sin; using cppode::cos; using cppode::tan;
+    using cppode::asin; using cppode::acos; using cppode::atan;
+    using cppode::sinh; using cppode::cosh; using cppode::tanh;
+    using cppode::asinh; using cppode::acosh; using cppode::atanh;
+    using cppode::abs; using cppode::max; using cppode::min;
     (void)x_obs;
 
     y_local[0] = p[0];
@@ -43,24 +52,43 @@ void expl_parfn_C1_eval(double* x, double* y, double* p, int* n, int* k, int* l)
     }
 }
 
-void expl_parfn_C1_jacobian(double* x, double* jac, double* p, int* n, int* k, int* l) {
-    const int n_obs = *n;
-    const int n_vars = *k;
-    (void)n_vars;  // suppress unused warning
-    const int n_out = 3;
-    const int n_symbols = 3;
+void expl_parfn_C1_eval_ad(double* x, double* p, double* dX, double* dP,
+                         double* y, double* dy,
+                         int* n_obs_p, int* n_vars_p, int* n_params_p,
+                         int* n_out_p, int* n_theta_p) {
+    using AD = cppode::dual<double, 0>;
+    const int n_obs    = *n_obs_p;
+    const int n_vars   = *n_vars_p;
+    const int n_params = *n_params_p;
+    const int n_out    = *n_out_p;
+    const int n_theta  = *n_theta_p;
+    (void)n_vars; (void)n_params; (void)n_out;
+    (void)dX; (void)dP;
 
-    // Zero-initialize
-    std::fill(jac, jac + (size_t)n_obs * n_out * n_symbols, 0.0);
+    cppode::dual_arena::scope _eval_ad_scope;
+    std::vector<AD> x_ad(0);
+    std::vector<AD> p_ad(3);
+    std::vector<AD> y_ad(3);
 
-    // Layout: jac[obs, output, symbol] (R column-major)
-    // Linear index: obs + n_obs * (output + n_out * symbol)
-    for (int obs = 0; obs < n_obs; obs++) {
-        jac[obs + (size_t)n_obs * (0 + n_out * 0)] = 1.0;
+    // Seed parameters (time-invariant).
+    for (int j = 0; j < n_params; ++j) {
+        p_ad[j].x() = p[j];
+        if (n_theta > 0) {
+            p_ad[j].diff(0, n_theta);
+            for (int k = 0; k < n_theta; ++k) {
+                p_ad[j][k] = dP[j + n_params * k];
+            }
+        }
+    }
 
-        jac[obs + (size_t)n_obs * (1 + n_out * 1)] = 1.0;
-
-        jac[obs + (size_t)n_obs * (2 + n_out * 2)] = 1.0;
+    for (int obs = 0; obs < n_obs; ++obs) {
+        expl_parfn_C1_eval_one<AD>(x_ad.data(), p_ad.data(), y_ad.data());
+        for (int i = 0; i < n_out; ++i) {
+            y[obs + (size_t)n_obs * i] = y_ad[i].val();
+            for (int k = 0; k < n_theta; ++k) {
+                dy[obs + (size_t)n_obs * (i + (size_t)n_out * k)] = y_ad[i].d(k);
+            }
+        }
     }
 }
 
