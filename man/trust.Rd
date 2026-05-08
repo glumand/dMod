@@ -20,6 +20,7 @@ trust(
   parlower = -Inf,
   printIter = FALSE,
   traceFile = NULL,
+  on_step = NULL,
   ...
 )
 
@@ -87,6 +88,15 @@ a step is considered close enough to zero to terminate the algorithm.}
 \item{parlower}{named numeric vector of lower bounds. If not named, first value will be used for all parameters.}
 
 \item{printIter}{print iteration information to R console}
+
+\item{on_step}{optional callback invoked once per step decision with the
+arguments \code{rho} (actual / predicted reduction), \code{accepted}
+(logical), \code{iter} (current iteration counter), and \code{r} (current
+trust-region radius). The callback's return value is ignored. If
+\code{NULL} (default), no callback runs and trust behaves identically to
+previous releases. Used by \code{\link[=focei]{focei()}} to invalidate its cached log|H|
+correction on rejected outer steps; other callers (\code{mstrust},
+\code{profile}) leave it unset and are unaffected.}
 
 \item{...}{additional argument to objfun}
 

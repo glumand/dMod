@@ -17,6 +17,7 @@ Pequil(
   compile = FALSE,
   modelname = NULL,
   verbose = FALSE,
+  deriv2 = FALSE,
   ...
 )
 }

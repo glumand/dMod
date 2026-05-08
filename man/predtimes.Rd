@@ -7,10 +7,6 @@
 predtimes(datatimes, eventtimes = NULL, Nobjtimes = 100)
 }
 \arguments{
-\item{datatimes}{}
-
-\item{eventtimes}{}
-
 \item{Nobjtimes}{number of time points in total}
 }
 \value{

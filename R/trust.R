@@ -48,7 +48,16 @@ norm <- function(x) sqrt(crossprod(x))
 #' @param parlower named numeric vector of lower bounds. If not named, first value will be used for all parameters.
 #' 
 #' @param printIter print iteration information to R console
-#' 
+#'
+#' @param on_step optional callback invoked once per step decision with the
+#' arguments \code{rho} (actual / predicted reduction), \code{accepted}
+#' (logical), \code{iter} (current iteration counter), and \code{r} (current
+#' trust-region radius). The callback's return value is ignored. If
+#' \code{NULL} (default), no callback runs and trust behaves identically to
+#' previous releases. Used by [focei()] to invalidate its cached log|H|
+#' correction on rejected outer steps; other callers (\code{mstrust},
+#' \code{profile}) leave it unset and are unaffected.
+#'
 #' @param ... additional argument to objfun
 #' 
 #' @details See Fletcher (1987, Section 5.1) or Nocedal and Wright (1999, Section 4.2) 
@@ -99,9 +108,10 @@ norm <- function(x) sqrt(crossprod(x))
 #' 
 #' @export
 #' @importFrom stats uniroot
-trust <- function(objfun, parinit, rinit, rmax, parscale, iterlim = 100, 
-                  fterm = 1e-6, mterm = 1e-6, minimize = TRUE, blather = FALSE, 
-                  parupper = Inf, parlower = -Inf, printIter = FALSE, traceFile = NULL, ...) 
+trust <- function(objfun, parinit, rinit, rmax, parscale, iterlim = 100,
+                  fterm = 1e-6, mterm = 1e-6, minimize = TRUE, blather = FALSE,
+                  parupper = Inf, parlower = -Inf, printIter = FALSE, traceFile = NULL,
+                  on_step = NULL, ...)
 {
   
   
@@ -417,11 +427,14 @@ trust <- function(objfun, parinit, rinit, rmax, parscale, iterlim = 100,
       else {
         accept <- TRUE
         theta <- theta.try
-        if (rho > 3/4 && (!is.newton)) 
+        if (rho > 3/4 && (!is.newton))
           r <- min(2 * r, rmax)
       }
     }
-    
+
+    if (!is.null(on_step)) on_step(rho = rho, accepted = accept,
+                                   iter = iiter, r = r)
+
     if (blather) {
       theta.try.blather <- rbind(theta.try.blather, theta.try)
       val.try.blather <- c(val.try.blather, out$value)

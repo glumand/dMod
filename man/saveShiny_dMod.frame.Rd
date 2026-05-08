@@ -23,8 +23,6 @@ saveShiny_dMod.frame(
 
 \item{pubref}{character. pubmed link or similar}
 
-\item{fixed}{}
-
 \item{projectname}{Name of the folder being created on fermi}
 }
 \description{

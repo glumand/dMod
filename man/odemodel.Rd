@@ -7,6 +7,7 @@
 odemodel(
   f,
   deriv = TRUE,
+  deriv2 = FALSE,
   forcings = NULL,
   events = NULL,
   outputs = NULL,
@@ -25,6 +26,19 @@ specifying the right-hand sides of the ODE system.}
 
 \item{deriv}{Logical. If \code{TRUE}, generate first-order sensitivities.
 Defaults to \code{TRUE}.}
+
+\item{deriv2}{Logical. If \code{TRUE}, also generate second-order sensitivities
+(requires \code{solver = "CppODE"}). Implies \code{deriv = TRUE}. Defaults to
+\code{FALSE}. The CVODE backend (\code{solver = "Sundials"}) does not support
+second-order sensitivities.
+
+When \code{deriv2 = TRUE}, three native artefacts are emitted:
+\verb{<modelname>} (value only), \verb{<modelname>_s} (1st-order sensitivities,
+AD path) and \verb{<modelname>_s2} (1st + 2nd-order sensitivities, AD2 path).
+Downstream prediction functions then dispatch on the call's \code{deriv2}
+flag, so callers can keep simulating / fitting at the cheaper
+1st-order cost via \verb{deriv = TRUE, deriv2 = FALSE} even when the model
+was built with \code{deriv2 = TRUE}.}
 
 \item{forcings}{Character vector with the names of external forcings.}
 

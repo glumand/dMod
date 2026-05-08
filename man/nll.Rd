@@ -8,6 +8,7 @@ nll(
   nout,
   pars,
   deriv,
+  deriv2 = FALSE,
   opt.BLOQ = "M3",
   opt.hessian = c(ALOQ_part1 = TRUE, ALOQ_part2 = TRUE, ALOQ_part3 = TRUE, BLOQ_part1 =
     TRUE, BLOQ_part2 = TRUE, BLOQ_part3 = TRUE, PD = TRUE),

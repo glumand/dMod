@@ -28,12 +28,12 @@ reactions <- eqnlist() %>%
 #             TCA_cell = "k_import * TCA_buffer - k_export_sinus * TCA_cell - k_export_cana * TCA_cell")
 
 # Translate reactions into ODE model object
-mymodel <- odemodel(reactions, modelname = "bamodel", compile = F)
+mymodel <- odemodel(reactions, deriv2 = TRUE, modelname = "bamodel", solver = "CppODE",compile = F)
 x <- Xs(mymodel)
 
 # Define observables buffer and cellular
 observables <- eqnvec(buffer = "s*TCA_buffer", cellular = "s*(TCA_cana + TCA_cell)")
-g <- Y(observables, f = x, condition = NULL, compile = F, modelname = "obsfn_bamodel", attach.input = T)
+g <- Y(observables, f = x, condition = NULL, compile = F, modelname = "obsfn_bamodel", attach.input = T, deriv2 = TRUE)
 
 # Define parameter transformations using define(), insert() and branch(). Old function repar also avaiable!
 innerpars <- getParameters(x,g)
@@ -53,11 +53,11 @@ trafo <- NULL %>%
 #                 k_reflux = "10^k_reflux",
 #                 s = "10^s")
 
-p <- P(trafo, condition = "closed", compile = F)
+p <- P(trafo, condition = "closed", compile = F, deriv2 = TRUE)
 
 
 # Compile the objects
-compile(g, x, p, output = "bamodel", cores = 4) # Compile C/C++ output of odemodel in parallel
+compile(g, x, p, output = "bamodel", cores = 6) # Compile C/C++ output of odemodel in parallel
 
 ## Use simulate data to calibrate outer model parameters ---
 outerpars <- getParameters(p)
@@ -67,18 +67,19 @@ prd <- g*x*p
 # debugonce(x)
 times <- seq(0, 45, len = 300)
 # debugonce(g)
-out <- prd(times, pouter)
+out <- prd(times, pouter, deriv2 = TRUE)
 plot(out, data)
-plot(getDerivs(out))
+plot(getDerivs2(out))
 
-myderivs <- attr(out$closed, "deriv")
+myderivs2 <- getDerivs2(out)
 # Define objective function
 obj <- normL2(data, g * x * p)
 # Test objective function with and without explicit calculation of second derivatives
-obj(pouter)
+obj(pouter, deriv2 = TRUE)
 
 # Fit on time (starting from pouter)
 myfit <- trust(obj, pouter, rinit = 0.1, rmax = 10, iterlim = 500, printIter = T)
+myfit <- trust(obj, pouter, rinit = 0.1, rmax = 10, iterlim = 500, printIter = T, deriv2 = T)
 times <- seq(0, 45, len = 300)
 mypred <- (g * x * p)(times, myfit$argument)
 plot(mypred, data)
@@ -94,11 +95,11 @@ plot(data)
 
 trafo <- getEquations(p, conditions = "closed") %>% 
   insert("K_REFLUX~K_REFLUX_OPEN")
-p <- p + P(trafo, condition = "open", compile = T)
+p <- p + P(trafo, condition = "open", compile = T, deriv2 = TRUE)
 
 outerpars <- getParameters(p)
 pouter <- structure(rep(-1, length(outerpars)), names = outerpars)
-p(pouter)
+p(pouter, deriv2 = TRUE)
 (g*x*p)(times, pouter) %>% plot(data)
 
 # Objective function

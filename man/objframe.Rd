@@ -4,7 +4,13 @@
 \alias{objframe}
 \title{Objective frame}
 \usage{
-objframe(mydata, deriv = NULL, deriv.err = NULL)
+objframe(
+  mydata,
+  deriv = NULL,
+  deriv.err = NULL,
+  deriv2 = NULL,
+  deriv2.err = NULL
+)
 }
 \arguments{
 \item{mydata}{data.table produced by \link{res}}
@@ -12,10 +18,18 @@ objframe(mydata, deriv = NULL, deriv.err = NULL)
 \item{deriv}{numeric matrix of first-order derivatives of residuals (Jacobian)}
 
 \item{deriv.err}{numeric matrix of first-order derivatives of the error model}
+
+\item{deriv2}{numeric 3D array \verb{[n_residuals, p, p]} of second-order derivatives
+of residuals with respect to parameters. Optional.}
+
+\item{deriv2.err}{numeric 3D array \verb{[n_residuals, p, p]} of second-order
+derivatives of the error model. Optional.}
 }
 \value{
 An object of class \code{"objframe"} (data.table) with attributes \code{"deriv"} and \code{"deriv.err"}.
 These arrays have the same parameter axes as those returned by \link{prdframe} and \link{res}.
+When \code{deriv2}/\code{deriv2.err} are supplied, the corresponding 3D arrays are
+attached as \code{"deriv2"} / \code{"deriv2.err"}.
 }
 \description{
 An objective frame stores residuals and their derivatives with respect to parameters.

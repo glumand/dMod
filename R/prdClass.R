@@ -335,16 +335,26 @@ plot.prdframe <- function(x, data = NULL, ..., scales = "free", facet = c("wrap"
 
 #' @export
 print.prdframe <- function(x, ...) {
-  
-  derivs <- ifelse(!is.null(attr(x, "deriv")), yes = "yes", no = "no")
-  
-  attr(x, "deriv") <- NULL
+
+  d1 <- attr(x, "deriv")
+  d2 <- attr(x, "deriv2")
+
+  derivs <- if (!is.null(d1)) {
+    sprintf("yes [%s]", paste(dim(d1), collapse = " x "))
+  } else "no"
+  derivs2 <- if (!is.null(d2)) {
+    sprintf("yes [%s]", paste(dim(d2), collapse = " x "))
+  } else "no"
+
+  attr(x, "deriv")      <- NULL
+  attr(x, "deriv2")     <- NULL
   attr(x, "parameters") <- NULL
-  
+
   print(unclass(x))
   cat("\n")
-  cat("The prediction contains derivatives: ", derivs, "\n", sep = "")
-  
+  cat("The prediction contains 1st-order derivatives: ", derivs,  "\n", sep = "")
+  cat("The prediction contains 2nd-order derivatives: ", derivs2, "\n", sep = "")
+
 }
 
 

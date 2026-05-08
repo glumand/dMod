@@ -78,8 +78,11 @@ Xs.deSolve <- function(odemodel, forcings = NULL, events = NULL, names = NULL, c
     fcontrol = myfcontrol
   )
   
-  P2X <- function(times, pars, fixed = NULL, deriv = TRUE) {
-    
+  P2X <- function(times, pars, fixed = NULL, deriv = TRUE, deriv2 = FALSE) {
+
+    if (deriv2)
+      stop("Xs.deSolve: second-order sensitivities require solver = 'CppODE'.")
+
     fixedNames <- names(fixed)
     params <- c(unclass(pars), unclass(fixed))
     yini <- params[variables]
@@ -212,8 +215,9 @@ Xs.CppODE <- function(odemodel, forcings = NULL, events = NULL, names = NULL, co
   
   func <- odemodel$func
   extended <- odemodel$extended
+  extended2 <- odemodel$extended2
   if (is.null(extended)) warning("Element 'extended' empty. ODE model does not contain sensitivities.")
-  
+
   # Extract metadata
   paramNames <- c(attr(func, "variables"), attr(func, "parameters"))
   dim_names <- attr(func, "dimNames")
@@ -233,9 +237,17 @@ Xs.CppODE <- function(odemodel, forcings = NULL, events = NULL, names = NULL, co
     sensnames = dim_names_sens$sens,
     inner_names = inner_names
   )
-  
-  P2X <- function(times, pars, fixed = NULL, deriv = TRUE) {
-    
+
+  has_deriv2 <- !is.null(extended2)
+
+  P2X <- function(times, pars, fixed = NULL, deriv = TRUE, deriv2 = FALSE) {
+
+    if (deriv2 && !has_deriv2)
+      stop("Xs.CppODE: model was compiled without deriv2; rebuild via odemodel(..., deriv2 = TRUE).")
+    if (deriv2 && !deriv) deriv <- TRUE
+    # Pick the cheapest extension that satisfies the requested derivative order.
+    sens_model <- if (deriv2) extended2 else extended
+
     fixedNames <- intersect(names(fixed),controls$sensnames)
     params <- c(unclass(pars), unclass(fixed))
     forcings <- controls$forcings
@@ -243,12 +255,13 @@ Xs.CppODE <- function(odemodel, forcings = NULL, events = NULL, names = NULL, co
     sensnames <- setdiff(controls$sensnames, fixedNames)
     nvars <- length(names)
     nsens <- length(sensnames)
-    optionsOde <- controls$optionsOde 
-    optionsSens <- controls$optionsSens 
-    
+    optionsOde <- controls$optionsOde
+    optionsSens <- controls$optionsSens
+
     dX <- NULL
+    dX2 <- NULL
     if (!deriv) {
-      
+
       # Evaluate model without sensitivities
       out <- CppODE::solveODE(func, times, params,
                               sens1ini = NULL, sens2ini = NULL, fixed = NULL,
@@ -267,9 +280,15 @@ Xs.CppODE <- function(odemodel, forcings = NULL, events = NULL, names = NULL, co
       colnames(out)[1] <- "time"
 
     } else {
-      outSens <- CppODE::solveODE(extended, times, params,
-                                  sens1ini = attr(pars, "deriv")[sensnames, ], 
-                                  sens2ini = NULL,
+      sens1ini <- attr(pars, "deriv")[sensnames, ]
+      sens2ini <- if (deriv2) {
+        d2 <- attr(pars, "deriv2")
+        if (!is.null(d2)) d2[sensnames, , , drop = FALSE] else NULL
+      } else NULL
+
+      outSens <- CppODE::solveODE(sens_model, times, params,
+                                  sens1ini = sens1ini,
+                                  sens2ini = sens2ini,
                                   fixed = NULL,
                                   forcings = forcings,
                                   abstol = optionsSens$atol, reltol = optionsSens$rtol,
@@ -287,11 +306,13 @@ Xs.CppODE <- function(odemodel, forcings = NULL, events = NULL, names = NULL, co
 
       # outSens$sens1 is already [time, variable, theta] with theta colnames.
       dX <- outSens$sens1[, names, , drop = FALSE]
+      if (deriv2 && !is.null(outSens$sens2))
+        dX2 <- outSens$sens2[, names, , , drop = FALSE]
 
     }
-    
-    prdframe(out, deriv = dX, parameters = c(pars,fixed))
-    
+
+    prdframe(out, deriv = dX, deriv2 = dX2, parameters = c(pars,fixed))
+
   }
   
   attr(P2X, "parameters") <- paramNames
@@ -343,7 +364,10 @@ Xf <- function(odemodel, forcings = NULL, events = NULL, condition = NULL, optio
     fctonrol = myfcontrol
   )
   
-  P2X <- function(times, pars, fixed = NULL, deriv = TRUE){
+  P2X <- function(times, pars, fixed = NULL, deriv = TRUE, deriv2 = FALSE){
+
+    if (deriv2)
+      stop("Xf: second-order sensitivities are not implemented (Xf is the no-sensitivity prediction; use Xs() for deriv2).")
 
     events <- controls$events
     forcings <- controls$forcings
@@ -458,9 +482,12 @@ Xd <- function(data, condition = NULL) {
   
   controls <- list()  
   
-  P2X <- function(times, pars, deriv=TRUE){
-    
-    
+  P2X <- function(times, pars, deriv=TRUE, deriv2 = FALSE){
+
+    if (deriv2)
+      stop("Xd: second-order sensitivities are not implemented for data-driven prediction.")
+
+
     predictions <- lapply(states, function(s) predL[[s]](times, pars)); names(predictions) <- states
     
     out <- cbind(times, do.call(cbind, predictions))
@@ -541,10 +568,15 @@ Xd <- function(data, condition = NULL) {
 #' @param verbose Logical, print compiler output to the R console.
 #' @param derivMode Character. Selects the derivative backend used by [CppODE::funCpp]
 #'   to evaluate observation Jacobians. One of `"dual"` (default, in-tree
-#'   forward-mode AD via `jac_chain`, typically faster when the number of
+#'   forward-mode AD via `evaluate`, typically faster when the number of
 #'   fitted parameters is large; requires `compile = TRUE`) or `"symbolic"`
 #'   (classical SymPy Jacobian followed by an explicit chain rule against
 #'   the upstream `dX`/`dP`).
+#' @param deriv2 Logical. If `TRUE`, the compiled observation function
+#'   additionally exposes second-order derivatives. The returned `obsfn` then
+#'   carries an `attr(., "deriv2")` 4D array (`[time, observable, theta, theta]`)
+#'   on its output when called with `deriv2 = TRUE`. The AD backend for
+#'   `deriv2 = TRUE` requires `compile = TRUE`. Default `FALSE`.
 #'
 #' @return
 #' An object of class [obsfn], i.e. a function  `g(..., fixed = NULL, deriv = TRUE, condition = NULL, env = NULL)`
@@ -558,6 +590,7 @@ Xd <- function(data, condition = NULL) {
 Y <- function(g, f = NULL, states = NULL, parameters = NULL,
               condition = NULL, attach.input = TRUE,
               compile = FALSE, modelname = NULL, verbose = FALSE,
+              deriv2 = FALSE,
               derivMode = c("dual", "symbolic")) {
 
   derivMode <- match.arg(derivMode)
@@ -601,7 +634,7 @@ Y <- function(g, f = NULL, states = NULL, parameters = NULL,
   obsParams <- intersect(symbols, parameters)
   obsStates <- setdiff(symbols, parameters)
 
-  # Compile evaluator for g (value, Jacobian, AD chain)
+  # Compile evaluator for g (value, Jacobian, Hessian, AD chain)
   gEval <- suppressWarnings(
     CppODE::funCpp(
       unclass(g),
@@ -612,27 +645,35 @@ Y <- function(g, f = NULL, states = NULL, parameters = NULL,
       outdir     = getwd(),
       verbose    = verbose,
       convenient = FALSE,
-      derivMode  = derivMode
+      derivMode  = derivMode,
+      deriv2     = deriv2
     )
   )
 
   gfun       <- gEval$func
   gjac       <- gEval$jac
-  gjac_chain <- gEval$jac_chain
+  ghess      <- gEval$hess
+  gevaluate  <- gEval$evaluate
   use_ad     <- derivMode == "dual"
+  emit_d2    <- isTRUE(deriv2)
 
   controls <- list(attach.input = attach.input)
 
   # Core observation mapping function
-  X2Y <- function(out, pars, fixed = NULL, deriv = TRUE) {
+  X2Y <- function(out, pars, fixed = NULL, deriv = TRUE, deriv2 = FALSE) {
+
+    if (deriv2 && !emit_d2)
+      stop("Y() was built with deriv2 = FALSE; rebuild Y() with deriv2 = TRUE.")
+    if (deriv2 && !deriv) deriv <- TRUE
 
     attach.input <- controls$attach.input
     fixedObsParams <- intersect(union(attr(pars, "fixed"), names(fixed)), obsParams)
     params <- c(unclass(pars), unclass(fixed))
 
-    if (use_ad && deriv && !is.null(gjac_chain)) {
-      # AD path: jac_chain returns y and dy already chain-ruled.
+    if (use_ad && deriv && !is.null(gevaluate)) {
+      # AD path: evaluate() returns y and dy already chain-ruled via dX/dP seeds.
       dX_full <- attr(out, "deriv")
+      dX2_full <- attr(out, "deriv2")
       # Gate dX the same way the symbolic path gates activeS: if no obsStates
       # appear in dX's state dim, it carries no upstream state sensitivity for
       # this observation function. Suppress to avoid spurious theta mismatches
@@ -640,10 +681,15 @@ Y <- function(g, f = NULL, states = NULL, parameters = NULL,
       dX <- dX_full
       if (!is.null(dX) && length(intersect(obsStates, dimnames(dX)[[2]])) == 0)
         dX <- NULL
-      ad_out <- gjac_chain(out[, obsStates, drop = FALSE], params[obsParams],
-                           dX = dX, dP = attr(pars, "deriv"),
-                           attach.input = attach.input, fixed = fixedObsParams)
-      # Values: gjac_chain returns observables (and pass-through extras when
+      dX2 <- dX2_full
+      if (!is.null(dX2) && length(intersect(obsStates, dimnames(dX2)[[2]])) == 0)
+        dX2 <- NULL
+      ad_out <- gevaluate(out[, obsStates, drop = FALSE], params[obsParams],
+                          dX = dX, dP = attr(pars, "deriv"),
+                          dX2 = dX2, dP2 = attr(pars, "deriv2"),
+                          deriv2 = deriv2,
+                          attach.input = attach.input, fixed = fixedObsParams)
+      # Values: evaluate() returns observables (and pass-through extras when
       # attach.input = TRUE) under attach.input semantics matching gfun.
       gAll <- ad_out$y
       gVal <- gAll[, observables, drop = FALSE]
@@ -654,8 +700,9 @@ Y <- function(g, f = NULL, states = NULL, parameters = NULL,
       values <- cbind(time = out[, "time"], gVal)
       if (attach.input) values <- cbind(values, submatrix(out, cols = -1))
       myderivs <- ad_out$dy
+      myderivs2 <- if (deriv2) ad_out$d2y else NULL
       # Append pass-through state sensitivities so dimnames(myderivs)[[2]]
-      # mirrors the attached values; the AD jac_chain only sees obsStates and
+      # mirrors the attached values; the AD path only sees obsStates and
       # therefore drops the non-consumed state rows.
       if (attach.input && !is.null(myderivs) && !is.null(dX_full)) {
         theta <- dimnames(myderivs)[[3]]
@@ -666,6 +713,19 @@ Y <- function(g, f = NULL, states = NULL, parameters = NULL,
         add_states <- setdiff(dimnames(dX_full)[[2]], already)
         if (length(add_states))
           myderivs <- abind::abind(myderivs, dX_full[, add_states, outer_theta, drop = FALSE], along = 2)
+      }
+      if (attach.input && !is.null(myderivs2) && !is.null(dX2_full)) {
+        theta <- dimnames(myderivs2)[[3]]
+        outer_theta <- theta %||% dimnames(dX2_full)[[3]]
+        missing <- setdiff(outer_theta, dimnames(dX2_full)[[3]])
+        if (length(missing)) dX2_full <- abind::abind(dX2_full,
+                                                       array(0, c(dim(dX2_full)[1], dim(dX2_full)[2], length(missing), length(missing)),
+                                                             dimnames = list(NULL, NULL, missing, missing)),
+                                                       along = 3)
+        already <- intersect(dimnames(myderivs2)[[2]], dimnames(dX2_full)[[2]])
+        add_states <- setdiff(dimnames(dX2_full)[[2]], already)
+        if (length(add_states))
+          myderivs2 <- abind::abind(myderivs2, dX2_full[, add_states, outer_theta, outer_theta, drop = FALSE], along = 2)
       }
     } else {
       # Symbolic path (also serves the !compile fallback for AD modes).
@@ -680,6 +740,7 @@ Y <- function(g, f = NULL, states = NULL, parameters = NULL,
       if (attach.input) values <- cbind(values, submatrix(out, cols = -1))
 
       myderivs <- NULL
+      myderivs2 <- NULL
       if (deriv && !is.null(gjac)) {
 
         dX <- attr(out, "deriv")  # [time, states, theta] state sensitivities
@@ -711,17 +772,50 @@ Y <- function(g, f = NULL, states = NULL, parameters = NULL,
           if (length(missing)) dX <- abind::abind(dX, array(0, c(dim(dX)[1], dim(dX)[2], length(missing)), dimnames = list(NULL, NULL, missing)), along = 3)
           myderivs <- abind::abind(myderivs, dX[, , outer_theta, drop = FALSE], along = 2)
         }
+
+        # Second-order: delegate the full sandwich to ghess(), which applies
+        # chain_hess_sym internally. We pass upstream seeds (dX, dP, dX2, dP2)
+        # and let CppODE produce d2y already aligned to theta.
+        if (deriv2) {
+          if (is.null(ghess))
+            stop("Y(deriv2 = TRUE) requires hess(); rebuild Y with deriv2 = TRUE.")
+          dX2_in <- attr(out, "deriv2")
+          dP2_in <- attr(pars, "deriv2")
+          gH <- ghess(out[, obsStates, drop = FALSE], params[obsParams],
+                      dX = dX, dP = dP, dX2 = dX2_in, dP2 = dP2_in)
+          # gH: [time, obs, theta, theta]. Restrict columns to declared observables
+          # (gjac path output above uses [, , observables, theta]).
+          if (!is.null(gH)) {
+            obs_cols <- intersect(observables, dimnames(gH)[[2]])
+            if (length(obs_cols)) gH <- gH[, obs_cols, , , drop = FALSE]
+            myderivs2 <- gH
+
+            # Pass-through state Hessians for attach.input
+            if (attach.input && !is.null(dX2_in)) {
+              outer_theta <- dimnames(myderivs2)[[3]] %||% dimnames(dX2_in)[[3]]
+              missing <- setdiff(outer_theta, dimnames(dX2_in)[[3]])
+              if (length(missing)) dX2_in <- abind::abind(dX2_in,
+                                                          array(0, c(dim(dX2_in)[1], dim(dX2_in)[2], length(missing), length(missing)),
+                                                                dimnames = list(NULL, NULL, missing, missing)),
+                                                          along = 3)
+              already <- intersect(dimnames(myderivs2)[[2]], dimnames(dX2_in)[[2]])
+              add_states <- setdiff(dimnames(dX2_in)[[2]], already)
+              if (length(add_states))
+                myderivs2 <- abind::abind(myderivs2, dX2_in[, add_states, outer_theta, outer_theta, drop = FALSE], along = 2)
+            }
+          }
+        }
       }
     }
 
-    prdframe(prediction = values, deriv = myderivs, parameters = c(pars, fixed))
+    prdframe(prediction = values, deriv = myderivs, deriv2 = myderivs2, parameters = c(pars, fixed))
   }
 
   attr(X2Y, "equations")  <- as.eqnvec(g)
   attr(X2Y, "parameters") <- parameters
   attr(X2Y, "states")     <- states
   attr(X2Y, "modelname")  <- modelname
-  attr(X2Y, "compileInfo") <- collectCompileInfo(gfun, gjac, gjac_chain)
+  attr(X2Y, "compileInfo") <- collectCompileInfo(gfun, gjac, ghess, gevaluate)
 
   obsfn(X2Y, parameters, condition)
 }

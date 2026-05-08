@@ -8,6 +8,7 @@ nll_ALOQ(
   nout,
   derivs,
   derivs.err,
+  derivs2 = NULL,
   par_names,
   opt.BLOQ = c("M3", "M4NM", "M4BEAL", "M1"),
   opt.hessian = c(ALOQ_part1 = TRUE, ALOQ_part2 = TRUE, ALOQ_part3 = TRUE),

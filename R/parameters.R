@@ -116,9 +116,14 @@ P <- function(trafo = NULL, parameters = NULL, condition = NULL,
 #' @param verbose Logical. Print compiler messages.
 #' @param derivMode Character. Selects the derivative backend used by [CppODE::funCpp]
 #'   to evaluate the transformation Jacobian. One of `"dual"` (default,
-#'   in-tree forward-mode AD via `jac_chain`; requires `compile = TRUE`) or
+#'   in-tree forward-mode AD via `evaluate`; requires `compile = TRUE`) or
 #'   `"symbolic"` (classical SymPy Jacobian, appropriate for typically small
 #'   parameter transformations).
+#' @param deriv2 Logical. If `TRUE`, the compiled trafo additionally exposes
+#'   second-order derivatives. The returned `parfn` then carries an
+#'   `attr(., "deriv2")` 3D array (`[p, theta, theta]`) on its output when
+#'   called with `deriv2 = TRUE`. The AD backend for `deriv2 = TRUE` requires
+#'   `compile = TRUE`. Default `FALSE`.
 #'
 #' @return
 #' A function of class [parfn].
@@ -131,6 +136,7 @@ P <- function(trafo = NULL, parameters = NULL, condition = NULL,
 #' @export
 Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NULL,
                   compile = FALSE, modelname = NULL, verbose = FALSE,
+                  deriv2 = FALSE,
                   derivMode = c("dual", "symbolic")) {
 
   derivMode <- match.arg(derivMode)
@@ -161,18 +167,26 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
       outdir     = getwd(),
       verbose    = verbose,
       convenient = FALSE,
-      derivMode  = derivMode
+      derivMode  = derivMode,
+      deriv2     = deriv2
     )
   )
 
   fun       <- PEval$func
   jac       <- PEval$jac
-  jac_chain <- PEval$jac_chain
+  hess      <- PEval$hess
+  evaluate  <- PEval$evaluate
   use_ad    <- derivMode == "dual"
   ad_symbol <- paste0(modelname, "_eval_ad")
+  ad2_symbol <- paste0(modelname, "_eval_ad2")
+  emit_d2   <- isTRUE(deriv2)
 
   # Define returned parameter transformation function
-  p2p <- function(pars, fixed = NULL, deriv = TRUE) {
+  p2p <- function(pars, fixed = NULL, deriv = TRUE, deriv2 = FALSE) {
+
+    if (deriv2 && !emit_d2)
+      stop("Pexpl was built with deriv2 = FALSE; rebuild with deriv2 = TRUE to use second-order sensitivities.")
+    if (deriv2 && !deriv) deriv <- TRUE
 
     # Prepare pars
     p <- c(pars, fixed)
@@ -180,36 +194,49 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
     # Only take the AD path if the compiled entry is actually loaded; otherwise
     # drop to the symbolic fallback so post-composition calls like
     # `(p1 + P(..., compile = FALSE))(pars)` keep working without crashing.
-    ad_ok <- use_ad && !is.null(jac_chain) && is.loaded(ad_symbol)
+    ad_ok <- use_ad && !is.null(evaluate) && is.loaded(ad_symbol)
 
     Jac <- NULL
+    Hess <- NULL
+    ad_ok2 <- ad_ok && emit_d2 && is.loaded(ad2_symbol)
+    if (deriv2 && !ad_ok2 && use_ad)
+      stop("Pexpl(deriv2 = TRUE) requires the compiled AD2 entry; rebuild with compile = TRUE.")
     if (ad_ok && deriv) {
-      # AD path: jac_chain returns y and dy already chain-ruled w.r.t. theta.
-      # Pexpl typically sits at the head of the chain, so attr(pars, "deriv")
-      # is NULL. jac_chain returns dy = NULL in that case, so supply an
-      # identity dP to get dy/dp directly (matches the symbolic path, which
-      # uses jac()'s output unchanged when dP is NULL).
+      # AD path: evaluate() returns y and dy already chain-ruled w.r.t. theta
+      # via the dX/dP seed arguments. Pexpl sits at the head of the chain,
+      # so attr(pars, "deriv") is NULL; supply an identity dP to get dy/dp
+      # directly (matches the symbolic path, which uses jac()'s output
+      # unchanged when dP is NULL).
       dP <- attr(pars, "deriv")
+      dP2 <- if (deriv2) attr(pars, "deriv2") else NULL
       if (is.null(dP)) {
         active_pars <- setdiff(parameters, names(fixed))
         dP <- diag(length(active_pars))
         dimnames(dP) <- list(active_pars, active_pars)
+        # dP2 at the head: zero upstream Hessian seed (NULL).
       }
       # Restrict params + fixed to the symbols this trafo actually knows,
       # and reorder to match the codegen parameter order. In multi-condition
       # compositions p2p may receive a superset of pars (parameters from
       # sibling conditions). The symbolic CppODE entry tolerates that, but
-      # jac_chain does not: it interprets `params` and `dP` positionally
-      # against the codegen ordering. A name-set or order mismatch
-      # mis-aligns the AD seed and segfaults inside CppODE.
+      # the dual-mode entry does not: it interprets `params` and `dP`
+      # positionally against the codegen ordering. A name-set or order
+      # mismatch mis-aligns the AD seed and segfaults inside CppODE.
       p_ad <- p[parameters]
       fixed_ad <- intersect(names(fixed), parameters)
-      out <- jac_chain(NULL, p_ad, dX = NULL, dP = dP,
-                       attach.input = attach.input, fixed = fixed_ad)
+      out <- evaluate(NULL, p_ad, dX = NULL, dP = dP,
+                      dX2 = NULL, dP2 = dP2,
+                      deriv2 = deriv2,
+                      attach.input = attach.input, fixed = fixed_ad)
       pinnerVal <- out$y[1, ]
       if (!is.null(out$dy)) {
         Jac <- matrix(out$dy, dim(out$dy)[2], dim(out$dy)[3],
                       dimnames = list(dimnames(out$dy)[[2]], dimnames(out$dy)[[3]]))
+      }
+      if (deriv2 && !is.null(out$d2y)) {
+        d2 <- out$d2y
+        Hess <- array(d2, dim(d2)[2:4],
+                      dimnames = list(dimnames(d2)[[2]], dimnames(d2)[[3]], dimnames(d2)[[4]]))
       }
     } else {
       # Symbolic path (also serves the !compile fallback for AD modes).
@@ -221,6 +248,18 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
           Jac <- Jac %*% dP[colnames(Jac), , drop = FALSE]
           dimnames(Jac) <- list(names(pinnerVal), colnames(dP))
         }
+      }
+      if (deriv2) {
+        if (is.null(hess))
+          stop("Pexpl(deriv2 = TRUE) requires hess(); rebuild Pexpl with deriv2 = TRUE.")
+        dP_in  <- attr(pars, "deriv")
+        dP2_in <- attr(pars, "deriv2")
+        H_arr <- hess(NULL, p, dX = NULL, dP = dP_in,
+                      dX2 = NULL, dP2 = dP2_in,
+                      attach.input = attach.input, fixed = names(fixed))
+        # H_arr: [1, n_inner, n_theta, n_theta]
+        Hess <- array(H_arr, dim(H_arr)[2:4],
+                      dimnames = list(dimnames(H_arr)[[2]], dimnames(H_arr)[[3]], dimnames(H_arr)[[4]]))
       }
     }
 
@@ -235,12 +274,17 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
     }
 
     # Assemble result
-    pinner <- as.parvec(pinnerVal, deriv = if (deriv && !is.null(Jac)) Jac[rowSums(Jac != 0) > 0, , drop = FALSE] else FALSE)
+    Jac_keep <- if (deriv && !is.null(Jac)) Jac[rowSums(Jac != 0) > 0, , drop = FALSE] else FALSE
+    Hess_keep <- if (deriv2 && !is.null(Hess)) {
+      if (is.matrix(Jac_keep)) Hess[rownames(Jac_keep), , , drop = FALSE] else Hess
+    } else FALSE
+    pinner <- as.parvec(pinnerVal, deriv = Jac_keep, deriv2 = Hess_keep)
 
     if (attach.input && !all(names(pars) %in% names(pinnerVal))) {
       pinner <- c(pinner,
                   as.parvec(pars[setdiff(names(pars), names(pinnerVal))],
-                            deriv = if (deriv) NULL else FALSE))
+                            deriv = if (deriv) NULL else FALSE,
+                            deriv2 = if (deriv2) NULL else FALSE))
     }
 
     pinner
@@ -249,7 +293,7 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
   attr(p2p, "equations")  <- as.eqnvec(trafo)
   attr(p2p, "parameters") <- parameters
   attr(p2p, "modelname")  <- modelname
-  attr(p2p, "compileInfo") <- collectCompileInfo(fun, jac, jac_chain)
+  attr(p2p, "compileInfo") <- collectCompileInfo(fun, jac, hess, evaluate)
 
   parfn(p2p, parameters, condition)
 }
@@ -583,7 +627,10 @@ Pimpl <- function(trafo, parameters = NULL, forcings = NULL, condition = NULL, k
     Jfull <- eval_J(root, pv)
     dfdx  <- Jfull[, dependent, drop = FALSE]
     dfdp  <- Jfull[, parms_all, drop = FALSE]
-    dxdp  <- solve(dfdx, -dfdp)
+    dxdp  <- if (length(parms_all))
+      solve(dfdx, -dfdp)
+    else
+      matrix(numeric(0), n_dep, 0, dimnames = list(dependent, character(0)))
     
     input_cols <- setdiff(names(p), c(dependent, names(fixed)))
     jacobian <- matrix(0, length(out), length(input_cols),
@@ -623,8 +670,11 @@ Pimpl <- function(trafo, parameters = NULL, forcings = NULL, condition = NULL, k
   }
   
   # ---- Main p2p function ----
-  p2p <- function(pars, fixed = NULL, deriv = TRUE) {
-    
+  p2p <- function(pars, fixed = NULL, deriv = TRUE, deriv2 = FALSE) {
+
+    if (deriv2)
+      stop("Pimpl: second-order sensitivities are not implemented for the implicit/root-finding path. Use Pequil(... , deriv2 = TRUE) or Pexpl(... , deriv2 = TRUE).")
+
     p <- pars; dP <- attr(p, "deriv")
     keep.root  <- controls$keep.root
     positive   <- controls$positive
@@ -794,9 +844,12 @@ Pimpl <- function(trafo, parameters = NULL, forcings = NULL, condition = NULL, k
 #' @import CppODE
 #' @importFrom digest digest
 #' @export
-Pequil <- function(trafo, parameters = NULL, forcings = NULL, condition = NULL, attach.input = TRUE, 
+Pequil <- function(trafo, parameters = NULL, forcings = NULL, condition = NULL, attach.input = TRUE,
                    start.time = -1e7, end.time = 0, keep.root = TRUE, controlsODE = list(),
-                   compile = FALSE, modelname = NULL, verbose = FALSE, ...) {
+                   compile = FALSE, modelname = NULL, verbose = FALSE,
+                   deriv2 = FALSE, ...) {
+
+  emit_d2 <- isTRUE(deriv2)
   
   # ---- Accept eqnlist, eqnvec, or named character ----
   if (inherits(trafo, "eqnlist")) {
@@ -835,40 +888,60 @@ Pequil <- function(trafo, parameters = NULL, forcings = NULL, condition = NULL, 
   
   # ---- Build CppODE models ----
   dotArgs <- list(...)
-  .args <- c(list(rhs = unclass(f_red), rootfunc = "equilibrate", deriv2 = FALSE,
+  # Strip caller-supplied deriv2 to avoid double-passing.
+  dotArgs[["deriv2"]] <- NULL
+  .args <- c(list(rhs = unclass(f_red), rootfunc = "equilibrate",
                   compile = compile, outdir = getwd(), useDenseOutput = FALSE, verbose = verbose),
              dotArgs)
-  model   <- do.call(CppODE::CppODE, c(.args, list(deriv = FALSE, modelname = modelname)))
-  model_s <- do.call(CppODE::CppODE, c(.args, list(deriv = TRUE,  modelname = paste0(modelname, "_s"),
+  model   <- do.call(CppODE::CppODE, c(.args, list(deriv = FALSE, deriv2 = FALSE,
+                                                   modelname = modelname)))
+  # First-order model is always emitted so callers can fit / simulate at the
+  # cheaper 1st-order cost via deriv2 = FALSE.
+  model_s <- do.call(CppODE::CppODE, c(.args, list(deriv = TRUE,  deriv2 = FALSE,
+                                                   modelname = paste0(modelname, "_s"),
                                                    fixed = names(f))))
+  # Second-order model only when requested.
+  model_s2 <- if (emit_d2)
+    do.call(CppODE::CppODE, c(.args, list(deriv = TRUE,  deriv2 = TRUE,
+                                          modelname = paste0(modelname, "_s2"),
+                                          fixed = names(f)))) else NULL
   dims    <- attr(model_s, "dimNames")
   all_sens <- dims$sens
-  
+
   # ---- ODE controls ----
   ode_defaults <- list(abstol = 1e-6, reltol = 1e-6, maxsteps = 1e6L,
                        maxprogress = 100L, hini = 0, roottol = 1e-6, maxroot = 1L)
   ode_ctrl <- modifyList(ode_defaults, controlsODE)
-  
+
   # ---- Cache ----
   cache <- new.env(parent = emptyenv())
-  cache$yini <- NULL; cache$sensini <- NULL
+  cache$yini <- NULL; cache$sensini <- NULL; cache$sens2ini <- NULL
   cache$last_hash <- NULL; cache$last_result <- NULL
-  
+
   # Default sensitivities
   default_sens <- matrix(0, n_dep, length(all_sens), dimnames = list(dependent, all_sens))
   diag_vars <- intersect(dependent, all_sens)
   if (length(diag_vars)) default_sens[cbind(diag_vars, diag_vars)] <- 1
+  # Default 2nd-order sensitivities: zero tensor [n_dep, all_sens, all_sens].
+  default_sens2 <- if (emit_d2)
+    array(0, c(n_dep, length(all_sens), length(all_sens)),
+          dimnames = list(dependent, all_sens, all_sens)) else NULL
   
   # ---- Controls ----
   controls <- c(list(keep.root = keep.root, attach.input = attach.input,
                      start.time = start.time, end.time = end.time), ode_ctrl)
   
   # ---- p2p ----
-  p2p <- function(pars, fixed = NULL, deriv = TRUE) {
-    p <- pars; dP <- attr(p, "deriv")
+  p2p <- function(pars, fixed = NULL, deriv = TRUE, deriv2 = FALSE) {
+
+    if (deriv2 && !emit_d2)
+      stop("Pequil(deriv2 = TRUE) requires the model to be built with deriv2 = TRUE.")
+    if (deriv2 && !deriv) deriv <- TRUE
+
+    p <- pars; dP <- attr(p, "deriv"); dP2 <- if (deriv2) attr(p, "deriv2") else NULL
     keep.root    <- controls$keep.root
     attach.input <- controls$attach.input
-    
+
     if (!is.null(fixed)) {
       is.fixed <- names(p) %in% names(fixed)
       if (any(is.fixed)) p <- p[!is.fixed]
@@ -877,47 +950,54 @@ Pequil <- function(trafo, parameters = NULL, forcings = NULL, condition = NULL, 
     emptypars <- names(p)[!names(p) %in% c(dependent, names(fixed))]
     missing_dep <- setdiff(dependent, names(p))
     if (length(missing_dep)) p[missing_dep] <- 1
-    
+
     # Fast path: skip if parameters unchanged
     if (keep.root) {
-      pv_hash <- digest::digest(list(p[dependent], p[parms_all], fixed, deriv), algo = "xxhash64")
+      pv_hash <- digest::digest(list(p[dependent], p[parms_all], fixed, deriv, deriv2), algo = "xxhash64")
       if (!is.null(cache$last_hash) && identical(pv_hash, cache$last_hash) &&
           !is.null(cache$last_result))
         return(cache$last_result)
     }
-    
+
     # Warm-start
     if (keep.root && !is.null(cache$yini)) p[dependent] <- cache$yini
-    
+
     # Active sensitivities
     fixed_char <- if (!is.null(fixed)) intersect(names(fixed), all_sens) else NULL
     if (length(fixed_char)) {
       active_sens <- all_sens[-match(fixed_char, all_sens)]
     } else { fixed_char <- NULL; active_sens <- all_sens }
     n_active <- length(active_sens)
-    
+
     s1ini <- NULL
     if (deriv && keep.root && !is.null(cache$sensini))
       s1ini <- cache$sensini[, active_sens, drop = FALSE]
     else if (deriv)
       s1ini <- default_sens[, active_sens, drop = FALSE]
-    
-    # Integrate
+
+    s2ini <- NULL
+    if (deriv2 && keep.root && !is.null(cache$sens2ini))
+      s2ini <- cache$sens2ini[, active_sens, active_sens, drop = FALSE]
+    else if (deriv2)
+      s2ini <- default_sens2[, active_sens, active_sens, drop = FALSE]
+
+    # Integrate. Pick the cheapest model that satisfies deriv/deriv2.
+    sens_model <- if (deriv2) model_s2 else if (deriv) model_s else model
     res <- tryCatch(
       withCallingHandlers(
         CppODE::solveODE(
-          if (deriv) model_s else model,
+          sens_model,
           times = c(controls$start.time, controls$end.time), parms = c(p[dependent], p[parms_all]),
-          sens1ini = s1ini, fixed = fixed_char,
+          sens1ini = s1ini, sens2ini = s2ini, fixed = fixed_char,
           roottol = controls$roottol, abstol = controls$abstol, reltol = controls$reltol,
           maxsteps = as.integer(controls$maxsteps), maxprogress = as.integer(controls$maxprogress),
           hini = controls$hini, maxroot = as.integer(controls$maxroot)),
         warning = function(w) { warning(w$message, call. = FALSE); invokeRestart("muffleWarning") }),
       error = function(e) { warning("ODE integration failed: ", e$message, call. = FALSE); NULL })
-    
+
     if (is.null(res)) {
       out <- if (attach.input) c(p[dependent], p[setdiff(names(p), dependent)]) else p[dependent]
-      return(as.parvec(out, deriv = NULL))
+      return(as.parvec(out, deriv = NULL, deriv2 = NULL))
     }
     
     last <- length(res$time)
@@ -941,36 +1021,89 @@ Pequil <- function(trafo, parameters = NULL, forcings = NULL, condition = NULL, 
         full_new[, active_sens] <- res$sens1[last, , ]
         cache$sensini <- full_new
       } else cache$sensini <- NULL
+      if (deriv2 && !is.null(res$sens2)) {
+        full2 <- default_sens2
+        full2[, active_sens, active_sens] <- res$sens2[last, , , ]
+        cache$sens2ini <- full2
+      } else if (deriv2) cache$sens2ini <- NULL
     }
 
     if (deriv && !is.null(res$sens1)) {
       sens_final <- round(matrix(res$sens1[last, , ], nrow = n_dep, ncol = n_active,
                                  dimnames = list(dependent, active_sens)),
                           floor(-log10(controls$roottol))+1L)
-      
+
       input_cols <- setdiff(names(p), c(dependent, names(fixed)))
       jacobian <- matrix(0, length(out), length(input_cols),
                          dimnames = list(names(out), input_cols))
-      
+
       # Pass-through identity
       if (attach.input) {
         diag_idx <- intersect(emptypars, input_cols)
         if (length(diag_idx)) jacobian[cbind(diag_idx, diag_idx)] <- 1
       }
-      
+
       # Dependent state sensitivities (direct from ODE)
       sr <- intersect(dependent, rownames(sens_final))
       sc <- intersect(input_cols, colnames(sens_final))
       if (length(sr) && length(sc))
         jacobian[sr, sc] <- sens_final[sr, sc, drop = FALSE]
-      
-      if (!is.null(dP)) jacobian <- jacobian %*% submatrix(dP, rows = input_cols)
+
+      hess_attr <- NULL
+      if (deriv2 && !is.null(res$sens2)) {
+        # Round at the same digit count used for sens1 (steady-state precision).
+        digits_round <- floor(-log10(controls$roottol)) + 1L
+        sens2_final <- round(array(res$sens2[last, , , ],
+                                   dim = c(n_dep, n_active, n_active),
+                                   dimnames = list(dependent, active_sens, active_sens)),
+                             digits_round)
+
+        hess_arr <- array(0, c(length(out), length(input_cols), length(input_cols)),
+                          dimnames = list(names(out), input_cols, input_cols))
+        # Pass-through identity is linear in pars, so its Hessian is zero —
+        # nothing to fill there. Only the dependent block carries d²x*/dp².
+        if (length(sr) && length(sc))
+          hess_arr[sr, sc, sc] <- sens2_final[sr, sc, sc, drop = FALSE]
+
+        # Chain rule with upstream dP, dP2 if present (Pequil sits typically at
+        # the head, so both are NULL — no work to do).
+        if (!is.null(dP)) {
+          # H_outer[i, m, n] = sum_{a,b} dP[a,m] dP[b,n] hess_arr[i,a,b]
+          #                   + sum_a    jacobian[i,a]    dP2[a,m,n]
+          dPsub <- submatrix(dP, rows = input_cols)
+          theta_names <- colnames(dPsub)
+          n_theta <- length(theta_names)
+          new_hess <- array(0, c(length(out), n_theta, n_theta),
+                            dimnames = list(names(out), theta_names, theta_names))
+          for (i in seq_len(length(out)))
+            new_hess[i, , ] <- t(dPsub) %*% hess_arr[i, , ] %*% dPsub
+          if (!is.null(dP2)) {
+            dP2sub <- dP2[input_cols, theta_names, theta_names, drop = FALSE]
+            jac_chained <- jacobian %*% dPsub
+            for (i in seq_len(length(out))) {
+              gi <- jacobian[i, ]
+              for (k1 in seq_len(n_theta)) for (k2 in seq_len(n_theta))
+                new_hess[i, k1, k2] <- new_hess[i, k1, k2] + sum(gi * dP2sub[, k1, k2])
+            }
+            jacobian <- jac_chained
+          } else {
+            jacobian <- jacobian %*% dPsub
+          }
+          hess_attr <- new_hess
+        } else {
+          hess_attr <- hess_arr
+        }
+      } else if (!is.null(dP)) {
+        jacobian <- jacobian %*% submatrix(dP, rows = input_cols)
+      }
+
       nonzero <- rowSums(jacobian != 0) > 0
-      result <- as.parvec(out, deriv = jacobian[nonzero, , drop = FALSE])
+      hess_keep <- if (!is.null(hess_attr)) hess_attr[nonzero, , , drop = FALSE] else FALSE
+      result <- as.parvec(out, deriv = jacobian[nonzero, , drop = FALSE], deriv2 = hess_keep)
     } else {
-      result <- as.parvec(out, deriv = NULL)
+      result <- as.parvec(out, deriv = NULL, deriv2 = NULL)
     }
-    
+
     if (keep.root) { cache$last_hash <- pv_hash; cache$last_result <- result }
     result
   }
@@ -978,7 +1111,7 @@ Pequil <- function(trafo, parameters = NULL, forcings = NULL, condition = NULL, 
   attr(p2p, "equations")  <- as.eqnvec(f)
   attr(p2p, "parameters") <- parameters
   attr(p2p, "modelname")  <- modelname
-  attr(p2p, "compileInfo") <- collectCompileInfo(model, model_s)
+  attr(p2p, "compileInfo") <- collectCompileInfo(model, model_s, model_s2)
   parfn(p2p, parameters, condition)
 }
 

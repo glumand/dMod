@@ -17,8 +17,6 @@ appendParframes(
 
 \item{parframes}{Expression to turn a column containing a parlist (e.g. fits) into a column of parframes}
 
-\item{keepFits}{}
-
 \item{...}{Other columns you want to mutate}
 
 \item{keepCalls}{Store a record of the calls in a new colun? See \link{mutatedMod.frame}.}

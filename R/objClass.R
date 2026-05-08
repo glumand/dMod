@@ -163,37 +163,41 @@ normL2 <- function(data, x, errmodel = NULL, times = NULL,
   force(errmodel); force(bessel); force(conditions); force(timesD)
   
   # Core evaluation function
-  eval_condition <- function(cn, prediction, pars, deriv) {
+  eval_condition <- function(cn, prediction, pars, deriv, deriv2 = FALSE) {
     err_cn <- NULL
     if (!is.null(errmodel) && (is.null(e.cond) || cn %in% e.cond)) {
-      
+
       pinner <- getParameters(prediction[[cn]])
       fixedinner <- pinner[attr(pinner, "fixed")]
       pinner  <- as.parvec(pinner[setdiff(names(pinner), names(fixed))])
-      fixedinner <- as.parvec(fixedinner, deriv = FALSE)
-      
+      fixedinner <- as.parvec(fixedinner, deriv = FALSE, deriv2 = FALSE)
+
+      # Note: error model is currently always called with deriv2 = FALSE.
+      # Sigma-theta cross terms in the exact Hessian are dropped (kept GN);
+      # adding them requires error-model second-derivatives and a more careful
+      # contraction in nll_ALOQ — slated for a follow-up PR.
       err_cn <- errmodel(out = prediction[[cn]], pars = pinner,
                          fixed = fixedinner, conditions = cn)[[cn]]
     }
     nll(res(data[[cn]], prediction[[cn]], err_cn), pars = pars, deriv = deriv,
-        bessel.correction = bessel)
+        deriv2 = deriv2, bessel.correction = bessel)
   }
-  
-  myfn <- function(..., fixed = NULL, deriv = TRUE, env = NULL) {
+
+  myfn <- function(..., fixed = NULL, deriv = TRUE, deriv2 = FALSE, env = NULL) {
     pars <- ..1
     if (is.null(env)) env <- new.env()
-    
+
     prediction <- x(times = timesD, pars = pars, fixed = fixed,
-                    deriv = deriv, conditions = conditions)
-    
+                    deriv = deriv, deriv2 = deriv2, conditions = conditions)
+
     out <- if (cores == 1L) {
-      Reduce(`+`, lapply(conditions, eval_condition, prediction, pars, deriv))
+      Reduce(`+`, lapply(conditions, eval_condition, prediction, pars, deriv, deriv2))
     } else if (.Platform$OS.type == "windows") {
       cl <- parallel::makeCluster(cores)
       on.exit(parallel::stopCluster(cl))
-      Reduce(`+`, parallel::parLapply(cl, conditions, eval_condition, prediction, pars, deriv))
+      Reduce(`+`, parallel::parLapply(cl, conditions, eval_condition, prediction, pars, deriv, deriv2))
     } else {
-      Reduce(`+`, parallel::mclapply(conditions, eval_condition, prediction, pars, deriv, mc.cores = cores))
+      Reduce(`+`, parallel::mclapply(conditions, eval_condition, prediction, pars, deriv, deriv2, mc.cores = cores))
     }
     
     attr(out, attr.name) <- out$value
@@ -213,54 +217,76 @@ normL2 <- function(data, x, errmodel = NULL, times = NULL,
 
 #' Soft L2 constraint on parameters
 #'
-#' @param mu Named numeric vector of prior means.
+#' @param mu Named numeric vector of prior means. For the MVN path
+#'   (`Omega` set), `mu` may be a scalar (broadcast across all etas) or a
+#'   length-K named vector matching `Omega$eta`.
 #' @param sigma Named numeric or character vector. Character entries indicate
-#'   log-scale sigma parameters to be estimated.
+#'   log-scale sigma parameters to be estimated. Used only when `Omega` is NULL.
+#' @param Omega Optional `omegaSpec` object (see [omega]) describing a
+#'   multivariate Gaussian prior over subject-level random effects with full
+#'   Cholesky-parametrised covariance. When supplied, the function switches to
+#'   the MVN path and ignores `sigma`.
 #' @param attr.name Character. Name of the attribute storing the constraint value.
 #' @param condition Optional character vector of conditions.
 #'
 #' @details
-#' Computes
+#' Computes, depending on which path is selected,
 #' \deqn{(p-\mu)^2 / \sigma^2}
 #' or, if sigma is estimated,
 #' \deqn{(p-\mu)^2 / \sigma^2 + 2\log(\sigma)},
 #' with sigma internally transformed via \code{exp()}.
 #'
+#' When `Omega` is set, computes the multivariate-normal prior
+#' \deqn{\sum_i (\eta_i - \mu)^T \Omega^{-1} (\eta_i - \mu) + N \log|\Omega|}
+#' over subject-level random effects \eqn{\eta_i}, where \eqn{\Omega = L L^T}
+#' with \eqn{L} lower-triangular and log-parametrised on the diagonal. The
+#' parameter vector at evaluation time must contain all subject-level eta
+#' parameters listed in `Omega$subject_etas` and all Cholesky parameters in
+#' `Omega$chol_pars`.
+#'
 #' @return Object of class \code{objfn}.
 #' @export
-constraintL2 <- function(mu, sigma = 1, attr.name = "prior", condition = NULL) {
-  
+constraintL2 <- function(mu, sigma = 1, Omega = NULL,
+                         attr.name = "prior", condition = NULL) {
+
+  if (!is.null(Omega)) {
+    if (missing(mu)) mu <- 0
+    return(constraintL2_mvn(mu = mu, Omega = Omega,
+                            attr.name = attr.name, condition = condition))
+  }
+
   est <- is.character(sigma)
   if (length(sigma) == 1) sigma <- setNames(rep(sigma, length(mu)), names(mu))
   if (is.null(names(sigma))) names(sigma) <- names(mu)
   sigma <- sigma[names(mu)]
   
-  myfn <- function(..., fixed = NULL, deriv = TRUE, conditions = condition, env = NULL) {
-    
+  myfn <- function(..., fixed = NULL, deriv = TRUE, deriv2 = FALSE, conditions = condition, env = NULL) {
+
     p <- list(...)[[match.fnargs(list(...), "pars")]]
     dP <- attr(p, "deriv", exact = TRUE)
-    
+    dP2 <- if (deriv2) attr(p, "deriv2", exact = TRUE) else NULL
+
     allp <- c(p, fixed)
     avail <- intersect(names(mu), names(allp))
     if (!length(avail))
       return(objlist(value = 0))
-    
+
     pa <- allp[avail]
     sg <- if (est) exp(allp[sigma[avail]]) else sigma[avail]
     r <- pa - mu[avail]
-    
+
     val <- sum(r^2 / sg^2) + est * sum(2 * log(sg))
-    
+
     if (!deriv)
       return(objlist(value = val))
-    
+
     gr <- setNames(numeric(length(p)), names(p))
     hs <- matrix(0, length(p), length(p), dimnames = list(names(p), names(p)))
-    
+
     p1 <- intersect(avail, names(p))
     gr[p1] <- 2 * r[p1] / sg[p1]^2
     diag(hs)[p1] <- 2 / sg[p1]^2
-    
+
     if (est) for (sp in intersect(unique(sigma[avail]), names(p))) {
       idx <- sigma[avail] == sp
       gr[sp] <- sum(-2 * r[idx]^2 / sg[idx]^2 + 2)
@@ -268,14 +294,30 @@ constraintL2 <- function(mu, sigma = 1, attr.name = "prior", condition = NULL) {
       cm <- intersect(names(idx)[idx], p1)
       hs[cm, sp] <- hs[sp, cm] <- -4 * r[cm] / sg[cm]^2
     }
-    
+
     if (!is.null(dP)) {
       gi <- gr
       gr <- drop(gi %*% dP); names(gr) <- colnames(dP)
       hs <- t(dP) %*% hs %*% dP
       dimnames(hs) <- list(colnames(dP), colnames(dP))
+
+      # Exact Hessian addition: gi . dP2 contributes the (dL/dp) * (d^2 p/dtheta^2)
+      # term that the sandwich (dP^T H dP) drops.
+      if (!is.null(dP2)) {
+        common <- intersect(names(gi), dimnames(dP2)[[1]])
+        if (length(common) > 0L) {
+          theta_names <- colnames(dP)
+          dP2_sub <- dP2[common, theta_names, theta_names, drop = FALSE]
+          gi_sub <- gi[common]
+          # H_add[k1, k2] = sum_p gi_p * dP2[p, k1, k2]
+          flat <- matrix(dP2_sub, nrow = length(common), ncol = length(theta_names)^2)
+          h_add_flat <- crossprod(flat, gi_sub)
+          h_add <- matrix(h_add_flat, length(theta_names), length(theta_names))
+          hs <- hs + h_add
+        }
+      }
     }
-    
+
     out <- objlist(value = val, gradient = gr, hessian = hs)
     attr(out, attr.name) <- out$value
     attr(out, "env") <- env
@@ -285,6 +327,182 @@ constraintL2 <- function(mu, sigma = 1, attr.name = "prior", condition = NULL) {
   class(myfn) <- c("objfn", "fn")
   attr(myfn, "conditions") <- condition
   attr(myfn, "parameters") <- names(mu)
+  myfn
+}
+
+
+
+# Multivariate-normal Gaussian prior over subject-level random effects.
+# Internal: dispatched from constraintL2() when its `Omega` argument is set.
+# Returns sum_i (eta_i - mu)^T Omega^-1 (eta_i - mu) + N log|Omega| with exact
+# value/gradient and Gauss-Newton Hessian (block-diagonal in eta, exact crosses
+# to the Cholesky parameters; sandwich via dP for chain rule).
+constraintL2_mvn <- function(mu, Omega, attr.name = "prior", condition = NULL) {
+
+  if (!inherits(Omega, "omegaSpec"))
+    stop("`Omega` must be an omegaSpec object built by omega().")
+  if (is.null(Omega$subject_etas))
+    stop("`Omega` must have subject expansion. Call omega(..., subjects = ...).")
+
+  K            <- Omega$K
+  subject_etas <- Omega$subject_etas
+  N            <- nrow(subject_etas)
+  chol_pars    <- Omega$chol_pars
+  is_diag      <- Omega$is_diag
+  chol_loc     <- Omega$chol_loc
+  build_L      <- Omega$build_L
+
+  if (length(mu) == 1L) mu <- rep(mu, K)
+  if (length(mu) != K)
+    stop("`mu` must have length 1 or K = ", K, " for the MVN constraintL2 path.")
+  if (is.null(names(mu))) names(mu) <- Omega$eta
+
+  all_eta_names <- as.vector(subject_etas)
+  parnames      <- c(all_eta_names, chol_pars)
+
+  myfn <- function(..., fixed = NULL, deriv = TRUE, deriv2 = FALSE, conditions = condition, env = NULL) {
+
+    p  <- list(...)[[match.fnargs(list(...), "pars")]]
+    dP <- attr(p, "deriv", exact = TRUE)
+    dP2 <- if (deriv2) attr(p, "deriv2", exact = TRUE) else NULL
+
+    allp <- c(p, fixed)
+
+    if (!all(parnames %in% names(allp)))
+      return(objlist(value = 0,
+                     gradient = setNames(numeric(length(p)), names(p)),
+                     hessian  = matrix(0, length(p), length(p),
+                                       dimnames = list(names(p), names(p)))))
+
+    # --- value -------------------------------------------------------------
+    chol_vec <- allp[chol_pars]
+    L        <- build_L(chol_vec)
+
+    eta_mat  <- matrix(allp[all_eta_names], nrow = N, ncol = K,
+                       dimnames = dimnames(subject_etas))
+    R        <- t(sweep(eta_mat, 2, mu, "-"))   # K x N
+    Z        <- forwardsolve(L, R)              # K x N
+    W        <- backsolve(t(L), Z)              # K x N
+
+    quad     <- sum(Z * Z)
+    logdetO  <- 2 * sum(log(diag(L)))
+    val      <- quad + N * logdetO
+
+    if (!deriv)
+      return(objlist(value    = val,
+                     gradient = setNames(numeric(length(p)), names(p)),
+                     hessian  = matrix(0, length(p), length(p),
+                                       dimnames = list(names(p), names(p)))))
+
+    np <- length(p)
+    gr <- setNames(numeric(np), names(p))
+    hs <- matrix(0, np, np, dimnames = list(names(p), names(p)))
+
+    free_etas  <- intersect(all_eta_names, names(p))
+    free_chols <- intersect(chol_pars,    names(p))
+
+    # --- gradient: eta block -----------------------------------------------
+    if (length(free_etas) > 0L) {
+      idx_mat <- match(free_etas, all_eta_names)
+      sub_idx <- ((idx_mat - 1L) %% N) + 1L
+      eta_idx <- ((idx_mat - 1L) %/% N) + 1L
+      gr[free_etas] <- 2 * W[cbind(eta_idx, sub_idx)]
+    }
+
+    # --- gradient: chol block ----------------------------------------------
+    if (length(free_chols) > 0L) {
+      WZt <- W %*% t(Z)
+      for (nm in free_chols) {
+        m <- match(nm, chol_pars)
+        k <- chol_loc[m, 1L]; l <- chol_loc[m, 2L]
+        if (is_diag[m]) {
+          gr[nm] <- -2 * WZt[k, k] * L[k, k] + 2 * N
+        } else {
+          gr[nm] <- -2 * WZt[k, l]
+        }
+      }
+    }
+
+    # --- Hessian: Gauss-Newton on z_i --------------------------------------
+    Linv      <- forwardsolve(L, diag(K))   # K x K, lower-triangular inverse
+    Omega_inv <- crossprod(Linv)            # = L^{-T} L^{-1}
+
+    if (length(free_chols) > 0L) {
+      J_chol_template <- matrix(0, K, length(free_chols),
+                                dimnames = list(NULL, free_chols))
+      chol_meta <- vapply(free_chols, function(nm) {
+        m <- match(nm, chol_pars); c(m, chol_loc[m, 1L], chol_loc[m, 2L],
+                                     as.integer(is_diag[m]))
+      }, integer(4))
+      colnames(chol_meta) <- free_chols
+    } else {
+      J_chol_template <- NULL
+    }
+
+    for (i in seq_len(N)) {
+      eta_i_names  <- subject_etas[i, ]
+      eta_i_active <- eta_i_names %in% names(p)
+
+      # eta-eta block: 2 * Omega^{-1}[active, active]
+      if (any(eta_i_active)) {
+        idx <- eta_i_names[eta_i_active]
+        hs[idx, idx] <- hs[idx, idx] + 2 * Omega_inv[eta_i_active, eta_i_active]
+      }
+
+      if (!is.null(J_chol_template)) {
+        J_chol <- J_chol_template
+        for (j_idx in seq_along(free_chols)) {
+          k <- chol_meta[2L, j_idx]; l <- chol_meta[3L, j_idx]
+          if (chol_meta[4L, j_idx] == 1L) {
+            J_chol[, j_idx] <- -L[k, k] * Z[k, i] * Linv[, k]
+          } else {
+            J_chol[, j_idx] <- -Z[l, i] * Linv[, k]
+          }
+        }
+        hs[free_chols, free_chols] <- hs[free_chols, free_chols] + 2 * crossprod(J_chol)
+
+        if (any(eta_i_active)) {
+          idx   <- eta_i_names[eta_i_active]
+          J_eta <- Linv[, eta_i_active, drop = FALSE]
+          colnames(J_eta) <- idx
+          cross <- 2 * crossprod(J_eta, J_chol)
+          hs[idx, free_chols] <- hs[idx, free_chols] + cross
+          hs[free_chols, idx] <- hs[free_chols, idx] + t(cross)
+        }
+      }
+    }
+
+    # --- chain rule via dP -------------------------------------------------
+    if (!is.null(dP)) {
+      gi <- gr
+      gr <- drop(gi %*% dP); names(gr) <- colnames(dP)
+      hs <- t(dP) %*% hs %*% dP
+      dimnames(hs) <- list(colnames(dP), colnames(dP))
+
+      # Exact Hessian addition: gi . dP2.
+      if (!is.null(dP2)) {
+        common <- intersect(names(gi), dimnames(dP2)[[1]])
+        if (length(common) > 0L) {
+          theta_names <- colnames(dP)
+          dP2_sub <- dP2[common, theta_names, theta_names, drop = FALSE]
+          gi_sub <- gi[common]
+          flat <- matrix(dP2_sub, nrow = length(common), ncol = length(theta_names)^2)
+          h_add_flat <- crossprod(flat, gi_sub)
+          h_add <- matrix(h_add_flat, length(theta_names), length(theta_names))
+          hs <- hs + h_add
+        }
+      }
+    }
+
+    out <- objlist(value = val, gradient = gr, hessian = hs)
+    attr(out, attr.name) <- val
+    attr(out, "env") <- env
+    out
+  }
+
+  class(myfn) <- c("objfn", "fn")
+  attr(myfn, "conditions") <- condition
+  attr(myfn, "parameters") <- parnames
   myfn
 }
 
@@ -324,12 +542,12 @@ datapointL2 <- function(name, time, value, sigma = 1, attr.name = "validation", 
     attr.name = attr.name
   )
   
-  myfn <- function(..., fixed = NULL, deriv = TRUE, conditions = NULL, env = NULL) {
+  myfn <- function(..., fixed = NULL, deriv = TRUE, deriv2 = FALSE, conditions = NULL, env = NULL) {
     mu        <- controls$mu
     t         <- controls$time
     sigma     <- controls$sigma
     attr.name <- controls$attr.name
-    
+
     arglist <- list(...)
     arglist <- arglist[match.fnargs(arglist, "pars")]
     pouter  <- arglist[[1]]
@@ -337,22 +555,23 @@ datapointL2 <- function(name, time, value, sigma = 1, attr.name = "validation", 
       stop("No prediction available. Use the argument env to pass an environment that contains the prediction.")
     }
     prediction <- as.list(env)$prediction
-    
+
     if (!is.null(conditions) && !condition %in% conditions)
       return()
     if (is.null(conditions) && !condition %in% names(prediction))
       stop("datapointL2 requests unavailable condition. Call the objective function explicitly stating the conditions argument.")
-    
+
     datapar <- setdiff(names(mu), names(fixed))
     parapar <- setdiff(names(pouter), c(datapar, names(fixed)))
-    
+
     time.index <- which(prediction[[condition]][, "time"] == t)
     if (!length(time.index))
       stop("datapointL2() requests time point for which no prediction is available. Please add missing time point by the times argument in normL2()")
     withDeriv <- !is.null(attr(prediction[[condition]], "deriv"))
-    
+
     pred  <- prediction[[condition]][time.index, ][mu]
     deriv <- NULL
+    deriv2_pred <- NULL
     if (withDeriv) {
       dfull <- attr(prediction[[condition]], "deriv")
       if (length(dim(dfull)) == 3L) {
@@ -368,11 +587,23 @@ datapointL2 <- function(name, time, value, sigma = 1, attr.name = "validation", 
         mu.para <- intersect(paste(mu, parapar, sep = "."), names(dfull))
         deriv   <- dfull[mu.para]
       }
+      if (deriv2) {
+        d2full <- attr(prediction[[condition]], "deriv2")
+        if (!is.null(d2full) && length(dim(d2full)) == 4L) {
+          avail_pars <- dimnames(d2full)[[3]]
+          use_pars   <- intersect(parapar, avail_pars)
+          if (length(use_pars)) {
+            d2tmp <- d2full[time.index, mu, use_pars, use_pars, drop = TRUE]
+            deriv2_pred <- matrix(d2tmp, length(use_pars), length(use_pars),
+                                  dimnames = list(use_pars, use_pars))
+          }
+        }
+      }
     }
-    
+
     res <- as.numeric(pred - c(fixed, pouter)[names(mu)])
     val <- (res / sigma)^2
-    
+
     gr <- hs <- NULL
     if (withDeriv) {
       dres.dp <- setNames(numeric(length(pouter)), names(pouter))
@@ -381,6 +612,12 @@ datapointL2 <- function(name, time, value, sigma = 1, attr.name = "validation", 
       gr <- 2 * res * dres.dp / sigma^2
       hs <- 2 * outer(dres.dp, dres.dp, "*") / sigma^2
       colnames(hs) <- rownames(hs) <- names(pouter)
+
+      if (!is.null(deriv2_pred)) {
+        # Exact second-order term: 2 * res * d^2 pred / sigma^2.
+        rn <- rownames(deriv2_pred)
+        hs[rn, rn] <- hs[rn, rn] + 2 * res * deriv2_pred / sigma^2
+      }
     }
     
     out <- objlist(value = val, gradient = gr, hessian = hs)
@@ -527,32 +764,37 @@ priorL2 <- function(mu, lambda = "lambda", attr.name = "prior", condition = NULL
 #' @md
 #' @return list with entries value, gradient, and hessian (Gauss-Newton approximation).
 #' @export
-nll <- function(nout, pars, deriv, opt.BLOQ = "M3", opt.hessian = c(
+nll <- function(nout, pars, deriv, deriv2 = FALSE,
+                opt.BLOQ = "M3", opt.hessian = c(
   ALOQ_part1 = TRUE, ALOQ_part2 = TRUE, ALOQ_part3 = TRUE,
   BLOQ_part1 = TRUE, BLOQ_part2 = TRUE, BLOQ_part3 = TRUE,
   PD = TRUE), bessel.correction = 1) {
-  
+
   is.bloq <- nout$bloq
   nout.bloq <- nout[is.bloq, , drop = FALSE]
   nout.aloq <- nout[!is.bloq, , drop = FALSE]
-  
+
   derivs <- attr(nout, "deriv")
   derivs.bloq <- if (!is.null(derivs)) derivs[is.bloq, , drop = FALSE] else NULL
   derivs.aloq <- if (!is.null(derivs)) derivs[!is.bloq, , drop = FALSE] else NULL
-  
+
   derivs.err <- attr(nout, "deriv.err")
   derivs.err.bloq <- if (!is.null(derivs.err)) derivs.err[is.bloq, , drop = FALSE] else NULL
   derivs.err.aloq <- if (!is.null(derivs.err)) derivs.err[!is.bloq, , drop = FALSE] else NULL
-  
+
+  derivs2 <- if (deriv2) attr(nout, "deriv2") else NULL
+  derivs2.aloq <- if (!is.null(derivs2)) derivs2[!is.bloq, , , drop = FALSE] else NULL
+  derivs2.bloq <- if (!is.null(derivs2)) derivs2[is.bloq, , , drop = FALSE] else NULL
+
   n_pars <- length(pars)
   par_names <- names(pars)
-  
+
   mywrss <- {
     gr <- if (deriv) setNames(numeric(n_pars), par_names) else NULL
     he <- if (deriv) matrix(0, n_pars, n_pars, dimnames = list(par_names, par_names)) else NULL
     objlist(value = 0, gradient = gr, hessian = he)
   }
-  
+
   # When the caller asked only for the value, drop the deriv matrices so
   # nll_ALOQ / nll_BLOQ skip the gradient branch entirely. Important for
   # error models where derivs.err can have NULL colnames (e.g. PEtab case
@@ -561,11 +803,13 @@ nll <- function(nout, pars, deriv, opt.BLOQ = "M3", opt.hessian = c(
   if (!isTRUE(deriv)) {
     derivs.aloq <- NULL; derivs.bloq <- NULL
     derivs.err.aloq <- NULL; derivs.err.bloq <- NULL
+    derivs2.aloq <- NULL; derivs2.bloq <- NULL
   }
 
   nll_ALOQ_result <- NULL
   if (!all(is.bloq)) {
     nll_ALOQ_result <- nll_ALOQ(nout.aloq, derivs.aloq, derivs.err.aloq,
+                                derivs2 = derivs2.aloq,
                                 par_names = par_names,
                                 opt.BLOQ = opt.BLOQ, opt.hessian = opt.hessian,
                                 bessel.correction = bessel.correction)
@@ -598,6 +842,7 @@ nll <- function(nout, pars, deriv, opt.BLOQ = "M3", opt.hessian = c(
 #' @md
 #' @importFrom stats pnorm dnorm
 nll_ALOQ <- function(nout, derivs, derivs.err,
+                     derivs2 = NULL,
                      par_names,
                      opt.BLOQ = c("M3", "M4NM", "M4BEAL", "M1"),
                      opt.hessian = c(ALOQ_part1 = TRUE, ALOQ_part2 = TRUE, ALOQ_part3 = TRUE),
@@ -687,7 +932,36 @@ nll_ALOQ <- function(nout, derivs, derivs.err,
     if (opt.hessian["ALOQ_part3"]) {
       hessian_local <- hessian_local - 2 * crossprod(dlogsdp)
     }
-    
+
+    # Exact Hessian: residual second-derivative contribution.
+    # For wr = (pred - val) / s and constant s in theta:
+    # d^2(wr_i)/dtheta^2 = inv_s_i * d^2(pred_i)/dtheta^2
+    # H_exact_addition = 2 * sum_i wr_i * d^2(wr_i)/dtheta^2
+    # (We keep the GN crossprod above; this term is the contribution that
+    # GN drops. Sigma-theta cross terms remain GN-approximated when the
+    # error model shares parameters with the structural model.)
+    if (!is.null(derivs2)) {
+      d2_local_pars <- dimnames(derivs2)[[2]]
+      common_d2 <- intersect(local_pars, d2_local_pars)
+      if (length(common_d2) > 0L) {
+        idx_d2_local <- match(common_d2, local_pars)
+        # weight per residual: 2 * wr_i * inv_s_i
+        wts <- 2 * wr * inv_s
+        # contract first axis (residual index) of derivs2 with weights:
+        # H_add[j,k] = sum_i wts_i * derivs2[i, j, k]
+        d2_sub <- derivs2[, common_d2, common_d2, drop = FALSE]
+        n_common <- length(common_d2)
+        # Use einsum-style contraction via apply or matrix product on flattened
+        # second/third axes. Reshape d2_sub to [n_data, n_common^2] then matmul
+        # against wts and reshape back.
+        flat <- matrix(d2_sub, nrow = nrow(d2_sub), ncol = n_common * n_common)
+        h_add_flat <- crossprod(flat, wts)
+        h_add <- matrix(h_add_flat, n_common, n_common)
+        hessian_local[idx_d2_local, idx_d2_local] <-
+          hessian_local[idx_d2_local, idx_d2_local] + h_add
+      }
+    }
+
     if (opt.BLOQ[1] == "M4BEAL") {
       G_w0 <- exp(stats::dnorm(w0, log = TRUE) - stats::pnorm(w0, log.p = TRUE))
       coef <- pmax(0, -w0 * G_w0 - G_w0^2)

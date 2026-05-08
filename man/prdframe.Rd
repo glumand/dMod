@@ -4,12 +4,17 @@
 \alias{prdframe}
 \title{Prediction frame}
 \usage{
-prdframe(prediction = NULL, deriv = NULL, parameters = NULL)
+prdframe(prediction = NULL, deriv = NULL, deriv2 = NULL, parameters = NULL)
 }
 \arguments{
 \item{prediction}{Numeric matrix of model predictions.}
 
 \item{deriv}{3D numeric array of first-order sensitivities with respect to outer parameters.}
+
+\item{deriv2}{4D numeric array of second-order sensitivities with respect to
+outer parameters; dimensions: \verb{(time, variable, theta, theta)}. Symmetric
+in the last two axes. Optional; only set when the upstream pipeline
+provides second-order information.}
 
 \item{parameters}{Named numeric vector of the inner parameters used for the prediction.}
 }

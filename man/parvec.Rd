@@ -10,7 +10,7 @@ parvec(..., deriv = NULL)
 
 as.parvec(x, ...)
 
-\method{as.parvec}{numeric}(x, names = NULL, deriv = NULL, ...)
+\method{as.parvec}{numeric}(x, names = NULL, deriv = NULL, deriv2 = NULL, ...)
 }
 \arguments{
 \item{...}{Further arguments passed to methods.}

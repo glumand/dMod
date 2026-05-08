@@ -12,6 +12,7 @@ Pexpl(
   compile = FALSE,
   modelname = NULL,
   verbose = FALSE,
+  deriv2 = FALSE,
   derivMode = c("dual", "symbolic")
 )
 }
@@ -35,9 +36,15 @@ for faster evaluation.}
 
 \item{verbose}{Logical. Print compiler messages.}
 
+\item{deriv2}{Logical. If \code{TRUE}, the compiled trafo additionally exposes
+second-order derivatives. The returned \code{parfn} then carries an
+\code{attr(., "deriv2")} 3D array (\verb{[p, theta, theta]}) on its output when
+called with \code{deriv2 = TRUE}. The AD backend for \code{deriv2 = TRUE} requires
+\code{compile = TRUE}. Default \code{FALSE}.}
+
 \item{derivMode}{Character. Selects the derivative backend used by \link[CppODE:funCpp]{CppODE::funCpp}
 to evaluate the transformation Jacobian. One of \code{"dual"} (default,
-in-tree forward-mode AD via \code{jac_chain}; requires \code{compile = TRUE}) or
+in-tree forward-mode AD via \code{evaluate}; requires \code{compile = TRUE}) or
 \code{"symbolic"} (classical SymPy Jacobian, appropriate for typically small
 parameter transformations).}
 }

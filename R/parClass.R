@@ -583,13 +583,13 @@ as.parvec <- function(x, ...) {
 
 #' @export
 #' @rdname parvec
-as.parvec.numeric <- function(x, names = NULL, deriv = NULL, ...) {
-  
+as.parvec.numeric <- function(x, names = NULL, deriv = NULL, deriv2 = NULL, ...) {
+
   # --- Basic setup ---
   p <- as.numeric(x)
   if (is.null(names)) names(p) <- names(x) else names(p) <- names
   pnames <- names(p)
-  
+
   # --- Derivative Information ---
   if (isFALSE(deriv)) {
     full_deriv <- NULL
@@ -598,7 +598,17 @@ as.parvec.numeric <- function(x, names = NULL, deriv = NULL, ...) {
   } else { # deriv == NULL
     full_deriv <- attr(x, "deriv")
   }
-  
+
+  # --- Second-order derivative information ---
+  # `deriv2` is a 3D array [p, theta, theta], symmetric in the last two axes.
+  if (isFALSE(deriv2)) {
+    full_deriv2 <- NULL
+  } else if (is.array(deriv2) && length(dim(deriv2)) == 3L) {
+    full_deriv2 <- deriv2
+  } else { # deriv2 == NULL
+    full_deriv2 <- attr(x, "deriv2")
+  }
+
   # --- Infer fixed from missing deriv rows ---
   fixed <- NULL
   if (!is.null(full_deriv)) {
@@ -606,9 +616,10 @@ as.parvec.numeric <- function(x, names = NULL, deriv = NULL, ...) {
       fixed <- setdiff(pnames, rownames(full_deriv))
     }
   }
-  
+
   # --- Assemble object ---
   attr(p, "deriv") <- full_deriv
+  attr(p, "deriv2") <- full_deriv2
   attr(p, "fixed") <- fixed
   class(p) <- c("parvec", "numeric")
   p
@@ -637,23 +648,31 @@ print.parvec <- function(x, ...) {
     cat(sprintf("  %s : %s\n", format(nms[i], width = n_width, justify = "right"), val))
   }
   
-  deriv <- attr(x, "deriv")
-  fixed <- attr(x, "fixed")
-  
+  deriv  <- attr(x, "deriv")
+  deriv2 <- attr(x, "deriv2")
+  fixed  <- attr(x, "fixed")
+
   cat("\nAttributes:\n")
   if (!is.null(deriv)) {
     d <- dim(deriv)
-    cat(sprintf("  deriv : %d x %d matrix\n", d[1], d[2]))
+    cat(sprintf("  deriv  : %d x %d matrix\n", d[1], d[2]))
   } else {
-    cat("  deriv : <none>\n")
+    cat("  deriv  : <none>\n")
   }
-  
+
+  if (!is.null(deriv2)) {
+    d2 <- dim(deriv2)
+    cat(sprintf("  deriv2 : %d x %d x %d array\n", d2[1], d2[2], d2[3]))
+  } else {
+    cat("  deriv2 : <none>\n")
+  }
+
   if (!is.null(fixed) && length(fixed) > 0) {
-    cat(sprintf("  fixed : %s\n", paste(fixed, collapse = ", ")))
+    cat(sprintf("  fixed  : %s\n", paste(fixed, collapse = ", ")))
   } else {
-    cat("  fixed : <none>\n")
+    cat("  fixed  : <none>\n")
   }
-  
+
   invisible(x)
 }
 
@@ -672,10 +691,10 @@ print.parvec <- function(x, ...) {
 #'
 #' @export
 "[.parvec" <- function(x, ..., drop = FALSE) {
-  
+
   out <- unclass(x)[...]
   nms <- names(out)
-  
+
   deriv <- attr(x, "deriv")
   if (!is.null(deriv)) {
     available <- intersect(nms, rownames(deriv))
@@ -685,13 +704,27 @@ print.parvec <- function(x, ...) {
       deriv <- NULL
     }
   }
-  
+
+  deriv2 <- attr(x, "deriv2")
+  if (!is.null(deriv2)) {
+    available2 <- intersect(nms, dimnames(deriv2)[[1]])
+    if (length(available2) > 0) {
+      deriv2 <- deriv2[available2, , , drop = FALSE]
+    } else {
+      deriv2 <- NULL
+    }
+  }
+
   if (drop && !is.null(deriv)) {
     keep.cols <- colSums(abs(deriv)) > 0
     deriv <- deriv[, keep.cols, drop = FALSE]
+    if (!is.null(deriv2)) {
+      keep_names <- colnames(deriv)
+      deriv2 <- deriv2[, keep_names, keep_names, drop = FALSE]
+    }
   }
-  
-  as.parvec(out, deriv = deriv)
+
+  as.parvec(out, deriv = deriv, deriv2 = deriv2)
 }
 
 #' Concatenate parameter vectors
@@ -705,25 +738,49 @@ print.parvec <- function(x, ...) {
 #'
 #' @export
 c.parvec <- function(...) {
-  
+
   p <- Filter(Negate(is.null), list(...))
   stopifnot(length(p) > 0)
-  
+
   nms  <- unlist(lapply(p, names), use.names = FALSE)
   vals <- unlist(lapply(p, unclass), use.names = FALSE)
   if (anyDuplicated(nms)) stop("Duplicated parameter names.")
-  
+
   d <- lapply(p, attr, "deriv")
   has_deriv <- !vapply(d, is.null, TRUE)
-  
+
   if (!any(has_deriv)) {
     return(as.parvec(vals, names = nms))
   }
-  
+
   J_list <- Filter(Negate(is.null), d)
   J <- do.call(rbind, J_list)
-  
-  as.parvec(vals, names = nms, deriv = J)
+
+  # Concatenate deriv2 along the first axis if any input carries one.
+  d2 <- lapply(p, attr, "deriv2")
+  has_d2 <- !vapply(d2, is.null, TRUE)
+  H <- NULL
+  if (any(has_d2)) {
+    # Resolve a common theta basis; use the first non-null array's outer dims.
+    ref <- d2[which(has_d2)[1L]][[1L]]
+    theta_names <- dimnames(ref)[[2L]]
+    n_theta <- dim(ref)[2L]
+    H_list <- lapply(seq_along(p), function(i) {
+      di <- d2[[i]]
+      di_names <- names(p[[i]])
+      n_i <- length(di_names)
+      if (is.null(di)) {
+        # Pad with zeros for parvecs that have no deriv2 attribute.
+        array(0, c(n_i, n_theta, n_theta),
+              dimnames = list(di_names, theta_names, theta_names))
+      } else {
+        di
+      }
+    })
+    H <- do.call(function(...) abind::abind(..., along = 1L), H_list)
+  }
+
+  as.parvec(vals, names = nms, deriv = J, deriv2 = H)
 }
 
 

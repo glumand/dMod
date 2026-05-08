@@ -1,0 +1,816 @@
+% Options for packages loaded elsewhere
+\PassOptionsToPackage{unicode}{hyperref}
+\PassOptionsToPackage{hyphens}{url}
+\documentclass[
+]{article}
+\usepackage{xcolor}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\setcounter{secnumdepth}{-\maxdimen} % remove section numbering
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage{textcomp} % provide euro and other symbols
+\else % if luatex or xetex
+  \usepackage{unicode-math} % this also loads fontspec
+  \defaultfontfeatures{Scale=MatchLowercase}
+  \defaultfontfeatures[\rmfamily]{Ligatures=TeX,Scale=1}
+\fi
+\usepackage{lmodern}
+\ifPDFTeX\else
+  % xetex/luatex font selection
+\fi
+% Use upquote if available, for straight quotes in verbatim environments
+\IfFileExists{upquote.sty}{\usepackage{upquote}}{}
+\IfFileExists{microtype.sty}{% use microtype if available
+  \usepackage[]{microtype}
+  \UseMicrotypeSet[protrusion]{basicmath} % disable protrusion for tt fonts
+}{}
+\makeatletter
+\@ifundefined{KOMAClassName}{% if non-KOMA class
+  \IfFileExists{parskip.sty}{%
+    \usepackage{parskip}
+  }{% else
+    \setlength{\parindent}{0pt}
+    \setlength{\parskip}{6pt plus 2pt minus 1pt}}
+}{% if KOMA class
+  \KOMAoptions{parskip=half}}
+\makeatother
+\usepackage{color}
+\usepackage{fancyvrb}
+\newcommand{\VerbBar}{|}
+\newcommand{\VERB}{\Verb[commandchars=\\\{\}]}
+\DefineVerbatimEnvironment{Highlighting}{Verbatim}{commandchars=\\\{\}}
+% Add ',fontsize=\small' for more characters per line
+\usepackage{framed}
+\definecolor{shadecolor}{RGB}{248,248,248}
+\newenvironment{Shaded}{\begin{snugshade}}{\end{snugshade}}
+\newcommand{\AlertTok}[1]{\textcolor[rgb]{0.94,0.16,0.16}{#1}}
+\newcommand{\AnnotationTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textbf{\textit{#1}}}}
+\newcommand{\AttributeTok}[1]{\textcolor[rgb]{0.13,0.29,0.53}{#1}}
+\newcommand{\BaseNTok}[1]{\textcolor[rgb]{0.00,0.00,0.81}{#1}}
+\newcommand{\BuiltInTok}[1]{#1}
+\newcommand{\CharTok}[1]{\textcolor[rgb]{0.31,0.60,0.02}{#1}}
+\newcommand{\CommentTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textit{#1}}}
+\newcommand{\CommentVarTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textbf{\textit{#1}}}}
+\newcommand{\ConstantTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{#1}}
+\newcommand{\ControlFlowTok}[1]{\textcolor[rgb]{0.13,0.29,0.53}{\textbf{#1}}}
+\newcommand{\DataTypeTok}[1]{\textcolor[rgb]{0.13,0.29,0.53}{#1}}
+\newcommand{\DecValTok}[1]{\textcolor[rgb]{0.00,0.00,0.81}{#1}}
+\newcommand{\DocumentationTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textbf{\textit{#1}}}}
+\newcommand{\ErrorTok}[1]{\textcolor[rgb]{0.64,0.00,0.00}{\textbf{#1}}}
+\newcommand{\ExtensionTok}[1]{#1}
+\newcommand{\FloatTok}[1]{\textcolor[rgb]{0.00,0.00,0.81}{#1}}
+\newcommand{\FunctionTok}[1]{\textcolor[rgb]{0.13,0.29,0.53}{\textbf{#1}}}
+\newcommand{\ImportTok}[1]{#1}
+\newcommand{\InformationTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textbf{\textit{#1}}}}
+\newcommand{\KeywordTok}[1]{\textcolor[rgb]{0.13,0.29,0.53}{\textbf{#1}}}
+\newcommand{\NormalTok}[1]{#1}
+\newcommand{\OperatorTok}[1]{\textcolor[rgb]{0.81,0.36,0.00}{\textbf{#1}}}
+\newcommand{\OtherTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{#1}}
+\newcommand{\PreprocessorTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textit{#1}}}
+\newcommand{\RegionMarkerTok}[1]{#1}
+\newcommand{\SpecialCharTok}[1]{\textcolor[rgb]{0.81,0.36,0.00}{\textbf{#1}}}
+\newcommand{\SpecialStringTok}[1]{\textcolor[rgb]{0.31,0.60,0.02}{#1}}
+\newcommand{\StringTok}[1]{\textcolor[rgb]{0.31,0.60,0.02}{#1}}
+\newcommand{\VariableTok}[1]{\textcolor[rgb]{0.00,0.00,0.00}{#1}}
+\newcommand{\VerbatimStringTok}[1]{\textcolor[rgb]{0.31,0.60,0.02}{#1}}
+\newcommand{\WarningTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textbf{\textit{#1}}}}
+\usepackage{longtable,booktabs,array}
+\newcounter{none} % for unnumbered tables
+\usepackage{calc} % for calculating minipage widths
+% Correct order of tables after \paragraph or \subparagraph
+\usepackage{etoolbox}
+\makeatletter
+\patchcmd\longtable{\par}{\if@noskipsec\mbox{}\fi\par}{}{}
+\makeatother
+% Allow footnotes in longtable head/foot
+\IfFileExists{footnotehyper.sty}{\usepackage{footnotehyper}}{\usepackage{footnote}}
+\makesavenoteenv{longtable}
+\usepackage{graphicx}
+\makeatletter
+\newsavebox\pandoc@box
+\newcommand*\pandocbounded[1]{% scales image to fit in text height/width
+  \sbox\pandoc@box{#1}%
+  \Gscale@div\@tempa{\textheight}{\dimexpr\ht\pandoc@box+\dp\pandoc@box\relax}%
+  \Gscale@div\@tempb{\linewidth}{\wd\pandoc@box}%
+  \ifdim\@tempb\p@<\@tempa\p@\let\@tempa\@tempb\fi% select the smaller of both
+  \ifdim\@tempa\p@<\p@\scalebox{\@tempa}{\usebox\pandoc@box}%
+  \else\usebox{\pandoc@box}%
+  \fi%
+}
+% Set default figure placement to htbp
+\def\fps@figure{htbp}
+\makeatother
+\setlength{\emergencystretch}{3em} % prevent overfull lines
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\usepackage{bookmark}
+\IfFileExists{xurl.sty}{\usepackage{xurl}}{} % add URL line breaks if available
+\urlstyle{same}
+\hypersetup{
+  hidelinks,
+  pdfcreator={LaTeX via pandoc}}
+
+\author{}
+\date{\vspace{-2.5em}}
+
+\begin{document}
+
+\section{FOCEI in dMod:
+Brainstorming}\label{focei-in-dmod-brainstorming}
+
+Living document. Wir bauen das inkrementell aus, während wir die
+Designentscheidungen abklopfen. Noch kein Plan, noch kein Code.
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\subsection{1. Ziel}\label{ziel}
+
+FOCEI (First-Order Conditional Estimation with Interaction) für
+nichtlineare gemischte Effekte in dMod implementieren. Skopus aktuell:
+
+\begin{itemize}
+\tightlist
+\item
+  Nur FOCEI, keine Stufenleiter über FO/FOCE.
+\item
+  Allgemeine \(\Omega\) mit voller Kovarianzstruktur,
+  Cholesky-parametrisiert.
+\item
+  Bestehende dMod-Likelihood- und Fehlermodellinfrastruktur
+  (\texttt{normL2}, \texttt{err}) wiederverwenden.
+\item
+  Outer-Optimierung mit \texttt{trust()}.
+\item
+  FOCEI-Marginal-Likelihood-Approximation symbolisch ableiten,
+  Modell-/Sensitivitätspipeline bleibt wie sie ist.
+\item
+  PEtab-Anbindung später.
+\end{itemize}
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\subsection{2. Theorie}\label{theorie}
+
+\subsubsection{2.1 Modell}\label{modell}
+
+Für \(N\) Subjekte \(i = 1, \dots, N\) mit Beobachtungen \(y_{ij}\) zu
+Zeiten \(t_{ij}\): \[
+y_{ij} = f(t_{ij}, \varphi_i) + \varepsilon_{ij}, \qquad \varphi_i = h(\theta, \eta_i)
+\] mit - \(\theta\): feste Effekte (Populationsparameter), -
+\(\eta_i \sim \mathcal{N}(0, \Omega)\): zufällige Effekte (individuelle
+Abweichungen), -
+\(\varepsilon_{ij} \sim \mathcal{N}\!\bigl(0, \Sigma_{ij}\bigr)\):
+Residualfehler. \(\Sigma_{ij}\) ist ein \textbf{beliebiger
+benutzerdefinierter Ausdruck}, kann von \(f_{ij}\), \(\theta\) und
+\(\eta_i\) abhängen. Wir machen keine Annahme über die Form. Wird über
+das \texttt{err}-Argument in \texttt{normL2} symbolisch kompiliert.
+
+Die individuelle Parametrisierung \(\varphi_i = h(\theta, \eta_i)\) ist
+ebenfalls beliebig (z.B. \(\varphi_i = \theta \exp(\eta_i)\)). Wird in
+dMod heute schon durch \texttt{Pexpl} abgebildet.
+
+\subsubsection{2.2 Marginale Likelihood}\label{marginale-likelihood}
+
+Pro Subjekt: \[
+L_i(\theta, \Omega) = \int p(y_i \mid \eta_i, \theta)\, p(\eta_i \mid \Omega)\, \mathrm{d}\eta_i.
+\] Für nichtlineares \(f\) analytisch nicht lösbar. Verschiedene
+Approximationen:
+
+{\def\LTcaptype{none} % do not increment counter
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.5000}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.5000}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+Methode
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Idee
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+FO & Linearisierung um \(\eta_i = 0\) \\
+FOCE & Innen \(\eta_i^* = \arg\max p(y_i\mid\eta_i)\,p(\eta_i)\) pro
+Subjekt, dann Linearisierung um \(\eta_i^*\) \\
+FOCEI & FOCE plus Interaktionsterm (wenn \(\Sigma\) von \(\eta\)
+abhängt, z.B. proportionaler Fehler) \\
+Laplace & 2. Ordnung, volle Hessische am Mode \\
+SAEM & Stochastische Approximation des EM-Algorithmus,
+Monte-Carlo-basiert \\
+\end{longtable}
+}
+
+\subsubsection{2.3 FOCEI Zielfunktion}\label{focei-zielfunktion}
+
+Pro Subjekt, ausgewertet bei \(\eta_i^*\): \[
+-2\log L_i \;\approx\; \underbrace{\sum_j \!\left[\frac{(y_{ij} - f_{ij})^2}{\Sigma_{ij}} + \log \Sigma_{ij}\right]}_{\text{Residualbeitrag}}
+\;+\; \underbrace{\eta_i^{*\top} \Omega^{-1} \eta_i^* + \log|\Omega|}_{\text{Prior auf } \eta}
+\;+\; \log|H_i|
+\] mit Informationsmatrix \[
+H_i \;=\; G_i^\top \Sigma_i^{-1} G_i \;+\; \Omega^{-1} \;+\; \text{(Interaktion via } \partial \Sigma / \partial \eta\text{)}, \qquad
+G_i = \frac{\partial f}{\partial \eta}\bigg|_{\eta_i^*}.
+\]
+
+Außen wird über \((\theta, \Omega, \Sigma)\) minimiert, innen pro
+Subjekt \(\eta_i^*\) gesucht. Bilevel.
+
+\subsubsection{2.4 Prozeduraler Ablauf, und Abgrenzung gegen
+EM}\label{prozeduraler-ablauf-und-abgrenzung-gegen-em}
+
+FOCEI ist \textbf{geschachtelt}, nicht alternierend. Pro Outer-Schritt
+wird das Inner für jedes Subjekt voll konvergiert, \emph{bevor} das
+Outer überhaupt einen Schritt macht.
+
+\begin{verbatim}
+Initialisiere (theta, Omega, Sigma) und eta_i = 0 fuer alle i.
+
+repeat   // Outer-Schleife (trust)
+  // Outer fragt OFV an aktueller (theta, Omega, Sigma) an
+  for i = 1..N:                                      // Inner pro Subjekt
+    eta_i* <- argmin_eta J(theta, eta, Omega, Sigma; data_i)
+              via inneres trust(), warmstart aus letzter Outer-Iter
+    H_i    <- Hessian von J an eta_i* (faellt aus trust raus)
+  end
+  OFV <- sum_i [ J_i(eta_i*)  +  log|H_i| ]          // FOCEI-Aggregation
+  dOFV <- analytischer Gradient nach (theta, Omega, Sigma)
+  // Outer verarbeitet (OFV, dOFV) und macht einen Schritt
+until Outer konvergiert
+\end{verbatim}
+
+Der entscheidende Punkt: das Inner wird in jeder Outer-Iteration
+\emph{vollständig} gelöst. Es gibt keinen ``burn-in dann
+alternierend''-Modus und keine partielle Inner-Konvergenz.
+
+\textbf{Warum das oft fälschlich als alternierend wahrgenommen wird.} In
+der Praxis startet die Inner-Suche pro Subjekt mit dem \(\eta_i^*\) aus
+der vorherigen Outer-Iteration (Warmstart). Wenn das Outer nahe am
+Optimum ist, ist das Inner schon nach 1 bis 2 Newton-Schritten wieder
+konvergent. Das \emph{Verhalten} sieht aus wie ``Outer-Schritt,
+Inner-Update, Outer-Schritt, Inner-Update'', aber formal ist es strikt
+geschachtelt: das Outer wartet auf vollständige Inner-Konvergenz.
+
+\textbf{Abgrenzung zu echten EM-Verfahren:}
+
+{\def\LTcaptype{none} % do not increment counter
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 6\tabcolsep) * \real{0.2500}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 6\tabcolsep) * \real{0.2500}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 6\tabcolsep) * \real{0.2500}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 6\tabcolsep) * \real{0.2500}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+Verfahren
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Inner-Anteil
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Outer-Anteil
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Ablauf
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+\textbf{FOCE / FOCEI} & Mode-Suche
+\(\eta_i^* = \arg\max p(y_i\mid\eta_i)p(\eta_i)\) pro Subjekt &
+minimiert approx. marginal \(-2\log L\) über \((\theta,\Omega,\Sigma)\)
+& \textbf{geschachtelt}, Inner stets voll konvergent \\
+Laplace & wie FOCE, mit voller Hessischer & wie FOCE & geschachtelt \\
+\textbf{SAEM} & Monte-Carlo-Sampling aus Posterior
+\(p(\eta_i\mid y_i,\theta)\) & M-step über \((\theta,\Omega,\Sigma)\) &
+\textbf{echt alternierend}, stochastische Approximation, Burn-in dann
+Annealing \\
+EM (analytisch) & E-step: Posterior-Erwartung & M-step: Maximierung &
+alternierend, für NLME aber nicht tractable \\
+\end{longtable}
+}
+
+\textbf{Was es bei FOCEI also nicht gibt:}
+
+\begin{itemize}
+\tightlist
+\item
+  Keinen Burn-in mit nachgeschalteter Annealing-Phase. Das ist ein
+  SAEM-Konzept (Monolix), nötig wegen MC-Rauschen.
+\item
+  Keine zwei Phasen mit unterschiedlichem Algorithmusverhalten.
+\item
+  Keine Stochastik im Optimierungspfad (deterministische
+  Bilevel-Optimierung).
+\end{itemize}
+
+\textbf{Was FOCEI in der Praxis trotzdem als ``Phasen-Verhalten'' sehen
+kann:}
+
+\begin{itemize}
+\tightlist
+\item
+  Anfangs (weit weg vom Optimum) braucht das Inner mehr Newton-Schritte
+  pro Subjekt, später (nahe Optimum mit Warmstart) sehr wenige. Das ist
+  Effizienz-Effekt, keine Algorithmus-Phase.
+\item
+  Eine \emph{Inner-Toleranz}, die mit der Outer-Gradientennorm skaliert
+  (anfangs locker, später strenger), kann die Effizienz weiter
+  verbessern. Das ist eine Implementationsoption, kein konzeptioneller
+  Phasenwechsel.
+\end{itemize}
+
+In dieser Implementierung also: ein einziger geschachtelter Loop,
+Warmstart pro Subjekt, optional adaptive Inner-Toleranz. Kein EM, kein
+Burn-in.
+
+\subsubsection{2.5 Verwandte Verfahren und
+Architekturentscheidung}\label{verwandte-verfahren-und-architekturentscheidung}
+
+Sobald wir die Frage ``warum nicht alternierend?'' konsequent zu Ende
+denken, landen wir bei verschiedenen verwandten Methoden, die die
+gleiche Laplace-Approximation nutzen, aber unterschiedlich daraus eine
+Schätzgleichung bauen. Lohnt sich ein Überblick, weil die
+\emph{Mathematik unterhalb} fast identisch ist und wir sie nur einmal
+bauen müssen.
+
+\paragraph{Verfahren im Vergleich}\label{verfahren-im-vergleich}
+
+Sei \(J_i(\theta, \eta_i, \Omega, \Sigma)\) die joint negative log
+density (Residual + Prior auf \(\eta\), ohne \(\log|H|\)), \(\eta_i^*\)
+ihr Mode, \(H_i = \partial^2 J_i / \partial \eta^2\) am Mode.
+
+{\def\LTcaptype{none} % do not increment counter
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 6\tabcolsep) * \real{0.2500}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 6\tabcolsep) * \real{0.2500}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 6\tabcolsep) * \real{0.2500}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 6\tabcolsep) * \real{0.2500}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+Verfahren
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Outer-Zielfunktion
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Optimierungsstrategie
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Ω-Update
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+\textbf{FOCEI} & \(\sum_i [J_i(\eta_i^*) + \log|H_i|]\) (Laplace-Approx
+von \(-2\log L_{\text{marginal}}\)) & nested, Outer mit voller Chain
+Rule durch \(\eta^*\) & als Teil des Outers numerisch \\
+\textbf{Laplace 2. Ordnung} & wie FOCEI plus Korrekturterme aus echter
+Hessischer & nested & wie FOCEI \\
+\textbf{Laplace-EM} & ELBO
+\(\sum_i \bigl[-\tfrac{1}{2} E_{q_i}[J_i] + \tfrac{1}{2}\log|H_i^{-1}|\bigr]\)
+mit \(q_i = \mathcal{N}(\eta_i^*, H_i^{-1})\) & alternierend (E-step:
+\(\eta_i^*\), \(H_i\); M-step: \(\theta, \Omega, \Sigma\)) &
+\textbf{closed form}:
+\(\Omega^{(t+1)} = \tfrac{1}{N}\sum_i (\eta_i^* {\eta_i^*}^\top + H_i^{-1})\) \\
+\textbf{ITS} & \(\sum_i J_i\) allein (kein \(\log|H|\)) & alternierend,
+Block-Koordinatenabstieg & Stichprobenkovarianz von \(\eta_i^*\) \\
+\textbf{SAEM} & stochastische ELBO mit MC-Posterior & alternierend, mit
+Annealing & closed form aus MC-Samples \\
+\end{longtable}
+}
+
+Beobachtung: alle Verfahren teilen denselben Inner-Mode \(\eta_i^*\) und
+die gleiche Hessische \(H_i\), sie unterscheiden sich nur in (a) der
+skalaren Outer-Zielfunktion und (b) der Strategie zum Optimieren. Die
+teure Mathematik (ODE-Integration, Sensitivitäten, Cholesky-Ableitungen)
+ist gemeinsam.
+
+\paragraph{Wer macht das heute mit exakten
+Ableitungen?}\label{wer-macht-das-heute-mit-exakten-ableitungen}
+
+{\def\LTcaptype{none} % do not increment counter
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3333}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3333}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3333}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+Software
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Verfahren
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Sensitivitäten
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+NONMEM & FO, FOCE, FOCEI, Laplace 2. Ordnung & überwiegend FD \\
+Monolix & SAEM & überwiegend FD \\
+nlmixr2 & FOCEI, SAEM & gemischt, AD nur in Teilen \\
+TMB / glmmTMB & Laplace direkt (nicht EM) & volle AD, \emph{aber}
+GLMM/lineare Modelle, kein ODE-RHS \\
+Pumas (Julia) & FOCEI, Laplace & volle AD inkl. ODE \\
+\textbf{dMod-Plan} & FOCEI primär, Laplace-EM optional & \textbf{volle
+exakte Ableitungen via CppODE / funCpp} \\
+\end{longtable}
+}
+
+Die echte Lücke im R-Ökosystem: \textbf{NLME mit ODE-Modellen und
+exakten Ableitungen durch die komplette Pipeline (Modell,
+Sensitivitäten, FOCEI-Aggregation, Cholesky-Diff)}. Genau das, was dMods
+Infrastruktur ohnehin schon hergibt.
+
+\paragraph{Warum FOCEI und nicht Laplace-EM als primäres
+Ziel?}\label{warum-focei-und-nicht-laplace-em-als-primuxe4res-ziel}
+
+\textbf{Pro Laplace-EM:}
+
+\begin{itemize}
+\tightlist
+\item
+  \(\Omega\)-Update in geschlossener Form ist mathematisch elegant und
+  reduziert die Outer-Dimension um \(K(K+1)/2\) Parameter.
+\item
+  Konzeptionell sauber alternierend, einfacher Pseudocode.
+\item
+  Variations-Lower-Bound monoton wachsend (zumindest die ELBO, nicht
+  \(\log L\)).
+\end{itemize}
+
+\textbf{Contra Laplace-EM:}
+
+\begin{itemize}
+\tightlist
+\item
+  ELBO und Laplace-Marginal-Likelihood sind \textbf{unterschiedliche
+  Funktionen}. Konvergenzpunkt ist nicht der FOCEI-Punkt. Das wirft
+  Validierungsprobleme gegen NONMEM-Referenzen auf.
+\item
+  EM-Monotonie greift nur auf der ELBO, nicht auf \(\log L\). Der
+  psychologische Vorteil ``EM konvergiert immer'' trügt bei nichtexakter
+  Posterior.
+\item
+  M-step für \(\theta\) und \(\Sigma\) bleibt eine nichtlineare
+  Optimierung mit ODE-Auswertungen, also nicht billiger als der
+  FOCEI-Outer.
+\item
+  Pharmakometrie-Welt kennt FOCEI, Reviewer und Regulierungsbehörden
+  auch. Laplace-EM ist exotisch und braucht zusätzliche Begründung.
+\end{itemize}
+
+\textbf{Pro FOCEI:}
+
+\begin{itemize}
+\tightlist
+\item
+  Standardziel, validierbar gegen NONMEM/nlmixr2/Monolix-Referenzen.
+\item
+  Lingua Franca der Pharmakometrie.
+\item
+  Mathematik ist sauberer in einer einzigen Outer-Schleife mit
+  \texttt{trust}.
+\end{itemize}
+
+\textbf{Contra FOCEI:}
+
+\begin{itemize}
+\tightlist
+\item
+  Cross-Term
+  \(\partial \log|H|/\partial \eta \cdot \mathrm{d}\eta^*/\mathrm{d}\theta\)
+  in der Outer-Ableitung ist nicht trivial.
+\item
+  Kein closed-form \(\Omega\)-Update, \(\Omega\) wird im Outer zusammen
+  mit \(\theta, \Sigma\) optimiert.
+\end{itemize}
+
+Auf das Wesentliche reduziert: FOCEI ist die
+\textbf{standardvalidierbare Wahl}, Laplace-EM die \textbf{strukturell
+elegantere}.
+
+\paragraph{Architektur: ein Math-Layer, mehrere
+Outer-Strategien}\label{architektur-ein-math-layer-mehrere-outer-strategien}
+
+Die saubere Konsequenz: bauen wir die gemeinsame Mathematik einmal
+sauber auf, sind FOCEI und Laplace-EM (und auch ITS als
+Burn-in-Initialisierung) verschiedene Outer-Strategien auf demselben
+Substrat.
+
+\begin{verbatim}
+nlme_components(joint, etaSpec, OmegaSpec)
+   ->  list(
+         inner_solve(theta, Omega, Sigma)    # liefert eta_i*, H_i pro Subjekt
+         joint_at_modes(...)                 # J_i(eta_i*) und Ableitungen
+         Hi_logdet(...)                      # log|H_i| und Ableitungen
+         Omega_chol_algebra(...)             # Inv, det, dInv/dchol etc.
+       )
+
+focei(components)        # nested, Outer = trust auf J + log|H|
+laplace_em(components)   # alternierend, closed-form Omega update + Outer auf Rest
+its(components)          # alternierend ohne log|H|, fuer Burn-in
+\end{verbatim}
+
+Der gemeinsame Math-Layer (\texttt{nlme\_components}) macht den teuren
+Teil: ODE-Integration, Sensitivitäten, Cholesky-Algebra, alles mit
+exakten Ableitungen durch die existierende dMod/CppODE-Pipeline. Die
+Outer-Strategien obendrauf sind dünne Wrapper, die nur die jeweiligen
+Schätzgleichungen orchestrieren.
+
+\paragraph{Empfehlung}\label{empfehlung}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  \textbf{FOCEI als primäres Implementierungsziel}, Validierung gegen
+  Benchmark-Modelle aus NONMEM und nlmixr2.
+\item
+  \textbf{Math-Layer so faktoriert, dass Laplace-EM später als
+  Outer-Variante reinkommt}. Kosten gering, sobald die FOCEI-Maschinerie
+  steht. ITS als optionales Initialisierungsverfahren ebenfalls aus
+  diesem Substrat.
+\item
+  \textbf{Die echte Story} dieser Implementierung gegenüber dem Stand
+  der Technik ist \emph{nicht} FOCEI vs.~Laplace-EM, sondern
+  \textbf{NLME mit exakten Ableitungen durch alle Schichten}. Das gilt
+  für FOCEI und Laplace-EM gleichermaßen, ist aber die wirklich neue
+  Lücke im R-Ökosystem.
+\end{enumerate}
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\subsection{3. Existierende
+dMod-Bausteine}\label{existierende-dmod-bausteine}
+
+{\def\LTcaptype{none} % do not increment counter
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.5000}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 2\tabcolsep) * \real{0.5000}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+Baustein
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Status
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+ODE-Lösung mit Sensitivitäten & vorhanden via CppODE / deSolve \\
+Bedingungsspezifische Parameter & vorhanden via \texttt{parlist},
+PEtab-Multi-Condition \\
+Komponierbare Pipeline \texttt{g*x*p} & vorhanden, Kettenregel intern \\
+\texttt{normL2} Residualbeitrag inkl. Gradient/Hessian & vorhanden \\
+\texttt{trust()} Optimizer mit Bound Constraints & vorhanden \\
+Parallelisierung über Bedingungen via \texttt{mclapply} & vorhanden \\
+Symbolische Jacobians, AD via CppODE & vorhanden
+(\texttt{derivMode\ =\ "dual"/"symbolic"}) \\
+Profile Likelihoods & vorhanden \\
+\end{longtable}
+}
+
+Die mentale Umstellung: in dMod ist heute ``Bedingung'' eine
+Datengruppe. In FOCEI wird \textbf{Subjekt = Bedingung}, plus eine
+populationsweite Kopplung über \(\Omega\), die im aktuellen
+\texttt{normL2}-Pfad nicht vorgesehen ist.
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\subsection{4. Designidee: joint likelihood plus
+FOCEI-Wrapper}\label{designidee-joint-likelihood-plus-focei-wrapper}
+
+\subsubsection{4.1 Joint negative log
+posterior}\label{joint-negative-log-posterior}
+
+Der Nutzer schreibt das volle penalized-likelihood-Objektiv für alle
+Subjekte zusammen: \[
+J(\theta, \eta_{1..N}, \Omega, \Sigma)
+\;=\; \sum_i \!\left[\, \sum_j \frac{(y_{ij} - f_{ij})^2}{\Sigma_{ij}} + \log\Sigma_{ij}
+\;+\; \eta_i^\top \Omega^{-1} \eta_i + \log|\Omega| \,\right]
+\]
+
+In dMod-Komposition (Variante A, der Nutzer baut die joint selbst):
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{joint }\OtherTok{\textless{}{-}} \FunctionTok{normL2}\NormalTok{(data, g }\SpecialCharTok{*}\NormalTok{ x }\SpecialCharTok{*}\NormalTok{ p) }\SpecialCharTok{+} \FunctionTok{constraintL2}\NormalTok{(}\AttributeTok{mu =}\NormalTok{ etas, }\AttributeTok{Omega =}\NormalTok{ OmegaSpec)}
+\end{Highlighting}
+\end{Shaded}
+
+\texttt{normL2(...)} liefert den Residualanteil mit beliebigem
+\texttt{err}-Modell. Der Prior-Beitrag
+\(\sum_i \eta_i^\top \Omega^{-1} \eta_i + N\log|\Omega|\) kommt aus
+einer Erweiterung von \texttt{constraintL2}: das heutige
+\texttt{constraintL2(mu,\ sigma)} ist skalar mit diagonaler \(\sigma\).
+Wir geben ihm einen optionalen \texttt{Omega}-Pfad, der bei
+MVN-Cholesky-Spec auf \(\eta^\top\Omega^{-1}\eta + \log|\Omega|\) inkl.
+Ableitungen nach \(\eta\) und nach den Cholesky-Einträgen umschaltet.
+Skelett (objfn-Vertrag, \texttt{dP}-Chain-Rule) bleibt identisch.
+
+\subsubsection{4.2 FOCEI-Wrapper}\label{focei-wrapper}
+
+Eine Funktion, die das Bilevel-Splitting macht:
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{focei\_obj }\OtherTok{\textless{}{-}} \FunctionTok{focei}\NormalTok{(}
+\NormalTok{  joint,                     }\CommentTok{\# objfn auf (theta, eta\_1..N, Omega, Sigma)}
+\NormalTok{  etaSpec,                   }\CommentTok{\# welche Parameter sind eta, pro Subjekt}
+\NormalTok{  OmegaSpec,                 }\CommentTok{\# welche Parameter parametrisieren Omega (Cholesky)}
+  \AttributeTok{innerControl =} \FunctionTok{list}\NormalTok{(...)   }\CommentTok{\# rtol, maxit, warmstart cache}
+\NormalTok{)}
+\end{Highlighting}
+\end{Shaded}
+
+\texttt{focei\_obj} ist wieder ein \texttt{objfn}, aber jetzt nur über
+\((\theta, \Omega, \Sigma)\). Bei jedem Aufruf:
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\tightlist
+\item
+  Für jedes Subjekt \(i\): \texttt{trust()} auf \texttt{joint} bei
+  fixiertem \((\theta, \Omega, \Sigma)\), frei in \(\eta_i\). Liefert
+  \(\eta_i^*\) und die innere Hessische \(H_i\) zurück.
+\item
+  FOCEI-Beitrag:
+  \(\mathrm{OFV}_i = J_i(\theta, \eta_i^*, \Omega, \Sigma) + \log|H_i|\).
+\item
+  Summe über \(i\).
+\item
+  Gradient/Hessian nach \((\theta, \Omega, \Sigma)\) aus der vorhandenen
+  \texttt{joint}-Maschinerie plus dem \(\log|H_i|\)-Term.
+\end{enumerate}
+
+\subsubsection{4.3 Drei wichtige
+Beobachtungen}\label{drei-wichtige-beobachtungen}
+
+\textbf{(a) Inner und Outer sauber separierbar via Envelope Theorem.}
+Bei \(\eta_i^*\) ist \(\partial J / \partial \eta = 0\). Damit
+verschwindet \(\mathrm{d}\eta_i^*/\mathrm{d}\theta\) aus dem Gradienten
+von \(J_i(\theta, \eta_i^*, \dots)\) nach \(\theta\). Wir brauchen nur
+die direkten partiellen Ableitungen, die \texttt{joint} ohnehin liefert.
+Für die Outer-Likelihood ohne \(\log|H_i|\) ist der Outer-Gradient damit
+\emph{trivial}: \texttt{joint} an \((\theta, \eta_i^*, \Omega, \Sigma)\)
+auswerten und die Komponenten zu \((\theta, \Omega, \Sigma)\) ablesen.
+
+\textbf{(b) \texttt{trust()} liefert \(H_i\) frei Haus.} Damit ist
+\(\log|H_i|\) in der OFV ohne Extraarbeit auswertbar. Schwieriger: die
+\emph{Ableitung} von \(\log|H_i|\) nach \((\theta, \Omega, \Sigma)\).
+Drei Optionen:
+
+\begin{itemize}
+\tightlist
+\item
+  \(\log|H_i|\) in der Outer-Ableitung schlicht ignorieren.
+  Outer-Schritte werden mit dem dominanten Teil gewählt. Konvergenz
+  langsamer, aber pragmatisch (analog nlmixr2).
+\item
+  Numerisch differenzieren in der Outer-Schleife.
+  \(\dim(\theta) + \dim(\Omega) + \dim(\Sigma)\) extra Inner-Solves pro
+  Outer-Schritt, mit Warmstart bezahlbar.
+\item
+  Vollanalytisch: bräuchte
+  \(\partial^3 f / \partial\eta^2 \partial\theta\). Nicht praktikabel.
+\end{itemize}
+
+Siehe Abschnitt 5 (funCpp-Codegen) für die saubere Variante:
+kompilierter symbolischer OFV-Knoten mit Gradient durch Chain Rule, der
+\(\log|H_i|\) konsistent mitdifferenziert.
+
+\textbf{(c) \(H_i\) in Gauss-Newton-Form genügt.} \[
+H_i \;\approx\; G_i^\top \Sigma_i^{-1} G_i + \Omega^{-1} + \text{(Interaktion)}, \qquad G_i = \partial f / \partial \eta_i.
+\] Erste-Ableitungs-Information, die das
+\texttt{prdframe}-\texttt{deriv}-Attribut bereits liefert. Wir brauchen
+\texttt{\_s2} / \texttt{\_sdcv}-Files (zweite Ableitungen aus CppODE)
+\textbf{nicht} für FOCEI selbst, nur falls wir später echtes Laplace
+machen.
+
+\subsubsection{4.4 Was der Wrapper konkret wissen
+muss}\label{was-der-wrapper-konkret-wissen-muss}
+
+\begin{itemize}
+\tightlist
+\item
+  \textbf{\(\eta\)}: pro Subjekt \(K\)-Vektor. Mapping aus
+  \texttt{parlist}-Struktur, da Subjekte = Conditions.
+\item
+  \textbf{\(\Omega\)}: \(K \times K\), symmetric PD, \(K(K+1)/2\) freie
+  Parameter. Cholesky \(\Omega = LL^\top\), \(L\) untere Dreiecks,
+  \(L_{kk} = \exp(\omega_k)\), \(L_{kl}\) frei für \(k > l\).
+\item
+  \textbf{\(\Sigma\)}: im \texttt{err}-Modell, das \texttt{normL2} schon
+  kennt. In der Outer-Sicht von \(\eta\) und \(\Omega\) trennbar via
+  Namens-Partition.
+\item
+  \textbf{\(\theta\)}: der Rest.
+\end{itemize}
+
+Die Aufteilung ist primär eine Namens-Partition über den
+Gesamtparametervektor, ähnlich wie heute Bedingungs-Parameter zugewiesen
+werden. Mögliche Hilfsfunktion: \texttt{nlmePartition()}.
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\subsection{5. Codegen via funCpp und 3.
+Ableitung}\label{codegen-via-funcpp-und-3.-ableitung}
+
+\subsubsection{5.1 Idee}\label{idee}
+
+Die OFV-Aggregation pro Subjekt \[
+\mathrm{OFV}_i = \sum_j \frac{r_{ij}^2}{\Sigma_{ij}} + \log\Sigma_{ij}
+\;+\; \eta_i^{*\top} \Omega^{-1} \eta_i^*
+\;+\; \log|\Omega|
+\;+\; \log|H_i(G_i, \Sigma, \Omega)|
+\] ist ein geschlossener symbolischer Ausdruck in den Inputs
+
+\begin{itemize}
+\tightlist
+\item
+  \(f_{ij}\), \(G_i = \partial f / \partial \eta\) (numerischer
+  ODE/Sensi-Output zur Auswertungszeit),
+\item
+  \(\Omega\)-Cholesky (Outer-Param),
+\item
+  \(\Sigma\)-Params (Outer-Param, beliebige Form),
+\item
+  \(\eta_i^*\) (aus Inner),
+\item
+  \(y_{ij}\) (Daten).
+\end{itemize}
+
+Genau dafür ist \texttt{funCpp} gemacht. Gleiches Pattern wie heute
+\texttt{Y} (Observable) und \texttt{Pexpl} (Parametertrafo):
+symbolischer Ausdruck wird mit Ableitungen kompiliert und sitzt als
+Knoten in der dMod-Pipeline. Der FOCEI-Wrapper wird dann nur ein
+weiterer kompilierter Endknoten.
+
+\subsubsection{5.2 Welche
+Ableitungsordnung?}\label{welche-ableitungsordnung}
+
+Aufschlüsselung des Outer-Gradienten
+\(\mathrm{d}\mathrm{OFV}/\mathrm{d}\theta\) via Chain Rule durch die
+OFV-Inputs:
+
+\begin{itemize}
+\tightlist
+\item
+  Direkter Pfad: braucht \(\partial f/\partial\theta\) (1. Ordnung) und
+  \(\partial G/\partial\theta = \partial^2 f / \partial\eta\partial\theta\)
+  (gemischte 2. Ordnung).
+\item
+  Impliziter Pfad via \(\eta_i^*(\theta)\):
+  \(\mathrm{d}\eta_i^*/\mathrm{d}\theta = -H_i^{-1} \partial^2 J/\partial\eta\partial\theta\),
+  ebenfalls 2. Ordnung gemischt. Envelope eliminiert den Beitrag im
+  \(J\)-Anteil, NICHT im \(\log|H|\)-Anteil.
+\end{itemize}
+
+\textbf{Outer-Gradient: maximal 2. Ordnung gemischt.} Das liefert CppODE
+heute schon via \texttt{\_s2}.
+
+Outer-Hessian: - \(\mathrm{d}^2\mathrm{OFV}/\mathrm{d}\theta^2\) enthält
+\(\partial^3 f / \partial\eta\partial\theta^2\), also echte 3. Ordnung.
+
+\textbf{Outer-Hessian exakt: braucht 3. Ordnung.} Trust-Region kommt mit
+Gauss-Newton-Approx der Outer-Hessischen üblicherweise gut zurecht
+(insb. bei exaktem Gradient).
+
+\subsubsection{5.3 Empfehlung}\label{empfehlung-1}
+
+Stufe 1: exakter Gradient, Gauss-Newton-approximierter Outer-Hessian.
+Reicht funCpp mit bestehender 2. Ordnung. Kein Codegen-Aufbohrung.
+
+Stufe 2 (optional, später): falls Konvergenz zickt, funCpp auf 3.
+Ordnung erweitern (sowohl symbolisch als auch in der Dual-AD-Variante,
+da Forward-Mode-AD kompositionell auf höhere Ordnungen geht).
+Eigenständiges Subprojekt im CppODE-Repo.
+
+\begin{center}\rule{0.5\linewidth}{0.5pt}\end{center}
+
+\subsection{6. Verbleibende offene
+Designfragen}\label{verbleibende-offene-designfragen}
+
+\begin{enumerate}
+\def\labelenumi{\arabic{enumi}.}
+\item
+  \textbf{Inner-Toleranz adaptiv?} Je näher der Outer am Optimum, desto
+  enger muss das Inner konvergiert sein, sonst rauscht der
+  Outer-Gradient. Standardrezept (Toleranzfaktor x Outer-Gradientennorm)
+  oder konfigurierbar?
+\item
+  \textbf{Warmstart-Speicher}: Closure-Variable im FOCEI-Wrapper hält
+  \(\eta_i^*\) pro Subjekt (bestätigt). Frage: was bei Outer-Reset
+  (Multistart, neuer Datensatz)? Reset-Hook im Wrapper?
+\item
+  \textbf{Parallelisierung über Subjekte}: \texttt{mclapply} über
+  Inner-Solves ist trivial, aber die Reihenfolge der Side-Effekte
+  (Warmstart-Cache schreiben) muss ggf. ein deterministischer Reduce
+  werden.
+\item
+  \textbf{API-Konvention für \texttt{etaSpec} / \texttt{OmegaSpec}}:
+  konkretes Format. Idee:
+  \texttt{etaSpec\ =\ list(eta\_kel\ =\ c("subj1",\ "subj2",\ ...),\ eta\_V\ =\ c(...))},
+  oder über die existierende \texttt{parlist}-Struktur abgeleitet. Klärt
+  sich erst in Phase 1 der Implementation.
+\end{enumerate}
+
+\end{document}

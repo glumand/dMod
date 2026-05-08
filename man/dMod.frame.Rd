@@ -25,14 +25,14 @@ dMod.frame(hypothesis, g, x, p, data, e = NULL, ...)
 Object of class \code{tbl_df}, which is grouped rowwise.
 }
 \description{
-Basically, a dMod.frame is a \link[tibble:tibble]{tibble::tibble}, which is grouped \link[dplyr:rowwise]{dplyr::rowwise}.
+Basically, a dMod.frame is a \link[tibble:tibble]{tibble}, which is grouped \link[dplyr:rowwise]{rowwise}.
 
 Since the dMod.frame is also designed for interactive use, the class will not be called
 "dMod.frame" as I initially planned, but will be c("tbl_df").
 This way, I don't have to overwrite all the dplyr-verbs.
 
 The dMod.frame object stores all objects that are needed to reproducibly
-produce a result, such as a plot or profiles, in one row of a \link[tibble:tibble]{tibble::tibble}.
+produce a result, such as a plot or profiles, in one row of a \link[tibble:tibble]{tibble}.
 Each row corresponds to a distinct hypothesis, e.g. one would have two distinct rows
 for fitting with and without a prior.
 }

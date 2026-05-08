@@ -14,6 +14,7 @@ Y(
   compile = FALSE,
   modelname = NULL,
   verbose = FALSE,
+  deriv2 = FALSE,
   derivMode = c("dual", "symbolic")
 )
 }
@@ -46,17 +47,20 @@ for the generated C file.}
 
 \item{verbose}{Logical, print compiler output to the R console.}
 
+\item{deriv2}{Logical. If \code{TRUE}, the compiled observation function
+additionally exposes second-order derivatives. The returned \code{obsfn} then
+carries an \code{attr(., "deriv2")} 4D array (\verb{[time, observable, theta, theta]})
+on its output when called with \code{deriv2 = TRUE}. The AD backend for
+\code{deriv2 = TRUE} requires \code{compile = TRUE}. Default \code{FALSE}.}
+
 \item{derivMode}{Character. Selects the derivative backend used by \link[CppODE:funCpp]{CppODE::funCpp}
 to evaluate observation Jacobians. One of \code{"dual"} (default, in-tree
-forward-mode AD via \code{jac_chain}, typically faster when the number of
+forward-mode AD via \code{evaluate}, typically faster when the number of
 fitted parameters is large; requires \code{compile = TRUE}) or \code{"symbolic"}
 (classical SymPy Jacobian followed by an explicit chain rule against
 the upstream \code{dX}/\code{dP}).}
 
 \item{deriv}{Logical, if \code{TRUE}, the function evaluates first-order derivatives
-of observables with respect to parameters.}
-
-\item{deriv2}{Logical, if \code{TRUE}, the function also evaluates second derivatives
 of observables with respect to parameters.}
 }
 \value{

@@ -65,6 +65,18 @@ collectCompileInfo <- function(...) {
 #'   specifying the right-hand sides of the ODE system.
 #' @param deriv Logical. If `TRUE`, generate first-order sensitivities.
 #'   Defaults to `TRUE`.
+#' @param deriv2 Logical. If `TRUE`, also generate second-order sensitivities
+#'   (requires `solver = "CppODE"`). Implies `deriv = TRUE`. Defaults to
+#'   `FALSE`. The CVODE backend (`solver = "Sundials"`) does not support
+#'   second-order sensitivities.
+#'
+#'   When `deriv2 = TRUE`, three native artefacts are emitted:
+#'   `<modelname>` (value only), `<modelname>_s` (1st-order sensitivities,
+#'   AD path) and `<modelname>_s2` (1st + 2nd-order sensitivities, AD2 path).
+#'   Downstream prediction functions then dispatch on the call's `deriv2`
+#'   flag, so callers can keep simulating / fitting at the cheaper
+#'   1st-order cost via `deriv = TRUE, deriv2 = FALSE` even when the model
+#'   was built with `deriv2 = TRUE`.
 #' @param forcings Character vector with the names of external forcings.
 #' @param events `data.frame` specifying discrete events during integration.
 #'   Must contain the columns `"var"` (character, name of the affected state),
@@ -102,12 +114,18 @@ collectCompileInfo <- function(...) {
 #'
 #' @example inst/examples/odemodel.R
 #' @export
-odemodel <- function(f, deriv = TRUE, forcings=NULL, events = NULL, outputs = NULL, 
-                     fixed = NULL, estimate = NULL, modelname = "odemodel", solver = c("deSolve", "CppODE", "Sundials"), 
+odemodel <- function(f, deriv = TRUE, deriv2 = FALSE, forcings=NULL, events = NULL, outputs = NULL,
+                     fixed = NULL, estimate = NULL, modelname = "odemodel", solver = c("deSolve", "CppODE", "Sundials"),
                      gridpoints = NULL, verbose = FALSE, ...) {
 
   f <- as.eqnvec(f)
   solver <- match.arg(solver)
+
+  if (deriv2 && !deriv) {
+    warning("`deriv2 = TRUE` implies `deriv = TRUE`. Setting deriv = TRUE.",
+            call. = FALSE)
+    deriv <- TRUE
+  }
 
   dots <- list(...)
   if (solver == "deSolve" && "nStack" %in% names(dots)) {
@@ -115,6 +133,11 @@ odemodel <- function(f, deriv = TRUE, forcings=NULL, events = NULL, outputs = NU
             call. = FALSE)
     dots <- dots[setdiff(names(dots), "nStack")]
   }
+
+  if (deriv2 && solver == "deSolve")
+    stop("Second-order sensitivities require solver = 'CppODE'.")
+  if (deriv2 && solver == "Sundials")
+    stop("Second-order sensitivities are not available with CVODE; use solver = 'CppODE'.")
 
   if (solver == "deSolve") {
 
@@ -203,14 +226,26 @@ odemodel <- function(f, deriv = TRUE, forcings=NULL, events = NULL, outputs = NU
                              outdir = getwd(), deriv = FALSE, verbose = verbose),
                         dots_func))
       extended <- NULL
+      extended2 <- NULL
       if (deriv) {
+        # First-order extension: always built so callers can keep simulating
+        # / fitting with deriv2 = FALSE at the cheaper 1st-order cost.
         extended <- do.call(CppODE::CppODE,
                             c(list(f, events = events, fixed = fixed, forcings = forcings,
                                    modelname = paste0(modelname, "_s"), outdir = getwd(),
-                                   deriv = TRUE, verbose = verbose),
+                                   deriv = TRUE, deriv2 = FALSE, verbose = verbose),
                               dots))
+        # Second-order extension: only when requested. Xs.CppODE picks this
+        # up when called with deriv2 = TRUE.
+        if (deriv2) {
+          extended2 <- do.call(CppODE::CppODE,
+                               c(list(f, events = events, fixed = fixed, forcings = forcings,
+                                      modelname = paste0(modelname, "_s2"), outdir = getwd(),
+                                      deriv = TRUE, deriv2 = TRUE, verbose = verbose),
+                                 dots))
+        }
       }
-      out <- list(func = func, extended = extended)
+      out <- list(func = func, extended = extended, extended2 = extended2)
       class(out) <- c("CppODE", "odemodel")
     } else if (solver == "Sundials") {
       func <- do.call(CppODE::CVODE,
@@ -229,7 +264,7 @@ odemodel <- function(f, deriv = TRUE, forcings=NULL, events = NULL, outputs = NU
       class(out) <- c("CppODE", "odemodel")
       }
   }
-  attr(out, "compileInfo") <- collectCompileInfo(out$func, out$extended)
+  attr(out, "compileInfo") <- collectCompileInfo(out$func, out$extended, out$extended2)
   return(out)
 }
 
@@ -474,28 +509,28 @@ eqnlist <- function(smatrix = NULL, states = colnames(smatrix), rates = NULL,
 #' @example inst/examples/prediction.R
 #' @export
 parfn <- function(p2p, parameters = NULL, condition = NULL) {
-  
+
   force(condition)
   mappings <- list()
   mappings[[1]] <- p2p
   names(mappings) <- condition
-  
-  outfn <- function(..., fixed = NULL, deriv = TRUE, conditions = condition, env = NULL) {
-    
-    
+
+  outfn <- function(..., fixed = NULL, deriv = TRUE, deriv2 = FALSE, conditions = condition, env = NULL) {
+
+
     arglist <- list(...)
     arglist <- arglist[match.fnargs(arglist, "pars")]
     pars <- arglist[[1]]
-    
+
     overlap <- test_conditions(conditions, condition)
     # NULL if at least one argument is NULL
     # character(0) if no overlap
     # character if overlap
-    
+
     if (is.null(overlap)) conditions <- union(condition, conditions)
-    
+
     if (is.null(overlap) | length(overlap) > 0)
-      result <- p2p(pars = pars, fixed = fixed, deriv = deriv)
+      result <- p2p(pars = pars, fixed = fixed, deriv = deriv, deriv2 = deriv2)
     else
       result <- NULL
     
@@ -643,33 +678,33 @@ parvec <- function(..., deriv = NULL) {
 #' @example inst/examples/prediction.R
 #' @export
 prdfn <- function(P2X, parameters = NULL, condition = NULL) {
-  
+
   mycondition <- condition
   mappings <- list()
   mappings[[1]] <- P2X
   names(mappings) <- condition
-  
-  outfn <- function(..., fixed = NULL, deriv = TRUE, conditions = mycondition, env = NULL) {
-    
+
+  outfn <- function(..., fixed = NULL, deriv = TRUE, deriv2 = FALSE, conditions = mycondition, env = NULL) {
+
     arglist <- list(...)
     arglist <- arglist[match.fnargs(arglist, c("times", "pars"))]
     times <- arglist[[1]]
     pars <- arglist[[2]]
-    
+
     # yields derivatives for all parameters in pars but not in fixed
     if (!is.null(fixed)) {
       pars  <- as.parvec(pars[setdiff(names(pars), names(fixed))])
-      fixed <- as.parvec(fixed, deriv = FALSE)
+      fixed <- as.parvec(fixed, deriv = FALSE, deriv2 = FALSE)
     }
-    
+
     overlap <- test_conditions(conditions, condition)
     # NULL if at least one argument is NULL
     # character(0) if no overlap
     # character if overlap
-    
+
     if (is.null(overlap)) conditions <- union(condition, conditions)
     if (is.null(overlap) | length(overlap) > 0)
-      result <- P2X(times = times, pars = pars, fixed = fixed, deriv = deriv)
+      result <- P2X(times = times, pars = pars, fixed = fixed, deriv = deriv, deriv2 = deriv2)
     else
       result <- NULL
     
@@ -718,7 +753,7 @@ obsfn <- function(X2Y, parameters = NULL, condition = NULL) {
   mappings[[1]] <- X2Y
   names(mappings) <- condition
 
-  outfn <- function(..., fixed = NULL, deriv = TRUE, conditions = mycondition, env = NULL) {
+  outfn <- function(..., fixed = NULL, deriv = TRUE, deriv2 = FALSE, conditions = mycondition, env = NULL) {
 
     arglist <- list(...)
     arglist <- arglist[match.fnargs(arglist, c("out", "pars"))]
@@ -730,14 +765,14 @@ obsfn <- function(X2Y, parameters = NULL, condition = NULL) {
     if (any(problematicIndices)) {
       arrayIndices <- arrayInd(which(problematicIndices), dim(out))
       problematicSubset <- paste0(capture.output(print(out[arrayIndices[,1], c(1,arrayIndices[,2])])), collapse = "\n")
-      stop("Prediction is NA or Inf in condition ", paste0(conditions, collapse = ","), ".\n", 
+      stop("Prediction is NA or Inf in condition ", paste0(conditions, collapse = ","), ".\n",
            "Subset of the prediction causing trouble:\n", problematicSubset)
     }
-    
+
     # yields derivatives for all parameters in pars but not in fixed
     if (!is.null(fixed)) {
       pars  <- as.parvec(pars[setdiff(names(pars), names(fixed))])
-      fixed <- as.parvec(fixed, deriv = FALSE)
+      fixed <- as.parvec(fixed, deriv = FALSE, deriv2 = FALSE)
     }
 
     overlap <- test_conditions(conditions, condition)
@@ -747,7 +782,7 @@ obsfn <- function(X2Y, parameters = NULL, condition = NULL) {
 
     if (is.null(overlap)) conditions <- union(condition, conditions)
     if (is.null(overlap) | length(overlap) > 0)
-      result <- X2Y(out = out, pars = pars, fixed = fixed, deriv = deriv)
+      result <- X2Y(out = out, pars = pars, fixed = fixed, deriv = deriv, deriv2 = deriv2)
     else
       result <- NULL
 
@@ -794,6 +829,10 @@ obsfn <- function(X2Y, parameters = NULL, condition = NULL) {
 #'
 #' @param prediction Numeric matrix of model predictions.
 #' @param deriv 3D numeric array of first-order sensitivities with respect to outer parameters.
+#' @param deriv2 4D numeric array of second-order sensitivities with respect to
+#'   outer parameters; dimensions: `(time, variable, theta, theta)`. Symmetric
+#'   in the last two axes. Optional; only set when the upstream pipeline
+#'   provides second-order information.
 #' @param parameters Named numeric vector of the inner parameters used for the prediction.
 #'
 #' @return
@@ -803,14 +842,16 @@ obsfn <- function(X2Y, parameters = NULL, condition = NULL) {
 #' @export
 prdframe <- function(prediction = NULL,
                      deriv = NULL,
+                     deriv2 = NULL,
                      parameters = NULL) {
-  
+
   out <- if (!is.null(prediction)) as.matrix(prediction) else matrix(, 0, 0)
-  
+
   attr(out, "deriv") <- deriv
+  attr(out, "deriv2") <- deriv2
   attr(out, "parameters") <- parameters
   class(out) <- c("prdframe", "matrix")
-  
+
   return(out)
 }
 
@@ -899,23 +940,32 @@ objlist <- function(value, gradient, hessian) {
 #' @param mydata data.table produced by [res]
 #' @param deriv numeric matrix of first-order derivatives of residuals (Jacobian)
 #' @param deriv.err numeric matrix of first-order derivatives of the error model
+#' @param deriv2 numeric 3D array `[n_residuals, p, p]` of second-order derivatives
+#'   of residuals with respect to parameters. Optional.
+#' @param deriv2.err numeric 3D array `[n_residuals, p, p]` of second-order
+#'   derivatives of the error model. Optional.
 #'
 #' @return
 #' An object of class `"objframe"` (data.table) with attributes `"deriv"` and `"deriv.err"`.
 #' These arrays have the same parameter axes as those returned by [prdframe] and [res].
+#' When `deriv2`/`deriv2.err` are supplied, the corresponding 3D arrays are
+#' attached as `"deriv2"` / `"deriv2.err"`.
 #'
 #' @export
-objframe <- function(mydata, deriv = NULL, deriv.err = NULL) {
-  
+objframe <- function(mydata, deriv = NULL, deriv.err = NULL,
+                     deriv2 = NULL, deriv2.err = NULL) {
+
   required <- c("time", "name", "value", "prediction",
                 "sigma", "residual", "weighted.residual",
                 "bloq", "weighted.0")
   if (!all(required %in% names(mydata)))
     stop("mydata does not have all required columns.")
-  
+
   out <- data.table::as.data.table(mydata)[, ..required]
-  data.table::setattr(out, "deriv",     deriv)
-  data.table::setattr(out, "deriv.err", deriv.err)
+  data.table::setattr(out, "deriv",      deriv)
+  data.table::setattr(out, "deriv.err",  deriv.err)
+  data.table::setattr(out, "deriv2",     deriv2)
+  data.table::setattr(out, "deriv2.err", deriv2.err)
   data.table::setattr(out, "class", c("objframe", "data.table", "data.frame"))
   out
 }
@@ -1101,7 +1151,7 @@ objframe <- function(mydata, deriv = NULL, deriv.err = NULL) {
   # prdfn + prdfn
   if (inherits(x1, "prdfn") & inherits(x2, "prdfn")) {
 
-    outfn <- function(..., fixed = NULL, deriv = TRUE, conditions = names(mappings), env = NULL) {
+    outfn <- function(..., fixed = NULL, deriv = TRUE, deriv2 = FALSE, conditions = names(mappings), env = NULL) {
 
       arglist <- list(...)
       arglist <- arglist[match.fnargs(arglist, c("times", "pars"))]
@@ -1112,7 +1162,7 @@ objframe <- function(mydata, deriv = NULL, deriv.err = NULL) {
       # disjoint (pars, fixed) sets.
       if (!is.null(fixed)) {
         pars  <- as.parvec(pars[setdiff(names(pars), names(fixed))])
-        fixed <- as.parvec(fixed, deriv = FALSE)
+        fixed <- as.parvec(fixed, deriv = FALSE, deriv2 = FALSE)
       }
 
       if (is.null(conditions)) {
@@ -1123,7 +1173,7 @@ objframe <- function(mydata, deriv = NULL, deriv.err = NULL) {
       outlist <- structure(vector("list", length(conditions)), names = conditions)
       for (C in available) {
         outlist[[C]] <- mappings[[C]](times = times, pars = pars,
-                                      fixed = fixed, deriv = deriv)
+                                      fixed = fixed, deriv = deriv, deriv2 = deriv2)
       }
 
       out <- as.prdlist(outlist)
@@ -1138,7 +1188,7 @@ objframe <- function(mydata, deriv = NULL, deriv.err = NULL) {
   # obsfn + obsfn
   if (inherits(x1, "obsfn") & inherits(x2, "obsfn")) {
 
-    outfn <- function(..., fixed = NULL, deriv = TRUE, conditions = names(mappings), env = NULL) {
+    outfn <- function(..., fixed = NULL, deriv = TRUE, deriv2 = FALSE, conditions = names(mappings), env = NULL) {
 
       arglist <- list(...)
       arglist <- arglist[match.fnargs(arglist, c("out", "pars"))]
@@ -1150,7 +1200,7 @@ objframe <- function(mydata, deriv = NULL, deriv.err = NULL) {
       # X2Y kernel does `c(pars, fixed)` and would duplicate names.
       if (!is.null(fixed)) {
         pars  <- as.parvec(pars[setdiff(names(pars), names(fixed))])
-        fixed <- as.parvec(fixed, deriv = FALSE)
+        fixed <- as.parvec(fixed, deriv = FALSE, deriv2 = FALSE)
       }
 
       if (is.null(conditions)) {
@@ -1161,7 +1211,7 @@ objframe <- function(mydata, deriv = NULL, deriv.err = NULL) {
       outlist <- structure(vector("list", length(conditions)), names = conditions)
       for (C in available) {
         outlist[[C]] <- mappings[[C]](out = out, pars = pars,
-                                      fixed = fixed, deriv = deriv)
+                                      fixed = fixed, deriv = deriv, deriv2 = deriv2)
       }
 
       out <- as.prdlist(outlist)
@@ -1177,7 +1227,7 @@ objframe <- function(mydata, deriv = NULL, deriv.err = NULL) {
   # parfn + parfn
   if (inherits(x1, "parfn") & inherits(x2, "parfn")) {
 
-    outfn <- function(..., fixed = NULL, deriv = TRUE, conditions = names(mappings), env = NULL) {
+    outfn <- function(..., fixed = NULL, deriv = TRUE, deriv2 = FALSE, conditions = names(mappings), env = NULL) {
 
       arglist <- list(...)
       arglist <- arglist[match.fnargs(arglist, c("pars"))]
@@ -1191,7 +1241,7 @@ objframe <- function(mydata, deriv = NULL, deriv.err = NULL) {
       }
       outlist <- structure(vector("list", length(conditions)), names = conditions)
       for (C in available) {
-        outlist[[C]] <- mappings[[C]](pars = pars, fixed = fixed, deriv = deriv)
+        outlist[[C]] <- mappings[[C]](pars = pars, fixed = fixed, deriv = deriv, deriv2 = deriv2)
       }
 
       return(outlist)
@@ -1329,7 +1379,7 @@ test_conditions <- function(c1, c2) {
     conditions.p2 <- attr(p2, "conditions")
     conditions.out <- out_conditions(conditions.p1, conditions.p2)
 
-    outfn <- function(..., fixed = NULL, deriv = TRUE, conditions = NULL, env = NULL) {
+    outfn <- function(..., fixed = NULL, deriv = TRUE, deriv2 = FALSE, conditions = NULL, env = NULL) {
 
       arglist <- list(...)
       arglist <- arglist[match.fnargs(arglist, c("out", "pars"))]
@@ -1337,8 +1387,8 @@ test_conditions <- function(c1, c2) {
       pars <- arglist[[2]]
 
 
-      step1 <- p2(out = out, pars = pars, fixed = fixed, deriv = deriv, conditions = conditions)
-      step2 <- do.call(c, lapply(1:length(step1), function(i) p1(out = step1[[i]], pars = attr(step1[[i]], "parameters"), fixed = fixed, deriv = deriv, conditions = names(step1)[i])))
+      step1 <- p2(out = out, pars = pars, fixed = fixed, deriv = deriv, deriv2 = deriv2, conditions = conditions)
+      step2 <- do.call(c, lapply(1:length(step1), function(i) p1(out = step1[[i]], pars = attr(step1[[i]], "parameters"), fixed = fixed, deriv = deriv, deriv2 = deriv2, conditions = names(step1)[i])))
 
 
       out <- as.prdlist(step2)
@@ -1350,8 +1400,8 @@ test_conditions <- function(c1, c2) {
     # Generate mappings for observation function
     l <- max(c(1, length(conditions.out)))
     mappings <- lapply(1:l, function(i) {
-      mapping <- function(out, pars, fixed = NULL, deriv = TRUE) {
-        outfn(out = out, pars = pars, fixed = fixed, deriv = deriv, conditions = conditions.out[i])[[1]]
+      mapping <- function(out, pars, fixed = NULL, deriv = TRUE, deriv2 = FALSE) {
+        outfn(out = out, pars = pars, fixed = fixed, deriv = deriv, deriv2 = deriv2, conditions = conditions.out[i])[[1]]
       }
       m1 <- modelname(p1, conditions = conditions.p1[i])
       m2 <- modelname(p2, conditions = conditions.p2[i])
@@ -1382,15 +1432,15 @@ test_conditions <- function(c1, c2) {
     conditions.p2 <- attr(p2, "conditions")
     conditions.out <- out_conditions(conditions.p1, conditions.p2)
 
-    outfn <- function(..., fixed = NULL, deriv = TRUE, conditions = NULL, env = NULL) {
+    outfn <- function(..., fixed = NULL, deriv = TRUE, deriv2 = FALSE, conditions = NULL, env = NULL) {
 
       arglist <- list(...)
       arglist <- arglist[match.fnargs(arglist, c("out", "pars"))]
       out <- arglist[[1]]
       pars <- arglist[[2]]
 
-      step1 <- p2(pars = pars, fixed = fixed, deriv = deriv, conditions = conditions)
-      step2 <- do.call(c, lapply(1:length(step1), function(i) p1(out = out, pars = step1[[i]], fixed = fixed, deriv = deriv, conditions = names(step1)[i])))
+      step1 <- p2(pars = pars, fixed = fixed, deriv = deriv, deriv2 = deriv2, conditions = conditions)
+      step2 <- do.call(c, lapply(1:length(step1), function(i) p1(out = out, pars = step1[[i]], fixed = fixed, deriv = deriv, deriv2 = deriv2, conditions = names(step1)[i])))
 
       out <- as.prdlist(step2)
 
@@ -1401,8 +1451,8 @@ test_conditions <- function(c1, c2) {
     # Generate mappings for observation function
     l <- max(c(1, length(conditions.out)))
     mappings <- lapply(1:l, function(i) {
-      mapping <- function(out, pars, fixed = NULL, deriv = TRUE) {
-        outfn(out = out, pars = pars, fixed = fixed, deriv = deriv, conditions = conditions.out[i])[[1]]
+      mapping <- function(out, pars, fixed = NULL, deriv = TRUE, deriv2 = FALSE) {
+        outfn(out = out, pars = pars, fixed = fixed, deriv = deriv, deriv2 = deriv2, conditions = conditions.out[i])[[1]]
       }
       m1 <- modelname(p1, conditions = conditions.p1[i])
       m2 <- modelname(p2, conditions = conditions.p2[i])
@@ -1431,24 +1481,25 @@ test_conditions <- function(c1, c2) {
     conditions.p2 <- attr(p2, "conditions")
     conditions.out <- out_conditions(conditions.p1, conditions.p2)
 
-    outfn <- function(..., fixed = NULL, deriv = TRUE, conditions = NULL, env = NULL) {
+    outfn <- function(..., fixed = NULL, deriv = TRUE, deriv2 = FALSE, conditions = NULL, env = NULL) {
 
       arglist <- list(...)
       arglist <- arglist[match.fnargs(arglist, c("times", "pars"))]
       times <- arglist[[1]]
       pars <- arglist[[2]]
 
-      step1 <- p2(times = times, pars = pars, fixed = fixed, deriv = deriv, conditions = conditions)
+      step1 <- p2(times = times, pars = pars, fixed = fixed, deriv = deriv, deriv2 = deriv2, conditions = conditions)
       step2 <- do.call(c, lapply(1:length(step1), function(i) {
         pinner <- attr(step1[[i]], "parameters")
         fixedinner <- pinner[attr(pinner, "fixed")]
-        p1(out = step1[[i]], 
-           pars = pinner, 
-           fixed = fixedinner, 
-           deriv = deriv, 
+        p1(out = step1[[i]],
+           pars = pinner,
+           fixed = fixedinner,
+           deriv = deriv,
+           deriv2 = deriv2,
            conditions = names(step1)[i])
       }))
-        
+
 
       out <- as.prdlist(step2)
 
@@ -1459,8 +1510,8 @@ test_conditions <- function(c1, c2) {
     # Generate mappings for prediction function
     l <- max(c(1, length(conditions.out)))
     mappings <- lapply(1:l, function(i) {
-      mapping <- function(times, pars, fixed = NULL, deriv = TRUE) {
-        outfn(times = times, pars = pars, fixed = fixed, deriv = deriv, conditions = conditions.out[i])[[1]]
+      mapping <- function(times, pars, fixed = NULL, deriv = TRUE, deriv2 = FALSE) {
+        outfn(times = times, pars = pars, fixed = fixed, deriv = deriv, deriv2 = deriv2, conditions = conditions.out[i])[[1]]
       }
       m1 <- modelname(p1, conditions = conditions.p1[i])
       m2 <- modelname(p2, conditions = conditions.p2[i])
@@ -1490,19 +1541,20 @@ test_conditions <- function(c1, c2) {
     conditions.p2 <- attr(p2, "conditions")
     conditions.out <- out_conditions(conditions.p1, conditions.p2)
 
-    outfn <- function(..., fixed = NULL, deriv = TRUE, conditions = NULL, env = NULL) {
+    outfn <- function(..., fixed = NULL, deriv = TRUE, deriv2 = FALSE, conditions = NULL, env = NULL) {
 
       arglist <- list(...)
       arglist <- arglist[match.fnargs(arglist, c("times", "pars"))]
       times <- arglist[[1]]
       pars <- arglist[[2]]
 
-      step1 <- p2(pars = pars, fixed = fixed, deriv = deriv, conditions = conditions)
+      step1 <- p2(pars = pars, fixed = fixed, deriv = deriv, deriv2 = deriv2, conditions = conditions)
       step2 <- do.call(c, lapply(1:length(step1), function(i) {
         p1(times = times,
            pars = (step1[[i]])[setdiff(names(step1[[i]]), attr(step1[[i]], "fixed"))],
            fixed = (step1[[i]])[attr(step1[[i]], "fixed")],
            deriv = deriv,
+           deriv2 = deriv2,
            conditions = names(step1)[i])
       }))
 
@@ -1515,8 +1567,8 @@ test_conditions <- function(c1, c2) {
     # Generate mappings for prediction function
     l <- max(c(1, length(conditions.out)))
     mappings <- lapply(1:l, function(i) {
-      mapping <- function(times, pars, fixed = NULL, deriv = TRUE) {
-        outfn(times = times, pars = pars, fixed = fixed, deriv = deriv, conditions = conditions.out[i])[[1]]
+      mapping <- function(times, pars, fixed = NULL, deriv = TRUE, deriv2 = FALSE) {
+        outfn(times = times, pars = pars, fixed = fixed, deriv = deriv, deriv2 = deriv2, conditions = conditions.out[i])[[1]]
       }
       attr(mapping, "parameters") <- getParameters(p2, conditions = conditions.out[i])
       m1 <- modelname(p1, conditions = conditions.p1[i])
@@ -1546,17 +1598,17 @@ test_conditions <- function(c1, c2) {
     conditions.out <- out_conditions(conditions.p1, conditions.p2)
 
 
-    outfn <- function(..., fixed = NULL, deriv = TRUE, conditions = NULL, env = NULL) {
+    outfn <- function(..., fixed = NULL, deriv = TRUE, deriv2 = FALSE, conditions = NULL, env = NULL) {
 
       arglist <- list(...)
       arglist <- arglist[match.fnargs(arglist, c("pars"))]
       pars <- arglist[[1]]
 
-      step1 <- p2(pars = pars, fixed = fixed, deriv = deriv, conditions = conditions)
-      step2 <- do.call(c, lapply(1:length(step1), function(i) 
-        p1(pars = (step1[[i]])[setdiff(names(step1[[i]]), attr(step1[[i]], "fixed"))], 
+      step1 <- p2(pars = pars, fixed = fixed, deriv = deriv, deriv2 = deriv2, conditions = conditions)
+      step2 <- do.call(c, lapply(1:length(step1), function(i)
+        p1(pars = (step1[[i]])[setdiff(names(step1[[i]]), attr(step1[[i]], "fixed"))],
            fixed = (step1[[i]])[attr(step1[[i]], "fixed")],
-           deriv = deriv, conditions = names(step1)[i])))
+           deriv = deriv, deriv2 = deriv2, conditions = names(step1)[i])))
       return(step2)
 
     }
@@ -1564,8 +1616,8 @@ test_conditions <- function(c1, c2) {
     # Generate mappings for parameters function
     l <- max(c(1, length(conditions.out)))
     mappings <- lapply(1:l, function(i) {
-      mapping <- function(pars, fixed = NULL, deriv = TRUE) {
-        outfn(pars = pars, fixed = fixed, deriv = deriv, conditions = conditions.out[i])[[1]]
+      mapping <- function(pars, fixed = NULL, deriv = TRUE, deriv2 = FALSE) {
+        outfn(pars = pars, fixed = fixed, deriv = deriv, deriv2 = deriv2, conditions = conditions.out[i])[[1]]
       }
       m1 <- modelname(p1, conditions = conditions.p1[i])
       m2 <- modelname(p2, conditions = conditions.p2[i])
@@ -1595,14 +1647,14 @@ test_conditions <- function(c1, c2) {
     conditions.p2 <- attr(p2, "conditions")
     conditions.out <- out_conditions(conditions.p1, conditions.p2)
 
-    outfn <- function(...,  fixed = NULL, deriv=TRUE, conditions = NULL, env = NULL) {
+    outfn <- function(...,  fixed = NULL, deriv = TRUE, deriv2 = FALSE, conditions = NULL, env = NULL) {
 
       arglist <- list(...)
       arglist <- arglist[match.fnargs(arglist, "pars")]
       pars <- arglist[[1]]
 
-      step1 <- p2(pars = pars, fixed = fixed, deriv = deriv, conditions = conditions)
-      step2 <- Reduce("+", lapply(1:length(step1), function(i) p1(pars = step1[[i]], fixed = NULL, deriv = deriv, conditions = names(step1)[i], env = env)))
+      step1 <- p2(pars = pars, fixed = fixed, deriv = deriv, deriv2 = deriv2, conditions = conditions)
+      step2 <- Reduce("+", lapply(1:length(step1), function(i) p1(pars = step1[[i]], fixed = NULL, deriv = deriv, deriv2 = deriv2, conditions = names(step1)[i], env = env)))
       return(step2)
 
 
@@ -1849,6 +1901,124 @@ getDerivs.list <- function(x, ...) {
 getDerivs.objlist <- function(x, ...) {
 
   x$gradient
+
+}
+
+
+#' Extract second-order derivatives from an object
+#'
+#' Generic accessor for the `deriv2` attribute (or `hessian` field, in the
+#' case of `objlist`) attached to dMod objects. Mirrors [getDerivs] for
+#' first-order derivatives.
+#'
+#' @param x Object from which the second derivatives should be extracted.
+#'   Supported classes are `parvec`, `prdframe`, `prdlist`, `list`, and
+#'   `objlist`.
+#' @param ... Additional arguments passed to specific methods (currently unused).
+#'
+#' @return The structure of the returned object depends on the class of `x`:
+#' \itemize{
+#'   \item `parvec` – a 3D array `[p, theta, theta]` of second derivatives.
+#'   \item `prdframe` – a 4D array `[time, variable, theta, theta]`.
+#'   \item `prdlist` – a list of `prdframe` second-derivative arrays.
+#'   \item `objlist` – the stored `hessian` matrix.
+#'   \item `list` – a list of derivative objects, depending on the elements.
+#' }
+#'
+#' @examples
+#' \dontrun{
+#' d2 <- getDerivs2(myprdframe)
+#' getDerivs2(myparvec)
+#' }
+#'
+#' @export
+getDerivs2 <- function(x, ...) {
+  UseMethod("getDerivs2", x)
+}
+
+#' @export
+#' @rdname getDerivs2
+getDerivs2.parvec <- function(x, ...) {
+
+  derivs2 <- attr(x, "deriv2")
+  if (is.null(derivs2))
+    stop("Object does not contain second-order derivatives.")
+
+  return(derivs2)
+}
+
+#' @export
+#' @rdname getDerivs2
+getDerivs2.prdframe <- function(x, ...) {
+  `%||%` <- function(a, b) if (!is.null(a)) a else b
+
+  times   <- x[, "time", drop = FALSE]
+  derivs2 <- attr(x, "deriv2")
+  if (is.null(derivs2))
+    stop("Object does not contain second-order derivatives.")
+
+  dn <- dimnames(derivs2)
+  n  <- dim(derivs2)[1]
+  v  <- dim(derivs2)[2]
+  d  <- dim(derivs2)[3]
+
+  varnames  <- dn[[2]] %||% paste0("var", seq_len(v))
+  parnames1 <- dn[[3]] %||% paste0("par", seq_len(d))
+  parnames2 <- dn[[4]] %||% parnames1
+
+  # Schwarz' theorem: H is symmetric in the last two axes. Emit only the
+  # independent entries (upper triangle, k1 <= k2). Diagonal entries get
+  # `\u2202\u00b2f/\u2202p\u00b2`, off-diagonal `\u2202\u00b2f/\u2202p1\u2202p2`.
+  pair_idx <- which(upper.tri(matrix(0, d, d), diag = TRUE), arr.ind = TRUE)
+
+  derivswide <- times
+  for (i in seq_len(v)) {
+    m <- matrix(0, nrow = n, ncol = nrow(pair_idx))
+    cols <- character(nrow(pair_idx))
+    for (j in seq_len(nrow(pair_idx))) {
+      k1 <- pair_idx[j, 1L]; k2 <- pair_idx[j, 2L]
+      m[, j] <- derivs2[, i, k1, k2]
+      cols[j] <- if (k1 == k2)
+        paste0("\u2202\u00b2", varnames[i], "/\u2202", parnames1[k1], "\u00b2")
+      else
+        paste0("\u2202\u00b2", varnames[i], "/\u2202", parnames1[k1], "\u2202", parnames2[k2])
+    }
+    colnames(m) <- cols
+    derivswide <- cbind(derivswide, m)
+  }
+
+  prdframe(
+    prediction = derivswide,
+    parameters = attr(x, "parameters")
+  )
+}
+
+#' @export
+#' @rdname getDerivs2
+getDerivs2.prdlist <- function(x, ...) {
+
+  as.prdlist(
+    lapply(x, function(myx) {
+      getDerivs2(myx, ...)
+    }),
+    names = names(x)
+  )
+
+}
+
+#' @export
+#' @rdname getDerivs2
+getDerivs2.list <- function(x, ...) {
+
+  lapply(x, function(myx) getDerivs2(myx))
+
+}
+
+#' @export
+#' @rdname getDerivs2
+getDerivs2.objlist <- function(x, ...) {
+
+  x$hessian
 
 }
 
