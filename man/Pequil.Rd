@@ -33,6 +33,12 @@ or named character vector.}
 
 \item{attach.input}{Logical. Append pass-through parameters to output.}
 
+\item{start.time}{Numeric. Start time of the equilibration integration
+(default \code{-1e7}).}
+
+\item{end.time}{Numeric. End time at which the steady state is read off
+(default \code{0}).}
+
 \item{keep.root}{Logical. Cache steady state for warm-starting.}
 
 \item{controlsODE}{Named list of ODE solver options, accessible via
@@ -43,6 +49,8 @@ or named character vector.}
 \item{modelname}{Character, base name for C++ code files.}
 
 \item{verbose}{Logical. Print compiler output.}
+
+\item{deriv2}{Logical. Emit second-order sensitivities. Default \code{FALSE}.}
 
 \item{...}{Additional arguments passed to \code{\link[CppODE]{CppODE}}.}
 }

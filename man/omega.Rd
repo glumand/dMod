@@ -60,10 +60,9 @@ and arbitrary sparsity below the diagonal. The result is consumed by
 \link{constraintL2} (when its \code{Omega} argument is set) and by \link{focei}.
 }
 \details{
-The diagonal of \code{L} is parametrised on the log scale to enforce positive
-definiteness of \code{Omega}. Off-diagonal entries are unrestricted real numbers.
-This is the standard pharmacometric choice and matches \code{lme4}/\code{TMB}
-conventions.
+The Cholesky diagonal is on the log scale (enforces positive definiteness
+of \eqn{\Omega}); off-diagonal entries are unrestricted reals. Matches
+\code{lme4}/\code{TMB} conventions.
 }
 \examples{
 om1 <- omega(eta = c("eta_Cl", "eta_V"))

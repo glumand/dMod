@@ -10,7 +10,15 @@ vignette: >
 ```{r setup, include = FALSE}
 knitr::opts_chunk$set(collapse = TRUE, comment = "#>",
                       dpi = 150, fig.retina = 2, out.width = "100%")
-have_libsbml <- file.exists(path.expand("~/.virtualenvs/libsbml/bin/python"))
+# reticulate provisions python-libsbml on first use, but for the vignette
+# we don't want to trigger a Python install at build time. Treat the
+# chunks as runnable only if a Python with libsbml is already on the
+# system — either via DMOD_LIBSBML_PYTHON or an already-materialised
+# reticulate env.
+have_libsbml <- nzchar(Sys.getenv("DMOD_LIBSBML_PYTHON", unset = "")) ||
+  isTRUE(tryCatch(
+    reticulate::py_module_available("libsbml"),
+    error = function(e) FALSE))
 ```
 
 dMod reads [PEtab](https://petab.readthedocs.io/) v1 and v2 problems
@@ -23,14 +31,12 @@ benchmark) using a bundled copy of the files, then explains what
 ## Prerequisites
 
 `importPEtab()` reads the SBML model through a Python helper that needs
-`python-libsbml`. Create the virtualenv once:
+`python-libsbml`. dMod uses `reticulate` to provision a managed Python
+environment with that package on first call — no manual venv setup is
+needed. To point dMod at an existing interpreter instead (hand-managed
+venv, conda env, ...), set `DMOD_LIBSBML_PYTHON` to its absolute path.
 
-```bash
-python3 -m venv ~/.virtualenvs/libsbml
-~/.virtualenvs/libsbml/bin/pip install python-libsbml
-```
-
-The TSV / YAML readers below work without it.
+The TSV / YAML readers below work without `python-libsbml` at all.
 
 ## The bundled example
 

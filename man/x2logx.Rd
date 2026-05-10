@@ -18,11 +18,9 @@ An updated \code{eqnvec} object with transformed equations.
 Log-transform variables in an equation vector using SymPy
 }
 \details{
-The function applies a logarithmic transformation to the specified variables in the equation vector.
-For a variable \code{var}, the transformation is \code{log(var)} and the derivative \verb{d/dt log(var)} is replaced by
-\verb{(1/exp(log(var))) * d/dt var}, substituting \code{var} with \code{exp(log(var))} in the original equation.
-The original variable equations are replaced or removed, and the transformed equations are added with updated names prefixed by \code{log_}.
-The equations are simplified using SymPy to ensure mathematical correctness and compactness.
+Replaces each \code{var} in \code{whichVar} with \code{exp(log_var)} and rewrites
+the corresponding ODE for \code{log_var = log(var)}. Output equations are
+simplified via SymPy.
 }
 \examples{
 eqnvec <- as.eqnvec(

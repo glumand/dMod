@@ -7,8 +7,7 @@ context("Xs.CppODE theta-sensitivity path (heap vs stack AD slab)")
 
 test_that("Heap and stack AD slabs match on a single-condition linear model", {
 
-  setwd(tempdir())
-
+  withr::local_dir(tempdir())
   f <- c(A = "-k1*A + k2*B",
          B =  "k1*A - k2*B")
 
@@ -49,8 +48,7 @@ test_that("Heap and stack AD slabs match on a single-condition linear model", {
 
 test_that("Heap/stack parity holds with per-condition varying theta subsets", {
 
-  setwd(tempdir())
-
+  withr::local_dir(tempdir())
   f <- c(A = "-k1*A + k2*B",
          B =  "k1*A - k2*B")
 

@@ -780,7 +780,7 @@ steadyStateToolJulia <- function(
 #' @description while using non-trivial steady states, parameters can couple trough the steady states. This function applies the transformation to the parameter sets from the profiles, to account for that.
 #' 
 #' 
-#' @param profs parframe with the profiles, as returned from the \link{dMod::profile} function
+#' @param profs parframe with the profiles, as returned from the [profile()] function
 #' @param trafo parameter transformation for the steady states, as returned by `P(steadystateTrafo)`. Currently no ther formulation is supported.
 #' @param rescale character, default `"lin"` (no rescaling). The rescaling of the transformed parameters to the model scale, can be `"lin"`, `"log"`, `"log10"` or `"log2"`.
 #' 

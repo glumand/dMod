@@ -36,5 +36,5 @@ obj <- priorL2(mu = mu, lambda = "lambda")
 obj(pars = p + rnorm(length(p), 0, .1))
 }
 \seealso{
-\link{wrss}
+\link{normL2}
 }

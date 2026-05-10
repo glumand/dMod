@@ -10,6 +10,8 @@ objtimes(datatimes, eventtimes = NULL, Nobjtimes = 25)
 \item{datatimes}{times present in data}
 
 \item{eventtimes}{times present in events (not yet implemented)}
+
+\item{Nobjtimes}{number of objective time points to generate.}
 }
 \value{
 vector of times, including datatimes

@@ -36,39 +36,21 @@ for faster evaluation.}
 
 \item{verbose}{Logical. Print compiler messages.}
 
-\item{deriv2}{Logical. If \code{TRUE}, the compiled trafo additionally exposes
-second-order derivatives. The returned \code{parfn} then carries an
-\code{attr(., "deriv2")} 3D array (\verb{[p, theta, theta]}) on its output when
-called with \code{deriv2 = TRUE}. The AD backend for \code{deriv2 = TRUE} requires
-\code{compile = TRUE}. Default \code{FALSE}.}
+\item{deriv2}{Logical. If \code{TRUE}, attach a second-order derivative
+\code{attr(., "deriv2")} array of shape \verb{[p, theta, theta]}. Default \code{FALSE}.}
 
-\item{derivMode}{Character. Selects the derivative backend used by \link[CppODE:funCpp]{CppODE::funCpp}
-to evaluate the transformation Jacobian. One of \code{"dual"} (default,
-in-tree forward-mode AD via \code{evaluate}; requires \code{compile = TRUE}) or
-\code{"symbolic"} (classical SymPy Jacobian, appropriate for typically small
-parameter transformations).}
+\item{derivMode}{Character. Jacobian backend: \code{"dual"} (default,
+forward-mode AD; requires compiled native code) or \code{"symbolic"}
+(SymPy Jacobian; pure R).}
 }
 \value{
 A function of class \link{parfn}.
 }
 \description{
-The explicit parameter transformation defines a direct, algebraic mapping
-
-\deqn{p_{\text{inner}} = \mathrm{parfn}(p_{\text{outer}}),}
-
-where \eqn{\mathrm{parfn}} is a vector-valued function composed from symbolic
-expressions. Each element of \code{trafo} defines one component of
-\eqn{p_{\text{inner}}}.
-
-The \strong{Jacobian} is obtained by \strong{symbolic differentiation}.
-It is attached as attribute \code{"deriv"}
-to the resulting function output and automatically composed when
-transformations are combined via the \link{parfn} interface.
-}
-\details{
-Constructs a parameter transformation function that maps \strong{outer parameters}
-\eqn{p_{\text{outer}}} to \strong{inner parameters} \eqn{p_{\text{inner}}}
-according to symbolic expressions.
+Constructs an explicit, algebraic mapping
+\eqn{p_{\text{inner}} = \mathrm{parfn}(p_{\text{outer}})} from symbolic
+expressions. The Jacobian is obtained by symbolic differentiation and
+attached as \code{attr(., "deriv")} on each evaluation.
 }
 \seealso{
 \link{Pimpl} for implicit (steady-state) parameter transformations,

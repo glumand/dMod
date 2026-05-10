@@ -11,7 +11,7 @@
 ## reads the new schema (long conditions, experiments table, combined
 ## noiseDistribution, explicit observable/noise placeholders, no
 ## parameterScale) and translates it into the internal shapes that the
-## v1-shaped `.petab_parse_*` helpers consume — so the trafo / observation /
+## v1-shaped `.petab_parse_*` helpers consume -- so the trafo / observation /
 ## error / objective builders are unchanged. The exporter's `format_version`
 ## argument symmetrically chooses the output shape (default "2.0.0").
 ##
@@ -418,7 +418,7 @@ read_petab_tables <- function(yamlPath) {
     for (i in seq_along(eid)) {
       e <- eid[i]
       if (!nzchar(e)) {
-        # v2 spec: empty experimentId means "use model as-is" — synthesise a
+        # v2 spec: empty experimentId means "use model as-is" -- synthesise a
         # sentinel sim condition so the trafo stage has something to key on.
         sim[i]   <- "_dmod_default_condition_"
         preeq[i] <- ""
@@ -506,7 +506,7 @@ read_petab_tables <- function(yamlPath) {
   # *linear* scale, regardless of parameterScale. dMod's outer parameters
   # live on the chosen parameter scale (the trafo applies `10^x` / `exp(x)`
   # in apply_scale_chain_rule), so we pre-transform here:
-  #   log10 → log10(.),   log → log(.),   lin → identity.
+  #   log10 -> log10(.),   log -> log(.),   lin -> identity.
   to_num <- function(col) suppressWarnings(as.numeric(col))
   apply_fwd_scale <- function(values, ids) {
     sc <- scales[ids]
@@ -528,7 +528,7 @@ read_petab_tables <- function(yamlPath) {
                                      pouter_ids),
                      pouter_ids)
   # `fixed` parameters are passed straight through to the trafo as numeric
-  # constants on the *inner* (linear) scale — no scale wrapping in the
+  # constants on the *inner* (linear) scale -- no scale wrapping in the
   # trafo, so we keep linear values here regardless of parameterScale.
   fixed  <- setNames(to_num(df$nominalValue[fixed_idx]), fixed_ids)
   lower  <- setNames(apply_fwd_scale(to_num(df$lowerBound[pouter_idx]),
@@ -654,9 +654,9 @@ read_petab_tables <- function(yamlPath) {
 
 
 # Internal: classify each non-id column of conditions.tsv as
-#   "init"        — a species/state initial-value override (column name matches state)
-#   "compartment" — a compartment volume override
-#   "parameter"   — a parameter override (the catch-all, includes condition-only pars)
+#   "init"        -- a species/state initial-value override (column name matches state)
+#   "compartment" -- a compartment volume override
+#   "parameter"   -- a parameter override (the catch-all, includes condition-only pars)
 #
 # `sbml_states`        names of species in the imported eqnlist
 # `sbml_compartments`  names from reactions$compartments
@@ -742,7 +742,7 @@ read_petab_tables <- function(yamlPath) {
              m$preequilibrationConditionId)
     else rep("", nrow(m))
 
-  # read.delim infers numeric type when a column is all numeric — but PEtab
+  # read.delim infers numeric type when a column is all numeric -- but PEtab
   # observable/noise parameters can be either numeric or symbol strings, and
   # downstream substitution code requires character. Cast explicitly.
   m$observableParameters <-
@@ -761,7 +761,7 @@ read_petab_tables <- function(yamlPath) {
   # observable / noise parameter substitutions, then try to evaluate as a
   # constant. If all symbols are eliminated and the result is finite, use it
   # as sigma directly (fast path through normL2's data sigma column). If
-  # symbols remain (case 0015's "noise"), leave sigma = NA — the err model
+  # symbols remain (case 0015's "noise"), leave sigma = NA -- the err model
   # built by .petab_build_error_fn handles the per-condition formula.
   sigma <- vapply(seq_len(nrow(m)), function(i) {
     obsId <- m$observableId[i]
@@ -795,11 +795,11 @@ read_petab_tables <- function(yamlPath) {
   # Sub-condition assignment.
   #
   # PEtab `observableParameters` / `noiseParameters` columns substitute
-  # placeholders `<prefix>K_<observableId>` — i.e. they are *observable-
+  # placeholders `<prefix>K_<observableId>` -- i.e. they are *observable-
   # specific*. Two rows with different observableIds substitute disjoint
   # placeholder sets and can therefore coexist in a single trafo without
   # interference (e.g. Boehm: `noiseParameter1_pSTAT5A_rel = sd_pSTAT5A_rel`,
-  # `noiseParameter1_pSTAT5B_rel = sd_pSTAT5B_rel`, … in one sub-condition).
+  # `noiseParameter1_pSTAT5B_rel = sd_pSTAT5B_rel`, ... in one sub-condition).
   #
   # We merge whenever every (simCondId, preeq) group is observable-consistent:
   # for each observableId X in the group, all rows with `observableId == X`
@@ -807,7 +807,7 @@ read_petab_tables <- function(yamlPath) {
   # per (simCondId, preeq) pair, carrying a per-observable substitution map.
   #
   # If consistency fails (same obsId carries different tuples within the
-  # same group — e.g. replicate-specific scaling, rare), we fall back to
+  # same group -- e.g. replicate-specific scaling, rare), we fall back to
   # the per-tuple split: one sub-condition per unique (peq, obsParStr,
   # noiseParStr) tuple, with a wildcard `"*"` substitution applied to all
   # placeholders.
@@ -1015,7 +1015,7 @@ read_petab_tables <- function(yamlPath) {
   apply_row_overrides <- function(tr, cond_id, scope) {
     # scope: "all" (apply every override column),
     #        "state-only" (only init-kind columns; parameter overrides handled
-    #         elsewhere — for the Pequil pre/post stages where parameter
+    #         elsewhere -- for the Pequil pre/post stages where parameter
     #         overrides are baked into the rates).
     if (!cond_id %in% rownames(conditions)) return(tr)
     for (cn in override_cols) {
@@ -1069,7 +1069,7 @@ read_petab_tables <- function(yamlPath) {
 
     # ----- Pequil composition --------------------------------------------
     # 1. Substitute peq-row's parameter overrides directly into the reaction
-    #    rates → peq_reactions. Parameter-scale chain rule must be applied
+    #    rates -> peq_reactions. Parameter-scale chain rule must be applied
     #    *before* peq's parameter overrides, since peq overrides come from
     #    conditions.tsv (linear-scale literals) and would otherwise also be
     #    wrapped in exp/10^.
@@ -1092,7 +1092,7 @@ read_petab_tables <- function(yamlPath) {
         names(peq_param_subs), unlist(peq_param_subs), peq_reactions$rates)
     }
 
-    # 2. p_pre: outer → c(state inits with peq state overrides applied,
+    # 2. p_pre: outer -> c(state inits with peq state overrides applied,
     #    inner pars identity, observable/noise placeholders pre-substituted).
     tr_pre <- build_default()
     for (st in names(peq_state_subs)) tr_pre[st] <- peq_state_subs[[st]]
@@ -1130,7 +1130,7 @@ read_petab_tables <- function(yamlPath) {
 # trafo by overriding every inner-target whose name matches
 # <prefix>1_*, <prefix>2_*, ... with the corresponding entry in `repls`.
 # `obs_id`: when non-NULL, only placeholders whose observableId suffix equals
-# `obs_id` are substituted — this is what enables a single sub-condition trafo
+# `obs_id` are substituted -- this is what enables a single sub-condition trafo
 # to carry per-observable PEtab placeholder substitutions (e.g. Boehm's three
 # `noiseParameter1_<obsId>` slots). NULL keeps the legacy "apply to all"
 # semantics used by the per-tuple fallback path.
@@ -1155,7 +1155,7 @@ read_petab_tables <- function(yamlPath) {
 
 # Internal: apply a per-observable substitution map to a trafo. `subs` is a
 # named character vector keyed by observableId (or by "*" meaning "apply to
-# all matching placeholders regardless of observableId" — the per-tuple
+# all matching placeholders regardless of observableId" -- the per-tuple
 # fallback semantic). Each value is a ";"-separated PEtab replacement string.
 .petab_apply_subs_map <- function(tr, subs, prefix) {
   if (length(subs) == 0L) return(tr)
@@ -1172,7 +1172,7 @@ read_petab_tables <- function(yamlPath) {
 
 # Build the observation function `g`. Observables with `observableTransformation`
 # of `log` or `log10` get wrapped at construction time (`obs_b -> log10(B)`),
-# which keeps dMod's normL2 fast path on PEtab `{log,log10} × normal` cases:
+# which keeps dMod's normL2 fast path on PEtab `{log,log10} * normal` cases:
 # the residual is computed on the transformed scale on both sides of the
 # subtraction (see .petab_parse_measurements for the data side).
 .petab_build_observation_fn <- function(obs, obs_trafo, reactions,
@@ -1191,7 +1191,7 @@ read_petab_tables <- function(yamlPath) {
 }
 
 
-# Build the error model when at least one (sub-condition × observable) noise
+# Build the error model when at least one (sub-condition * observable) noise
 # formula carries free symbols after PEtab parameter substitution.
 #
 # Strategy: build a single, condition-unspecific Y over the *original*
@@ -1200,12 +1200,12 @@ read_petab_tables <- function(yamlPath) {
 # of the trafo (.petab_build_trafo adds them to obs_inner) and the trafo's
 # per-sub-condition `.petab_apply_param_substitution` rewrites them to the
 # concrete row value (numeric literal or outer-parameter symbol). At runtime
-# the post-trafo inner parameter vector pinner — which normL2 hands to the
-# err model — therefore already carries the substituted value under the
+# the post-trafo inner parameter vector pinner -- which normL2 hands to the
+# err model -- therefore already carries the substituted value under the
 # placeholder name, so a single Y suffices.
 #
 # Returns NULL when every (sub_cond, observable) noise formula evaluates to
-# a constant after substitution — sigma is then carried by the data column
+# a constant after substitution -- sigma is then carried by the data column
 # and normL2's fast path handles the likelihood without an error model.
 .petab_build_error_fn <- function(obs_meta, sub_cond_map, reactions,
                                   compile = TRUE, modelname = "petab_err") {
@@ -1238,7 +1238,7 @@ read_petab_tables <- function(yamlPath) {
 
   # f for err Y: ODE states + observable formulas (so a noise formula could
   # reference an observable, e.g. relative noise `sigma * obs_a`). We pass the
-  # *untransformed* observable formulas — the obs trafo (log/log10) doesn't
+  # *untransformed* observable formulas -- the obs trafo (log/log10) doesn't
   # propagate to the noise model; PEtab sigma already lives on the
   # transformed scale by convention.
   obs_eqnvec <- as.eqnvec(setNames(unname(unlist(obs_meta$obs)),
@@ -1412,7 +1412,7 @@ read_petab_tables <- function(yamlPath) {
 
 # Build the objective.
 #
-# Stage 2 supports `{lin, log, log10} × normal` noise: log/log10 enter via the
+# Stage 2 supports `{lin, log, log10} * normal` noise: log/log10 enter via the
 # pre-wrapped observation function (data values are matched-side transformed
 # in .petab_parse_measurements), so dMod's normL2 fast path still gives the
 # correct residual. Symbolic sigmas flow through the error model produced by
@@ -1438,17 +1438,17 @@ read_petab_tables <- function(yamlPath) {
   # PEtab's likelihood definition does not include the small-sample Bessel
   # correction that normL2 applies by default when an errmodel is present.
   # The correction also breaks numerically on the small test cases (n - p
-  # can be <= 0 → sqrt of negative → NaN).
+  # can be <= 0 -> sqrt of negative -> NaN).
   base_obj <- normL2(data = data, x = prd, errmodel = errmodel,
                      use.bessel = FALSE, cores = 1L)
 
   # Data-coordinate Jacobian for log / log10 observable transformations.
   # PEtab's likelihood is on the linear y_obs:
-  #   log L = log f_lin(y_obs) = log f_trafo(trafo(y_obs)) − log|d trafo / dy_obs|
-  # so for log:    -2 log L includes  2 * Σ log(y_obs)
-  # for log10:    -2 log L includes  2 * Σ log(y_obs · ln 10)
+  #   log L = log f_lin(y_obs) = log f_trafo(trafo(y_obs)) - log|d trafo / dy_obs|
+  # so for log:    -2 log L includes  2 * Sigma log(y_obs)
+  # for log10:    -2 log L includes  2 * Sigma log(y_obs * ln 10)
   # The offset depends only on the data, not on parameters, so gradients
-  # and Hessians are unchanged — only the absolute objective value shifts
+  # and Hessians are unchanged -- only the absolute objective value shifts
   # to match PEtab's -2*llh.
   jac_offset <- .petab_likelihood_offset(data, obs_meta)
   if (jac_offset == 0) return(base_obj)
@@ -1546,7 +1546,7 @@ read_petab_tables <- function(yamlPath) {
 #'   closure has the PEtab fixed parameters baked in, so calling
 #'   `obj(bestfit)` evaluates the likelihood at the published MLE
 #'   without the user having to pass `fixed = ...`. `bestfit` is the
-#'   PEtab `nominalValue` for every estimated parameter — for benchmark
+#'   PEtab `nominalValue` for every estimated parameter -- for benchmark
 #'   problems this is the published maximum-likelihood estimate
 #'   transported through the manifest; for user-authored problems it is
 #'   the current best estimate (and serves as the optimizer's starting
@@ -1855,7 +1855,7 @@ print.PEtabProblem <- function(x, ...) {
 ## (line 441). Given a dMod parfn `p`, we read its per-condition LHS=RHS
 ## eqnvec via `getEquations(p)`, strip the parameter-scale chain rule
 ## (replacing `10^(op)` / `exp(op)` subexpressions with bare `op`), and
-## classify each LHS — the resulting (a) constants land as SBML defaults
+## classify each LHS -- the resulting (a) constants land as SBML defaults
 ## or initialConcentrations, (b) constant symbolic mappings land as
 ## conditions.tsv columns or initialAssignments, (c) per-condition-varying
 ## mappings land as conditions.tsv override columns, (d) identity mappings
@@ -1864,7 +1864,7 @@ print.PEtabProblem <- function(x, ...) {
 
 # Internal: does `e` syntactically match the bare symbol `op_sym`, possibly
 # wrapped in redundant parentheses (`(X)` parses as a call to `(`)? dMod's
-# `repar` emits `10^(K)` which parses as `^(10, (K))` — i.e. the exponent
+# `repar` emits `10^(K)` which parses as `^(10, (K))` -- i.e. the exponent
 # slot is the parenthesis-call, not the bare K symbol. We treat both forms
 # as equivalent.
 .petab_is_bare <- function(e, op_sym) {
@@ -1877,7 +1877,7 @@ print.PEtabProblem <- function(x, ...) {
 
 # Compensate every occurrence of a single log/log10-scaled outer parameter
 # `op` inside `expr` for the importer's chain rule wrap (which substitutes
-# `op → 10^(op)` for log10 / `op → exp(op)` for log on every RHS). Two
+# `op -> 10^(op)` for log10 / `op -> exp(op)` for log on every RHS). Two
 # cases per occurrence:
 #
 #   - Direct exponent of `10^(.)` for log10 (or argument of `exp(.)` for
@@ -1890,7 +1890,7 @@ print.PEtabProblem <- function(x, ...) {
 #     expression untouched. This makes round-trip work for any
 #     algebraic combination, e.g. `10^(KM + 5)` or `K1 * K2 + offset`.
 #
-# Mixed wrap (e.g. `10^(K) + K`) is no longer ambiguous — the clean wrap
+# Mixed wrap (e.g. `10^(K) + K`) is no longer ambiguous -- the clean wrap
 # stays clean, the bare K gets compensated independently.
 .petab_compensate_chain_rule <- function(expr, op, scale) {
   op_sym  <- as.symbol(op)
@@ -1954,11 +1954,11 @@ print.PEtabProblem <- function(x, ...) {
 }
 
 # Classify a single LHS across conditions:
-#   "missing"        — at least one condition has no entry for this LHS
-#   "identity"       — every condition's RHS == LHS (importer's build_default)
-#   "const_numeric"  — every condition's RHS is the same numeric literal
-#   "const_symbolic" — every condition's RHS is the same symbolic formula
-#   "varying"        — RHS differs across conditions
+#   "missing"        -- at least one condition has no entry for this LHS
+#   "identity"       -- every condition's RHS == LHS (importer's build_default)
+#   "const_numeric"  -- every condition's RHS is the same numeric literal
+#   "const_symbolic" -- every condition's RHS is the same symbolic formula
+#   "varying"        -- RHS differs across conditions
 .petab_classify_lhs <- function(stripped_eqs, lhs, conds) {
   rhs <- vapply(conds, function(c) {
     e <- stripped_eqs[[c]]
@@ -1967,7 +1967,7 @@ print.PEtabProblem <- function(x, ...) {
   }, character(1))
   if (any(is.na(rhs))) return(list(kind = "missing"))
   if (all(rhs == lhs)) return(list(kind = "identity"))
-  # Try to collapse closed-form numeric expressions (e.g. "10^0" → 1) so they
+  # Try to collapse closed-form numeric expressions (e.g. "10^0" -> 1) so they
   # land as SBML defaults / initialConcentrations rather than conditions.tsv
   # columns referencing literal arithmetic.
   vals <- vapply(rhs, .petab_eval_constant, numeric(1))
@@ -1988,9 +1988,9 @@ print.PEtabProblem <- function(x, ...) {
 # Returns:
 #   conditions_df   data.frame with conditionId column + override columns
 #                   (NA where no override). Rownames = condition names.
-#   inits           named list keyed by state — numeric (initialConcentration)
+#   inits           named list keyed by state -- numeric (initialConcentration)
 #                   or character (initialAssignment formula).
-#   sbml_extra_pars named numeric — additional fixed-default parameters that
+#   sbml_extra_pars named numeric -- additional fixed-default parameters that
 #                   must appear in SBML so condition.tsv columns and
 #                   collapsed inner_pars resolve to a declared SId.
 .petab_decompose_trafo <- function(eqs, states, inner_pars, obs_inner,
@@ -2000,7 +2000,7 @@ print.PEtabProblem <- function(x, ...) {
   conds        <- names(eqs)
   # v1: strip 10^(...) / exp(...) wraps so they land in parameters.tsv as
   # `parameterScale = log10/log` + linear nominalValue. v2 has no
-  # parameterScale column — the trafo's wraps stay intact and end up in
+  # parameterScale column -- the trafo's wraps stay intact and end up in
   # conditions.tsv:targetValue / SBML <initialAssignment>, where v2 expects
   # parameter transformations to live.
   stripped     <- if (identical(formatVersion, 1L))
@@ -2039,7 +2039,7 @@ print.PEtabProblem <- function(x, ...) {
           # `state = 10^(state)` (when the parameter is on log10 scale).
           if (lhs %in% pouter_names || lhs %in% names(fixed))
             inits[[lhs]] <- lhs
-          # otherwise leave to the post-loop default (0) — undeclared
+          # otherwise leave to the post-loop default (0) -- undeclared
           # identity on a state means "init = 0 unless the user pouter has
           # a name match", and the trafo's getSymbols would already have
           # raised it as an undeclared symbol.
@@ -2120,41 +2120,14 @@ print.PEtabProblem <- function(x, ...) {
 #' and per-condition overrides are read off `p` and written into the
 #' corresponding PEtab tables.
 #'
-#' @section Algorithm:
-#' Given `p`, the exporter reads `getEquations(p)` (one eqnvec per
-#' condition keyed by inner-side LHS), strips the parameter-scale chain
-#' rule (replacing `10^(op)` with `op` for each `op` declared on log10
-#' scale; symmetric for `log`), and classifies each LHS. The
-#' classification drives where the mapping is emitted:
-#' \itemize{
-#'   \item Constant-numeric state inits → SBML `<initialConcentration>`.
-#'   \item Constant-symbolic state inits → SBML `<initialAssignment>`.
-#'   \item Constant-symbolic inner-parameter mappings → conditions.tsv
-#'         column with the same value in every row.
-#'   \item Per-condition-varying mappings → conditions.tsv column with
-#'         per-row values.
-#'   \item Identity mappings (RHS == LHS) → emitted nowhere; the importer's
-#'         `build_default` reproduces them.
-#' }
-#' Inner parameters that survive only as conditions.tsv overrides (or
-#' collapsed-numeric SBML defaults) are appended to `fixed` with placeholder
-#' values so the SBML model declares them as SIds and the importer's
-#' required-symbol check finds them.
-#'
 #' @section Limitations:
-#' \itemize{
-#'   \item Pre-equilibration cannot be expressed via the trafo `p` alone.
-#'         Use [exportPEtabObject()], which takes a full `petabProblem`,
-#'         when the problem needs pre-equilibration.
-#'   \item Fixed parameters are always written with `parameterScale = "lin"`
-#'         (PEtab+dMod convention; cf. `exportPEtabObject` line 1387).
-#'         Wrapping a fixed-name in `10^(.)` inside the trafo will trigger
-#'         the mixed-wrap error.
-#' }
+#' Pre-equilibration cannot be expressed through the trafo `p` alone — use
+#' [exportPEtabObject()] for those problems. Fixed parameters are always
+#' written with `parameterScale = "lin"`.
 #'
 #' @param data A [datalist] (or a list of data.frames keyed by condition,
 #'   each with `name`, `time`, `value` columns; or a long-format data.frame
-#'   that [as.datalist()] accepts). Only used as the measurement source —
+#'   that [as.datalist()] accepts). Only used as the measurement source --
 #'   `attr(data, "condition.grid")` is ignored.
 #' @param reactions An [eqnlist] describing the ODE network.
 #' @param observables Observable formulas keyed by observableId. Accepts a
@@ -2175,9 +2148,9 @@ print.PEtabProblem <- function(x, ...) {
 #' @param parameterScale Scalar `"lin"`/`"log"`/`"log10"` (broadcast to all
 #'   names in `pouter`) or a named character vector keyed by parameterId.
 #'   Defaults to `"log10"` (matches dMod's `insert("x ~ 10^X", ...)` idiom).
-#' @param observableTransformation Scalar or named character —
+#' @param observableTransformation Scalar or named character --
 #'   `"lin"`/`"log"`/`"log10"` per observableId.
-#' @param noiseDistribution Scalar or named character — `"normal"`/
+#' @param noiseDistribution Scalar or named character -- `"normal"`/
 #'   `"laplace"`/`"log-normal"` per observableId.
 #' @param modelID SBML model identifier; defaults to `"dMod_export"`.
 #' @param dir Output directory; created if missing.
@@ -2206,12 +2179,12 @@ exportPEtab <- function(data, reactions, observables, p, pouter,
 
   ## --- 2. extract per-condition trafo from p ------------------------------
   if (!is.function(p) || is.null(attr(p, "mappings")))
-    stop("`p` must be a parfn produced by P() — needed to decompose the parameter trafo.")
+    stop("`p` must be a parfn produced by P() -- needed to decompose the parameter trafo.")
   eqs <- getEquations(p)
   if (!is.list(eqs)) eqs <- list(eqs)
   conds <- names(eqs)
   if (is.null(conds) || any(!nzchar(conds)))
-    stop("`getEquations(p)` returned an unnamed list — every condition must have a name.")
+    stop("`getEquations(p)` returned an unnamed list -- every condition must have a name.")
 
   ## --- 3. reactions / observables / errors --------------------------------
   if (!inherits(reactions, "eqnlist"))
@@ -2273,7 +2246,7 @@ exportPEtab <- function(data, reactions, observables, p, pouter,
                        c(states, inner_pars, "time"))
   # PEtab placeholders (`observableParameter<k>_<obsId>` /
   # `noiseParameter<k>_<obsId>`) are spec sentinels bound per-row in
-  # measurements.tsv, not real inner parameters — strip them so the
+  # measurements.tsv, not real inner parameters -- strip them so the
   # trafo decomposer doesn't expect a mapping for them. Mirror of the
   # importer's filter at the required-symbol gap-fill (line 935-938).
   obs_inner <- obs_inner[!grepl(
@@ -2302,7 +2275,7 @@ exportPEtab <- function(data, reactions, observables, p, pouter,
   if (length(bad))
     stop("Unknown parameterScale(s): ", paste(bad, collapse = ", "))
 
-  # v2 has no parameterScale column — the trafo `p` already encodes the
+  # v2 has no parameterScale column -- the trafo `p` already encodes the
   # scale via `10^(...)` / `exp(...)` wraps in its equations, which the v2
   # exporter keeps intact (see `.petab_decompose_trafo`). Force lin so
   # downstream code doesn't strip those wraps.
@@ -2318,7 +2291,7 @@ exportPEtab <- function(data, reactions, observables, p, pouter,
   }
 
   # Fixed parameters MUST be linear (PEtab+dMod convention; see
-  # exportPEtabObject:1387 — fixed always written as parameterScale="lin").
+  # exportPEtabObject:1387 -- fixed always written as parameterScale="lin").
   scales_fixed <- setNames(rep("lin", length(fixed)), names(fixed))
   scales_all   <- c(scales_pouter, scales_fixed)
 
@@ -2551,9 +2524,9 @@ exportPEtabObject <- function(petab, dir, modelID = NULL,
   param_meta   <- meta$param_meta   %||% petab$param_meta
   # Prefer the original PEtab conditions table (saved by importPEtab) over
   # the dMod-internal condition.grid, which only echoes conditionIds and
-  # loses the override columns (a0, k1, …) that live on the per-condition
+  # loses the override columns (a0, k1, ...) that live on the per-condition
   # trafo. exportPEtab synthesises its own cond_grid via the trafo
-  # decomposer and stashes it in petab$condition.grid — that path is also
+  # decomposer and stashes it in petab$condition.grid -- that path is also
   # honoured.
   cond_grid <- meta$cond_grid
   if (is.null(cond_grid))
@@ -2628,7 +2601,7 @@ exportPEtabObject <- function(petab, dir, modelID = NULL,
     ) else NULL
   } else {
     # v2 has no parameterScale column. The parameter transformation lives
-    # on the trafo `p` (and via export — in conditions.tsv:targetValue or
+    # on the trafo `p` (and via export -- in conditions.tsv:targetValue or
     # SBML <initialAssignment>), so the literal value of the outer
     # parameter is what goes into nominalValue. No inverse-scaling and no
     # warning: the optimisation scale is preserved through the wraps in
@@ -2651,7 +2624,7 @@ exportPEtabObject <- function(petab, dir, modelID = NULL,
     fixed_df <- NULL
   }
 
-  # Round-trip priors (constraintL2 → priorDistribution / priorParameters).
+  # Round-trip priors (constraintL2 -> priorDistribution / priorParameters).
   # We emit `parameterScaleNormal` on every prior'd row regardless of the
   # original PEtab distribution: dMod's L2 prior acts on the parameter as
   # the optimizer sees it (i.e. on parameterScale), so this is the
@@ -2762,7 +2735,7 @@ exportPEtabObject <- function(petab, dir, modelID = NULL,
   } else {
     # long-format: one row per (conditionId, targetId) override.
     # Skip the dMod-internal `condition` column whose values just echo
-    # conditionId — it's a `as.datalist` artifact, not a real override.
+    # conditionId -- it's a `as.datalist` artifact, not a real override.
     rows <- list()
     cg_cols <- setdiff(colnames(cond_grid), c("conditionId", "condition"))
     for (cid in uniq_conds) {

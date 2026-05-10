@@ -1,7 +1,6 @@
 test_that("Pequil deriv2 reproduces analytical equilibrium Hessian", {
   prev <- getwd(); on.exit(setwd(prev), add = TRUE)
-  setwd(tempdir())
-
+  withr::local_dir(tempdir())
   trafo <- c(x = "-k * x + s")  # x* = s/k
   p <- Pequil(trafo, parameters = c("k", "s"),
               modelname = paste0("equil_lin_d2_", as.integer(Sys.time())),
@@ -58,8 +57,7 @@ test_that("Pequil(deriv2 = TRUE) emits <m>, <m>_s, <m>_s2 and dispatches", {
 
 test_that("Pequil(deriv2 = FALSE) refuses deriv2 = TRUE at call time", {
   prev <- getwd(); on.exit(setwd(prev), add = TRUE)
-  setwd(tempdir())
-
+  withr::local_dir(tempdir())
   trafo <- c(x = "-k*x + s")
   p <- Pequil(trafo, parameters = c("k", "s"),
               modelname = paste0("equil_nod2_", as.integer(Sys.time())),

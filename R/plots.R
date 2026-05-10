@@ -63,8 +63,8 @@ theme_dMod <- function(base_size = 12, base_family = "") {
 dMod_colors <- c("#000000", "#C5000B", "#0084D1", "#579D1C", "#FF950E", "#4B1F6F", "#CC79A7","#006400", "#F0E442", "#8B4513", rep("gray", 100))
 
 #' Standard dMod color palette
-#' 
-#' @param ... arguments goint to code{scale_color_manual()}
+#'
+#' @param ... arguments going to \code{scale_color_manual()}
 #' @export
 #' @examples
 #' library(ggplot2)
@@ -84,9 +84,9 @@ scale_color_dMod <- function(...) {
 
 
 #' Standard dMod color scheme
-#' 
+#'
 #' @export
-#' @param ... arguments goint to code{scale_color_manual()}
+#' @param ... arguments going to \code{scale_color_manual()}
 scale_fill_dMod <- function(...) {
   scale_fill_manual(..., values = dMod_colors)
 }
@@ -352,56 +352,54 @@ plotPaths <- function(profs, ..., whichPar = NULL, sort = FALSE, relative = TRUE
 
 
 #' Plot Fluxes given a list of flux Equations
-#' 
+#'
 #' @param pouter parameters
-#' @param x The model prediction function `x(times, pouter, fixed, ...)` 
-#' @param fluxEquations list of chars containing expressions for the fluxes, 
+#' @param x The model prediction function `x(times, pouter, fixed, ...)`
+#' @param fluxEquations list of chars containing expressions for the fluxes,
 #' if names are given, they are shown in the legend. Easy to obtain via [subset.eqnlist], see Examples.
 #' @param nameFlux character, name of the legend.
 #' @param times Numeric vector of time points for the model prediction
 #' @param ... Further arguments going to x, such as `fixed` or `conditions`
-#'  
-#' 
+#'
+#'
 #' @return A plot object of class `ggplot`.
-#' @examples 
+#' @examples
 #' \dontrun{
-#' 
+#'
 #' plotFluxes(bestfit, x, times, subset(f, "B"%in%Product)$rates, nameFlux = "B production")
 #' }
 #' @export
 plotFluxes <- function(pouter, x, times, fluxEquations, nameFlux = "Fluxes:", ...){
-  
+
   if (is.null(names(fluxEquations))) names(fluxEquations) <- fluxEquations
-  
-  flux <- funC0(fluxEquations, convenient = FALSE)
+
+  flux <- funCpp(fluxEquations, convenient = FALSE)$func
   prediction.all <- x(times, pouter, deriv = FALSE, ...)
   names.prediction.all <- names(prediction.all)
   if (is.null(names.prediction.all)) names.prediction.all <- paste0("C", 1:length(prediction.all))
-  
+
   out <- lapply(1:length(prediction.all), function(cond) {
     prediction <- prediction.all[[cond]]
     pinner <- attr(prediction, "parameters")
-    pinner.matrix <- matrix(pinner, nrow = length(pinner), ncol = nrow(prediction), 
+    pinner.matrix <- matrix(pinner, nrow = length(pinner), ncol = nrow(prediction),
                             dimnames = list(names(pinner), NULL))
-    #pinner.list <- as.list(pinner)
-    #prediction.list <- as.list(as.data.frame(prediction))
     fluxes <- cbind(time = prediction[, "time"], flux(cbind(prediction, t(pinner.matrix))))
     return(fluxes)
   }); names(out) <- names.prediction.all
   out <- wide2long(out)
-  
-  cbPalette <- c("#999999", "#E69F00", "#F0E442", "#56B4E9", "#009E73", "#0072B2", 
+
+  cbPalette <- c("#999999", "#E69F00", "#F0E442", "#56B4E9", "#009E73", "#0072B2",
                  "#D55E00", "#CC79A7","#CC6666", "#9999CC", "#66CC99","red", "blue", "green","black")
-  
-  P <- ggplot(out, aes(x = time, y = value, group = name, fill = name, log = "y")) + 
+
+  P <- ggplot(out, aes(x = time, y = value, group = name, fill = name, log = "y")) +
     facet_wrap(~condition) + scale_fill_manual(values = cbPalette, name = nameFlux) +
-    geom_density(stat = "identity", position = "stack", alpha = 0.3, color = "darkgrey", size = 0.4) +
+    geom_density(stat = "identity", position = "stack", alpha = 0.3, color = "darkgrey", linewidth = 0.4) +
     xlab("time") + ylab("flux contribution")
-   
+
   attr(P, "out") <- out
-  
+
   return(P)
-  
+
 }
 
 

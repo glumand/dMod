@@ -19,10 +19,9 @@ Pimpl(
 }
 \arguments{
 \item{trafo}{Named character vector, \code{\link{eqnvec}}, or
-\code{\link{eqnlist}} defining the equations to be set to zero.
-For \code{eqnlist} inputs, conserved quantities are detected and
-eliminated species are substituted automatically. The user then
-provides \code{total_*} parameters instead of the eliminated species.}
+\code{\link{eqnlist}} defining the equations to be set to zero. For
+\code{eqnlist} inputs, conserved quantities are auto-detected and
+eliminated species replaced by \code{total_*} parameters.}
 
 \item{parameters}{Character vector, the independent variables.}
 

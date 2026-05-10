@@ -2,12 +2,39 @@
 % Please edit documentation in R/prediction.R
 \name{Xs}
 \alias{Xs}
+\alias{Xs.deSolve}
+\alias{Xs.CppODE}
 \title{Model prediction function for ODE models.}
 \usage{
 Xs(odemodel, ...)
+
+\method{Xs}{deSolve}(
+  odemodel,
+  forcings = NULL,
+  events = NULL,
+  names = NULL,
+  condition = NULL,
+  optionsOde = list(method = "lsoda"),
+  optionsSens = list(method = "lsodes"),
+  fcontrol = NULL,
+  ...
+)
+
+\method{Xs}{CppODE}(
+  odemodel,
+  forcings = NULL,
+  events = NULL,
+  names = NULL,
+  condition = NULL,
+  optionsOde = list(),
+  optionsSens = list(),
+  ...
+)
 }
 \arguments{
 \item{odemodel}{object of class 'odemodel' or 'odemodel++', see \link{odemodel}}
+
+\item{...}{Additional arguments passed to methods.}
 
 \item{forcings}{data.frame with columns name (factor), time (numeric) and value (numeric).
 The ODE forcings. Forcing support for the CppODE / Sundials backends depends
@@ -32,11 +59,9 @@ the condition for which the function makes a prediction.}
 See \link[stats:approxfun]{approxfun} for possible arguments.}
 }
 \value{
-Object of class \link{prdfn}. If the function is called with parameters that
-result from a parameter transformation (see \link{P}), the Jacobian of the parameter transformation
-and the sensitivities of the ODE are multiplied according to the chain rule for
-differentiation. The result is saved in the attributed "deriv",
-i.e. in this case the attibutes "deriv" and "sensitivities" do not coincide.
+Object of class \link{prdfn}. When called with transformed parameters
+(see \link{P}), the chain rule is applied automatically; the result is
+stored in \code{attr(., "deriv")} (which then differs from \code{"sensitivities"}).
 }
 \description{
 Interface to combine an ODE and its sensitivity equations

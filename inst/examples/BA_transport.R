@@ -69,7 +69,7 @@ times <- seq(0, 45, len = 300)
 # debugonce(g)
 out <- prd(times, pouter, deriv2 = TRUE)
 plot(out, data)
-plot(getDerivs2(out))
+plot(getDerivs(out))
 
 myderivs2 <- getDerivs2(out)
 # Define objective function
@@ -86,7 +86,7 @@ plot(mypred, data)
 
 obj(myfit$argument)
 
-system.time({obj(myfit$argument)})
+system.time({obj(myfit$argument, deriv2 = T)})
 ## Handling different experimental conditions
 
 # Parameter Trafo, usage of "+" operator for trafo functions (output of P())

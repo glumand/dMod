@@ -7,7 +7,7 @@
 addTrafoForPaths(profs, trafo, rescale = c("lin", "log", "log10", "log2")[1])
 }
 \arguments{
-\item{profs}{parframe with the profiles, as returned from the \link{dMod::profile} function}
+\item{profs}{parframe with the profiles, as returned from the \code{\link[=profile]{profile()}} function}
 
 \item{trafo}{parameter transformation for the steady states, as returned by \code{P(steadystateTrafo)}. Currently no ther formulation is supported.}
 

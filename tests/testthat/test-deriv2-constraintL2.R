@@ -1,7 +1,6 @@
 test_that("constraintL2 deriv2 adds gi . dP2 chain term after Pexpl", {
   prev <- getwd(); on.exit(setwd(prev), add = TRUE)
-  setwd(tempdir())
-
+  withr::local_dir(tempdir())
   # Pexpl: a = exp(la). Then constraintL2(mu = mu_a, sigma = s) on `a`,
   # composed via attr(p, "deriv") and attr(p, "deriv2") from Pexpl.
   pfn <- Pexpl(c(a = "exp(la)"), parameters = NULL,

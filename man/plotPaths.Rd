@@ -5,7 +5,7 @@
 \alias{plotPaths}
 \title{Profile likelihood: plot of the parameter paths.}
 \usage{
-plotPaths.tbl_df(dMod.frame, hypothesis = 1, ...)
+plotPaths.tbl_df(profs, hypothesis = 1, ...)
 
 plotPaths(
   profs,
@@ -17,11 +17,11 @@ plotPaths(
 )
 }
 \arguments{
+\item{profs}{profile or list of profiles as being returned by \link{profile}}
+
 \item{hypothesis}{numeric, can be longer than 1}
 
 \item{...}{arguments going to subset}
-
-\item{profs}{profile or list of profiles as being returned by \link{profile}}
 
 \item{whichPar}{Character or index vector, indicating the parameters that are taken as possible reference (x-axis)}
 

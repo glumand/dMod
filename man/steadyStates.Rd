@@ -2,7 +2,7 @@
 % Please edit documentation in R/steadyStates.R
 \name{steadyStates}
 \alias{steadyStates}
-\title{Calculate analytical steady states.}
+\title{Calculate analytical steady states}
 \usage{
 steadyStates(
   model,
@@ -35,11 +35,9 @@ pB") works also. If NULL, conserved quantities are automatically calculated.}
 \item{neglect}{Character vector with names of states and parameters that must
 not be used for solving the steady-state equations}
 
-\item{sparsifyLevel}{numeric, Upper bound for length of linear combinations
-used for simplifying the stoichiometric matrix. Only used for versions
-\code{"1.0"} and \code{"1.1"}. Ignored (no-op) in \code{"1.2"}, which
-relies on the priority-table cycle-breaking heuristic instead — kept for
-signature compatibility. Default changed to \code{0} for v1.2.}
+\item{sparsifyLevel}{Numeric. Upper bound for length of linear combinations
+used to simplify the stoichiometric matrix. Used by versions \code{"1.0"}
+and \code{"1.1"}; ignored by \code{"1.2"}.}
 
 \item{outputFormat}{Define the output format. By default "R" generating dMod
 compatible output. To obtain an output appropriate for d2d [3] "M" must be
@@ -49,67 +47,27 @@ selected.}
 states is numerically checked (this can be very time intensive). If "F" this
 is skipped. Ignored for version "1.0" (always tests).}
 
-\item{walltime}{integer, total wall-clock time budget in seconds for the
-solver (default 0 = unlimited). Used for version "1.2". When the budget
-is reached during the final simplification pass, any remaining
-expressions are left in their cancelled-but-not-simplified form (still
-mathematically correct, just bulkier).}
+\item{walltime}{Integer, wall-clock budget in seconds for the solver
+(default \code{0} = unlimited). Version "1.2" only.}
 
-\item{simplify}{Controls the final simplification pass. One of:
-\itemize{
-\item \code{TRUE} (default): each final steady-state expression is
-passed through \code{sympy.simplify} once, at the end of the
-pipeline.
-\item \code{FALSE}: skip the final simplification entirely — fastest,
-but output may be bulkier (expressions stay in \code{cancel()}
-normal form).
-\item \code{"full"}: aggressive pipeline per expression —
-\code{cancel} then \code{posify} then
-\code{simplify(ratio = oo, rational = TRUE)} then separate
-\code{factor} of numerator and denominator. Noticeably slower,
-but often yields more compact formulas (especially when
-positivity of rate constants enables further cancellation).
-}
-Simplification is never applied inside the solve loop (which was the
-main bottleneck in previous releases). Used for version "1.2" only.
-For very large models prefer \code{simplify = FALSE} up-front, or
-rely on \code{walltime} to abort the simplify pass gracefully once
-enough expressions have been processed.}
+\item{simplify}{Final-simplification mode. One of \code{TRUE} (default,
+\code{sympy.simplify} once per expression), \code{FALSE} (skip; fastest, bulkier
+output), or \code{"full"} (aggressive \code{cancel}/\code{posify}/\code{simplify}/\code{factor}
+pipeline; slower but more compact). Version "1.2" only.}
 
-\item{version}{Character, which AlyssaPetit backend to use. One of
-\code{"1.0"}, \code{"1.1"}, or \code{"1.2"} (default).}
+\item{version}{Character, AlyssaPetit backend version. One of
+\code{"1.0"} (original), \code{"1.1"} (adds \code{testSteady}), or
+\code{"1.2"} (default; sink-cluster detection, \code{walltime},
+priority-table cycle breaking, end-of-pipeline \code{simplify} toggle).}
 }
 \value{
 Named character vector of steady-state equations (dMod compatible).
 }
 \description{
-This function follows the method published in [1]. Find the
-latest version of the tool and some examples under [2]. The determined
-steady-state solution is tailored to parameter estimation. Please note that
-kinetic parameters might be fixed for solution of steady-state equations.
-Note that additional parameters might be introduced to ensure positivity of
-the solution.
-
-The function calls a python script via the reticulate package.
-Use python3.x
-
-Three versions of the AlyssaPetit backend are available:
-\itemize{
-\item \code{"1.0"}: Original version. No steady-state test toggle.
-\item \code{"1.1"}: Adds the \code{testSteady} option to skip
-verification.
-\item \code{"1.2"} (default): Like v1.1 with structural sink-cluster
-detection (states without a protected mass source are set to 0 a
-priori), optional \code{walltime}, direct linear solves instead of
-\code{sympy.solve()} in the remaining-equations phase, and an
-end-of-pipeline \code{simplify} toggle. Cycle breaking uses a
-global priority table (idea and sort criteria ported from Severin
-Bang's Julia reimplementation) which replaces the previous
-first-cycle \code{GetBestPair} heuristic AND the numpy
-sparsification step — the table's \code{type} classification
-implicitly penalises cycle-creating resolutions, so an a-priori
-compacted stoichiometry is no longer needed.
-}
+Computes symbolic steady-state expressions tailored to parameter estimation
+via the AlyssaPetit method (see references). Calls a Python script via
+reticulate (Python 3.x). Three solver versions are selectable via the
+\code{version} argument; see that parameter for details.
 }
 \examples{
 

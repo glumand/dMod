@@ -26,7 +26,7 @@ exportPEtab(
 \arguments{
 \item{data}{A \link{datalist} (or a list of data.frames keyed by condition,
 each with \code{name}, \code{time}, \code{value} columns; or a long-format data.frame
-that \code{\link[=as.datalist]{as.datalist()}} accepts). Only used as the measurement source —
+that \code{\link[=as.datalist]{as.datalist()}} accepts). Only used as the measurement source --
 \code{attr(data, "condition.grid")} is ignored.}
 
 \item{reactions}{An \link{eqnlist} describing the ODE network.}
@@ -56,10 +56,10 @@ on the linear scale.}
 names in \code{pouter}) or a named character vector keyed by parameterId.
 Defaults to \code{"log10"} (matches dMod's \code{insert("x ~ 10^X", ...)} idiom).}
 
-\item{observableTransformation}{Scalar or named character —
+\item{observableTransformation}{Scalar or named character --
 \code{"lin"}/\code{"log"}/\code{"log10"} per observableId.}
 
-\item{noiseDistribution}{Scalar or named character — \code{"normal"}/
+\item{noiseDistribution}{Scalar or named character -- \code{"normal"}/
 \code{"laplace"}/\code{"log-normal"} per observableId.}
 
 \item{modelID}{SBML model identifier; defaults to \code{"dMod_export"}.}
@@ -83,40 +83,11 @@ writes an experiments TSV). Output format is selected via
 and per-condition overrides are read off \code{p} and written into the
 corresponding PEtab tables.
 }
-\section{Algorithm}{
-
-Given \code{p}, the exporter reads \code{getEquations(p)} (one eqnvec per
-condition keyed by inner-side LHS), strips the parameter-scale chain
-rule (replacing \code{10^(op)} with \code{op} for each \code{op} declared on log10
-scale; symmetric for \code{log}), and classifies each LHS. The
-classification drives where the mapping is emitted:
-\itemize{
-\item Constant-numeric state inits → SBML \verb{<initialConcentration>}.
-\item Constant-symbolic state inits → SBML \verb{<initialAssignment>}.
-\item Constant-symbolic inner-parameter mappings → conditions.tsv
-column with the same value in every row.
-\item Per-condition-varying mappings → conditions.tsv column with
-per-row values.
-\item Identity mappings (RHS == LHS) → emitted nowhere; the importer's
-\code{build_default} reproduces them.
-}
-Inner parameters that survive only as conditions.tsv overrides (or
-collapsed-numeric SBML defaults) are appended to \code{fixed} with placeholder
-values so the SBML model declares them as SIds and the importer's
-required-symbol check finds them.
-}
-
 \section{Limitations}{
 
-\itemize{
-\item Pre-equilibration cannot be expressed via the trafo \code{p} alone.
-Use \code{\link[=exportPEtabObject]{exportPEtabObject()}}, which takes a full \code{petabProblem},
-when the problem needs pre-equilibration.
-\item Fixed parameters are always written with \code{parameterScale = "lin"}
-(PEtab+dMod convention; cf. \code{exportPEtabObject} line 1387).
-Wrapping a fixed-name in \code{10^(.)} inside the trafo will trigger
-the mixed-wrap error.
-}
+Pre-equilibration cannot be expressed through the trafo \code{p} alone — use
+\code{\link[=exportPEtabObject]{exportPEtabObject()}} for those problems. Fixed parameters are always
+written with \code{parameterScale = "lin"}.
 }
 
 \seealso{

@@ -11,31 +11,30 @@ Description: The framework provides functions to generate ODEs of reaction
     used for optimization whenever possible. Therefore, all major functions produce
     and can handle expressions for symbolic derivatives.
 License: GPL (>= 2)
-Depends: R (>= 4.5.0), cOde (>= 1.1)
+Depends: R (>= 4.5.0)
 Imports:
-    deSolve,
-    rootSolve,
+    cOde (>= 1.1),
+    CppODE,
     ggplot2,
     parallel,
     stringr,
-    plyr,
     dplyr,
     foreach,
     doParallel,
     rjson,
-    stringr,
-    crayon,
     yaml,
     rlang,
     data.table,
     purrr,
+    tidyselect,
     abind,
     optimx,
     reticulate,
     Rcpp,
     cowplot,
     digest,
-    nleqslv
+    nleqslv,
+    scales
 Remotes:
     simonbeyer1/CppODE
 Suggests:
@@ -43,9 +42,17 @@ Suggests:
     pander,
     knitr,
     rmarkdown,
+    testthat (>= 3.0.0),
+    numDeriv,
+    withr,
+    deSolve,
+    JuliaCall,
+    openxlsx,
+    rPython
 VignetteBuilder: knitr
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 LinkingTo: 
     Rcpp
-Config/roxygen2/version: 8.0.0
+Config/roxygen2/version: 7.3.3
+RoxygenNote: 7.3.3

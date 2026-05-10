@@ -19,6 +19,7 @@ Thumbs.db
 *.tar.gz
 *.Rcheck/
 .Rcheck/
+check/
 inst/doc/
 
 # -------------------------------------------------
@@ -52,6 +53,35 @@ deriv2Tests/wd/
 *.so
 *.dll
 .positai
+
+# -------------------------------------------------
+# Test-time codegen (cOde / CppODE write per-test C/C++ files
+# into tests/testthat/; they're ephemeral and must not be tracked).
+# bloq_*.cpp, obsfn.cpp and expl_parfn_*.cpp are tracked fixtures,
+# so the ignore patterns below stay narrow on purpose.
+# -------------------------------------------------
+tests/testthat/*.c
+tests/testthat/odemodel*.cpp
+tests/testthat/decay_des_*
+tests/testthat/petab_fixture_*
+tests/testthat/rep_trafo_*
+tests/testthat/focei_*
+tests/testthat/bloq_p_*.c
+tests/testthat/reactions_for_Alyssa_model.csv
+# tracked-fixture allowlist (in case * patterns above ever broaden)
+!tests/testthat/bloq_err.cpp
+!tests/testthat/bloq_obs.cpp
+!tests/testthat/bloq_p_C1.cpp
+!tests/testthat/bloq_p_err_C1.cpp
+!tests/testthat/expl_parfn_C1.cpp
+!tests/testthat/expl_parfn_steady.cpp
+!tests/testthat/obsfn.cpp
+
+# -------------------------------------------------
+# Python caches (inst/code helpers shelled out via reticulate)
+# -------------------------------------------------
+__pycache__/
+*.pyc
 
 # -------------------------------------------------
 # Claude stuff

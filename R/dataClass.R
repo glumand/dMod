@@ -268,18 +268,20 @@ as.data.frame.datalist <- function(x, ...) {
 
 #' Access the covariates in the data
 #'
-#' @param x Either a [datalist] or a `data.frame` with mandatory 
+#' @param x Either a [datalist] or a `data.frame` with mandatory
 #' columns `c("name", "time", "value", "sigma", "lloq")`.
+#' @param ... Additional arguments forwarded to methods (e.g. `hypothesis`
+#'   for the `tbl_df` method).
 #'
 #' @return The `condition.grid` of the data
 #' @export
-covariates <- function(x) {
+covariates <- function(x, ...) {
   UseMethod("covariates", x)
 }
 
 #' @export
 #' @rdname covariates
-covariates.datalist <- function(x) {
+covariates.datalist <- function(x, ...) {
 
   attr(x, "condition.grid")
 
@@ -287,7 +289,7 @@ covariates.datalist <- function(x) {
 
 #' @export
 #' @rdname covariates
-covariates.data.frame <- function(x) {
+covariates.data.frame <- function(x, ...) {
 
   exclude <- c("name", "time", "value", "sigma", "lloq")
   contains.condition <- "condition" %in% colnames(x)

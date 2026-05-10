@@ -37,31 +37,25 @@ derived from \code{f} and \code{g}.}
 \item{condition}{Either \code{NULL} (generic prediction for any condition) or a character
 string specifying the condition for which the function generates predictions.}
 
-\item{attach.input}{Logical, indicating whether the original model input should be
-included in the output.}
+\item{attach.input}{Logical, indicating whether the original model input
+should be included in the output.}
 
-\item{compile}{Logical, if \code{TRUE}, the function is compiled (see \link[CppODE:funCpp]{CppODE::funCpp}).}
+\item{compile}{Logical, if \code{TRUE}, the function is compiled (see
+\link[CppODE:funCpp]{CppODE::funCpp}).}
 
-\item{modelname}{Character, used if \code{compile = TRUE}, specifies a fixed filename
-for the generated C file.}
+\item{modelname}{Character, used if \code{compile = TRUE}, specifies a fixed
+filename for the generated C file.}
 
 \item{verbose}{Logical, print compiler output to the R console.}
 
-\item{deriv2}{Logical. If \code{TRUE}, the compiled observation function
-additionally exposes second-order derivatives. The returned \code{obsfn} then
-carries an \code{attr(., "deriv2")} 4D array (\verb{[time, observable, theta, theta]})
-on its output when called with \code{deriv2 = TRUE}. The AD backend for
-\code{deriv2 = TRUE} requires \code{compile = TRUE}. Default \code{FALSE}.}
+\item{deriv2}{Logical. If \code{TRUE}, attach a second-order derivative
+\code{attr(., "deriv2")} array of shape \verb{[time, observable, theta, theta]}.
+Default \code{FALSE}.}
 
-\item{derivMode}{Character. Selects the derivative backend used by \link[CppODE:funCpp]{CppODE::funCpp}
-to evaluate observation Jacobians. One of \code{"dual"} (default, in-tree
-forward-mode AD via \code{evaluate}, typically faster when the number of
-fitted parameters is large; requires \code{compile = TRUE}) or \code{"symbolic"}
-(classical SymPy Jacobian followed by an explicit chain rule against
-the upstream \code{dX}/\code{dP}).}
-
-\item{deriv}{Logical, if \code{TRUE}, the function evaluates first-order derivatives
-of observables with respect to parameters.}
+\item{derivMode}{Character. Jacobian backend: \code{"dual"} (default,
+forward-mode AD; faster for many parameters; requires compiled native
+code) or \code{"symbolic"} (SymPy Jacobian + chain rule against upstream
+\code{dX}/\code{dP}; pure R).}
 }
 \value{
 An object of class \link{obsfn}, i.e. a function  \code{g(..., fixed = NULL, deriv = TRUE, condition = NULL, env = NULL)}

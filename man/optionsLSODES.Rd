@@ -71,9 +71,21 @@ optionsLSODA(
   maxsteps = 5000
 )
 }
+\arguments{
+\item{rtol, atol, hmin, hmax, hini, maxord, maxsteps, verbose, nroot, tcrit, ynames, rootfunc}{Passed through to the underlying deSolve solver.}
+
+\item{jacvec, sparsetype, nnz, inz, lrw, liw}{lsodes-specific solver controls.}
+
+\item{jacfunc, jactype, mf, bandup, banddown}{lsode/lsoda-specific solver controls.}
+
+\item{rpar, ipar, nout, outnames}{Output-aux controls forwarded to deSolve.}
+
+\item{maxordn, maxords}{Stiff/non-stiff method order limits (lsoda).}
+}
 \value{
-List of arguments
+List with first entry \code{method = ...} followed by the named args.
 }
 \description{
-Get default arguments for integrators
+Convenience wrappers returning a \code{list(method = ..., ...)} of solver
+options for \code{\link[deSolve:lsodes]{deSolve::lsodes()}} / \code{\link[deSolve:lsode]{deSolve::lsode()}} / \code{\link[deSolve:lsoda]{deSolve::lsoda()}}.
 }

@@ -23,7 +23,11 @@ saveShiny_dMod.frame(
 
 \item{pubref}{character. pubmed link or similar}
 
+\item{fixed}{Named numeric of fixed parameters (defaults to the row's \code{fixed}).}
+
 \item{projectname}{Name of the folder being created on fermi}
+
+\item{appfolder}{Server-side directory where the Shiny app is deployed.}
 }
 \description{
 SaveShiny for dMod.frames

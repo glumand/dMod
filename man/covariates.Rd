@@ -7,19 +7,22 @@
 \alias{covariates.data.frame}
 \title{Access the covariates in the data}
 \usage{
-\method{covariates}{tbl_df}(x, hypothesis = 1)
+\method{covariates}{tbl_df}(x, hypothesis = 1, ...)
 
-covariates(x)
+covariates(x, ...)
 
-\method{covariates}{datalist}(x)
+\method{covariates}{datalist}(x, ...)
 
-\method{covariates}{data.frame}(x)
+\method{covariates}{data.frame}(x, ...)
 }
 \arguments{
 \item{x}{Either a \link{datalist} or a \code{data.frame} with mandatory
 columns \code{c("name", "time", "value", "sigma", "lloq")}.}
 
 \item{hypothesis}{The hypothesis in the dMod.frame}
+
+\item{...}{Additional arguments forwarded to methods (e.g. \code{hypothesis}
+for the \code{tbl_df} method).}
 }
 \value{
 The \code{condition.grid} of the data

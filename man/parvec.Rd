@@ -21,6 +21,9 @@ as.parvec(x, ...)
 \item{x}{Numeric vector of parameter values.}
 
 \item{names}{Optional parameter names.}
+
+\item{deriv2}{Optional 3D Hessian array, \code{NULL} to inherit or
+\code{FALSE} to drop.}
 }
 \value{
 An object of class \code{"parvec"}, i.e. a named numeric vector with

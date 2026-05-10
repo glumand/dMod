@@ -20,6 +20,9 @@ nll_ALOQ(
 
 \item{derivs, derivs.err}{matrix of first derivatives (may have subset of parameters)}
 
+\item{derivs2}{Optional 3D array of second derivatives. If \code{NULL}, only
+first-order contributions are propagated.}
+
 \item{par_names}{Character vector of ALL parameter names (full set)}
 
 \item{opt.BLOQ}{Character denoting the method to deal with BLOQ data}

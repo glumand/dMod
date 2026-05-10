@@ -164,7 +164,7 @@ PlotPaths <- function(profs=myprofiles, ..., whichPar, sort = FALSE, relative = 
       # Restore absolute values for the profiled parameter (x-axis always absolute)
       paths[, n] <- abs_profiled
       
-      combinations <- dMod:::expand.grid.alt(whichPar, colnames(paths))
+      combinations <- expand.grid.alt(whichPar, colnames(paths))
       if (sort) combinations <- apply(combinations, 1, sort) else combinations <- apply(combinations, 1, identity)
       combinations <- submatrix(combinations, cols = -which(combinations[1,] == combinations[2,]))
       combinations <- submatrix(combinations, cols = !duplicated(paste(combinations[1,], combinations[2,])))
@@ -228,7 +228,7 @@ PlotPaths <- function(profs=myprofiles, ..., whichPar, sort = FALSE, relative = 
     
     # Define the plotting colors
     species_colors <- c( # c(dMod_colors[2:(n_pars+1)], rep("gray", 100))
-      setNames(dMod:::dMod_colors[2:(n_pars+1)], unique(data$partner)[1:n_pars]), 
+      setNames(dMod_colors[2:(n_pars+1)], unique(data$partner)[1:n_pars]),
       "Others" = "gray"
     )
     
@@ -257,7 +257,7 @@ PlotPaths <- function(profs=myprofiles, ..., whichPar, sort = FALSE, relative = 
         geom_path() + #geom_point(aes=aes(size=1), alpha=1/3) +
         xlab(axis.labels[1]) + ylab(axis.labels[2]) +
         scale_linetype_discrete(name = "profile\nlist") +
-        scale_color_manual(name = "profiled\nparameter", values = dMod:::dMod_colors)
+        scale_color_manual(name = "profiled\nparameter", values = dMod_colors)
     )
   }
   
@@ -299,10 +299,6 @@ plotPathsMulti <- function(profs, whichpars, npars = 5, normalizePaths = FALSE) 
 }
 
 
-
-expand.grid.alt <- function(seq1, seq2) {
-  cbind(Var1=rep.int(seq1, length(seq2)), Var2=rep(seq2, each=length(seq1)))
-}
 
 #' Profile likelihood: plot profiles along with their parameter paths
 #' 

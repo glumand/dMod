@@ -89,14 +89,12 @@ a step is considered close enough to zero to terminate the algorithm.}
 
 \item{printIter}{print iteration information to R console}
 
-\item{on_step}{optional callback invoked once per step decision with the
-arguments \code{rho} (actual / predicted reduction), \code{accepted}
-(logical), \code{iter} (current iteration counter), and \code{r} (current
-trust-region radius). The callback's return value is ignored. If
-\code{NULL} (default), no callback runs and trust behaves identically to
-previous releases. Used by \code{\link[=focei]{focei()}} to invalidate its cached log|H|
-correction on rejected outer steps; other callers (\code{mstrust},
-\code{profile}) leave it unset and are unaffected.}
+\item{traceFile}{Optional path. If non-\code{NULL}, per-iteration objective
+value and parameters are written there.}
+
+\item{on_step}{Optional callback \verb{function(rho, accepted, iter, r)}
+invoked once per step decision; return value is ignored. Used by
+\code{\link[=focei]{focei()}} to invalidate cached corrections on rejected steps.}
 
 \item{...}{additional argument to objfun}
 
@@ -110,20 +108,20 @@ correction on rejected outer steps; other callers (\code{mstrust},
 }
 \value{
 A list containing the following components:
-\itemize{
-\item{value: }{the value returned by objfun at the final iterate.}
-\item{gradient: }{the gradient returned by objfun at the final iterate.}
-\item{hessian: }{the Hessian returned by objfun at the final iterate.}
-\item{argument: }{the final iterate}
-\item{converged: }{if TRUE the final iterate was deemed optimal by the
+\describe{
+\item{value}{the value returned by objfun at the final iterate.}
+\item{gradient}{the gradient returned by objfun at the final iterate.}
+\item{hessian}{the Hessian returned by objfun at the final iterate.}
+\item{argument}{the final iterate}
+\item{converged}{if TRUE the final iterate was deemed optimal by the
 specified termination criteria.}
-\item{iterations: }{number of trust region subproblems done (including those
+\item{iterations}{number of trust region subproblems done (including those
 whose solutions are not accepted).}
-\item{argpath: }{(if blather == TRUE) the sequence of iterates, not including
+\item{argpath}{(if blather == TRUE) the sequence of iterates, not including
 the final iterate.}
-\item{argtry: }{(if blather == TRUE) the sequence of solutions of the trust
+\item{argtry}{(if blather == TRUE) the sequence of solutions of the trust
 region subproblem.}
-\item{steptype: }{(if blather == TRUE) the sequence of cases that arise in
+\item{steptype}{(if blather == TRUE) the sequence of cases that arise in
 solutions of the trust region subproblem. "Newton" means the Newton step
 solves the subproblem (lies within the trust region). Other values mean the
 subproblem solution is constrained. "easy-easy" means the eigenvectors
@@ -131,23 +129,23 @@ corresponding to the minimal eigenvalue of the rescaled Hessian are not all
 orthogonal to the gradient. The other cases are rarely seen. "hard-hard" means
 the Lagrange multiplier for the trust region constraint is minus the minimal
 eigenvalue of the rescaled Hessian; "hard-easy" means it isn't.}
-\item{accept: }{(if blather == TRUE) indicates which of the sequence of
+\item{accept}{(if blather == TRUE) indicates which of the sequence of
 solutions of the trust region subproblem were accepted as the next iterate.
 (When not accepted the trust region radius is reduced, and the previous iterate
 is kept.)}
-\item{r: }{(if blather == TRUE) the sequence of trust region radii.}
-\item{rho: }{(if blather == TRUE) the sequence of ratios of actual over
+\item{r}{(if blather == TRUE) the sequence of trust region radii.}
+\item{rho}{(if blather == TRUE) the sequence of ratios of actual over
 predicted decrease in the objective function in the trust region subproblem,
 where predicted means the predicted decrease in the two-term Taylor series model
 used in the subproblem.}
-\item{valpath: }{(if blather == TRUE) the sequence of objective function values
+\item{valpath}{(if blather == TRUE) the sequence of objective function values
 at the iterates.}
-\item{valtry: }{(if blather == TRUE) the sequence of objective function values
+\item{valtry}{(if blather == TRUE) the sequence of objective function values
 at the solutions of the trust region subproblem.}
-\item{preddiff: }{(if blather == TRUE) the sequence of predicted differences using
+\item{preddiff}{(if blather == TRUE) the sequence of predicted differences using
 the two-term Taylor-series model between the function values at the current iterate
 and at the solution of the trust region subproblem.}
-\item{stepnorm: }{(if blather == TRUE) the sequence of norms of steps, that is
+\item{stepnorm}{(if blather == TRUE) the sequence of norms of steps, that is
 distance between current iterate and proposed new iterate found in the trust region
 subproblem.}
 }

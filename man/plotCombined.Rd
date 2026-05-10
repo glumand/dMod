@@ -8,7 +8,13 @@
 \alias{plot.prdframe}
 \title{Plot a list of model predictions and a list of data points in a combined plot}
 \usage{
-\method{plotCombined}{tbl_df}(model, hypothesis = 1, index = 1, ..., plotErrorBands = F)
+\method{plotCombined}{tbl_df}(
+  prediction,
+  hypothesis = 1,
+  index = 1,
+  ...,
+  plotErrorBands = FALSE
+)
 
 plotCombined(prediction, ...)
 
@@ -41,13 +47,19 @@ plotCombined(prediction, ...)
 )
 }
 \arguments{
+\item{prediction}{A \code{prdlist} object containing model predictions.}
+
+\item{hypothesis}{Integer or character. Row index (or name) of the
+\code{dMod.frame} to plot. Default \code{1}.}
+
+\item{index}{Integer. Row index inside the selected hypothesis's
+\code{parframes} (multi-start fit). Default \code{1}.}
+
 \item{...}{Filter expressions passed to \code{dplyr::filter} for subsetting
 both prediction and data.}
 
-\item{plotErrorBands}{If the dMod.frame contains an observation function for the
-error model, use it to show error bands.}
-
-\item{prediction}{A \code{prdlist} object containing model predictions.}
+\item{plotErrorBands}{If the \code{dMod.frame} contains an observation function
+for the error model, use it to show error bands.}
 
 \item{x}{prediction}
 

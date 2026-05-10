@@ -6,7 +6,7 @@
 \alias{plotPrediction.prdlist}
 \title{Plot a list of model predictions}
 \usage{
-\method{plotPrediction}{tbl_df}(dMod.frame, hypothesis = 1, index = 1, ...)
+\method{plotPrediction}{tbl_df}(prediction, hypothesis = 1, index = 1, ...)
 
 plotPrediction(prediction, ...)
 
@@ -20,10 +20,16 @@ plotPrediction(prediction, ...)
 )
 }
 \arguments{
+\item{prediction}{A \code{prdlist} object containing model predictions.}
+
+\item{hypothesis}{Integer or character. Row index (or name) of the
+\code{dMod.frame} to plot. Default \code{1}.}
+
+\item{index}{Integer. Row index inside the selected hypothesis's
+\code{parframes}. Default \code{1}.}
+
 \item{...}{Filter expressions passed to \code{dplyr::filter} for subsetting
 the predictions.}
-
-\item{prediction}{A \code{prdlist} object containing model predictions.}
 
 \item{errfn}{Optional error model function. If provided, predictions are
 augmented with sigma values and displayed with ribbon error bands.}

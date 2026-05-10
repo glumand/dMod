@@ -7,7 +7,11 @@
 predtimes(datatimes, eventtimes = NULL, Nobjtimes = 100)
 }
 \arguments{
-\item{Nobjtimes}{number of time points in total}
+\item{datatimes}{Times present in the data.}
+
+\item{eventtimes}{Times of events (not yet implemented).}
+
+\item{Nobjtimes}{Number of time points in total.}
 }
 \value{
 vector of time points

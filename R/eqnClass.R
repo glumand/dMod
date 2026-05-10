@@ -1015,11 +1015,9 @@ getLinVars <- function(eqnvec) {
 #'
 #' @param eqnvec An object of class `eqnvec`, representing a set of equations.
 #' @param whichVar A character vector specifying the variables to be log-transformed.
-#' @details The function applies a logarithmic transformation to the specified variables in the equation vector.
-#' For a variable `var`, the transformation is `log(var)` and the derivative `d/dt log(var)` is replaced by 
-#' `(1/exp(log(var))) * d/dt var`, substituting `var` with `exp(log(var))` in the original equation.
-#' The original variable equations are replaced or removed, and the transformed equations are added with updated names prefixed by `log_`.
-#' The equations are simplified using SymPy to ensure mathematical correctness and compactness.
+#' @details Replaces each `var` in `whichVar` with `exp(log_var)` and rewrites
+#'   the corresponding ODE for `log_var = log(var)`. Output equations are
+#'   simplified via SymPy.
 #'
 #' @return An updated `eqnvec` object with transformed equations.
 #'

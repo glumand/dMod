@@ -121,17 +121,10 @@ constraintExp2 <- function(p, mu, sigma = 1, k = 0.05, fixed=NULL) {
 #' \code{obj(pars, fixed, deriv, env)} returning an [objlist].
 #'
 #' @details
-#' Objective functions can be combined using the \code{+} operator, see
-#' [sumobjfn].
-#'
-#' The Bessel correction is applied globally across all conditions and is given by
-#' \deqn{\sqrt{n / (n - p)}}
-#' where \eqn{n} is the total number of data points and \eqn{p} is the number of
-#' structural (non-error-model) parameters.
-#'
-#' Parallelization is performed over experimental conditions if
-#' \code{cores > 1}. The number of cores is fixed when calling \code{normL2()}
-#' and cannot be changed at evaluation time.
+#' Combine objectives with `+` (see [sumobjfn]). The Bessel correction
+#' \eqn{\sqrt{n/(n-p)}} is applied globally (\eqn{n} = total data points,
+#' \eqn{p} = structural parameters). When `cores > 1`, conditions are
+#' evaluated in parallel; the core count is fixed at construction.
 #'
 #' @example inst/examples/normL2.R
 #' @export
@@ -520,7 +513,7 @@ constraintL2_mvn <- function(mu, Omega, attr.name = "prior", condition = NULL) {
 #' attributed with this name
 #' @param condition character, the condition for which the prediction is made.
 #' @return List of class \code{objlist}, i.e. objective value, gradient and Hessian as list.
-#' @seealso \link{wrss}, \link{constraintL2}
+#' @seealso [normL2], [constraintL2]
 #' @details Computes the constraint value 
 #' \deqn{\left(\frac{x(t)-\mu}{\sigma}\right)^2}{(pred-p[names(mu)])^2/sigma^2}
 #' and its derivatives with respect to p.
@@ -646,7 +639,7 @@ datapointL2 <- function(name, time, value, sigma = 1, attr.name = "validation", 
 #' @param condition character, the condition for which the constraint should apply. If
 #' \code{NULL}, applies to any condition.
 #' @return List of class \code{objlist}, i.e. objective value, gradient and Hessian as list.
-#' @seealso \link{wrss}
+#' @seealso [normL2]
 #' @details Computes the constraint value 
 #' \deqn{e^{\lambda} \| p-\mu \|^2}{exp(lambda)*sum((p-mu)^2)}
 #' and its derivatives with respect to p and lambda.
@@ -754,8 +747,9 @@ priorL2 <- function(mu, lambda = "lambda", attr.name = "prior", condition = NULL
 #' 
 #' @param nout data.frame (result of [res]) or object of class [res].
 #' @param pars Named vector of ALL outer parameters (union across conditions)
-#' @param deriv Logical. If TRUE, compute gradient and hessian
-#' @param opt.BLOQ Character denoting the method to deal with BLOQ data. 
+#' @param deriv Logical. If TRUE, compute gradient and hessian.
+#' @param deriv2 Logical. If TRUE, also propagate second-order derivatives.
+#' @param opt.BLOQ Character denoting the method to deal with BLOQ data.
 #' One of "M1", "M3", "M4NM", or "M4BEAL".
 #' @param opt.hessian Named logical vector to include or exclude various 
 #' summands of the hessian matrix.
@@ -835,6 +829,8 @@ nll <- function(nout, pars, deriv, deriv2 = FALSE,
 #' 
 #' @param nout output of [res()]
 #' @param derivs,derivs.err matrix of first derivatives (may have subset of parameters)
+#' @param derivs2 Optional 3D array of second derivatives. If `NULL`, only
+#'   first-order contributions are propagated.
 #' @param par_names Character vector of ALL parameter names (full set)
 #' @param opt.BLOQ Character denoting the method to deal with BLOQ data
 #' @param opt.hessian Named logical vector for hessian components

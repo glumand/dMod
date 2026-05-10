@@ -17,11 +17,14 @@ Object of class \link{prdfn}.
 Function to deal with non-ODE models within the framework of dMod. See example.
 }
 \examples{
+\dontrun{
 x <- Xt()
-g <- Y(c(y = "a*time^2+b"), f = NULL, parameters = c("a", "b"))
+g <- Y(c(y = "a*time^2+b"), f = NULL, parameters = c("a", "b"),
+       compile = TRUE, modelname = "Xt_example_obs")
 
 times <- seq(-1, 1, by = .05)
 pars <- c(a = .1, b = 1)
 
 plot((g*x)(times, pars))
+}
 }

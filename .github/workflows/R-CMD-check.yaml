@@ -2,7 +2,7 @@
 # Need help debugging build failures? Start at https://github.com/r-lib/actions#where-to-find-help
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, devel]
   pull_request:
 
 name: R-CMD-check.yaml
@@ -47,6 +47,13 @@ jobs:
 
       - uses: r-lib/actions/check-r-package@v2
         with:
+          # --as-cran dropped: dMod depends on CppODE via Remotes (GitHub-only),
+          # so CRAN-submission feasibility checks would always WARN.
+          # --ignore-vignettes: vignettes/petab.Rmd needs the libsbml Python venv
+          # which is not provisioned in CI; --no-build-vignettes alone leaves a
+          # "Directory 'inst/doc' does not exist" WARNING that --ignore-vignettes
+          # silences cleanly.
+          args: 'c("--no-manual", "--ignore-vignettes")'
           upload-snapshots: true
           build_args: 'c("--no-manual","--no-build-vignettes","--compact-vignettes=gs+qpdf")'
-          error-on: '"error"'
+          error-on: '"warning"'

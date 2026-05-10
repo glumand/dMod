@@ -11,7 +11,7 @@ P(
   compile = FALSE,
   modelname = NULL,
   method = NULL,
-  cores = detectFreeCores(),
+  cores = NULL,
   verbose = FALSE,
   ...
 )
@@ -31,7 +31,9 @@ P(
 If \code{NULL} (default), auto-selects \code{"equilibrate"} for \link{eqnlist} entries
 and \code{"explicit"} for all others.}
 
-\item{cores}{Number of cores for parallel method call per condition}
+\item{cores}{Number of cores for the per-condition \code{mclapply()}.
+\code{NULL} (default) auto-detects via \link{detectFreeCores}; forced to 1 on
+Windows.}
 
 \item{verbose}{Print out information during compilation}
 

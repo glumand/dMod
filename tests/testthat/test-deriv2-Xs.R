@@ -1,7 +1,6 @@
 test_that("Xs.CppODE deriv2 reproduces linear-decay analytical Hessian", {
   prev <- getwd(); on.exit(setwd(prev), add = TRUE)
-  setwd(tempdir())
-
+  withr::local_dir(tempdir())
   f <- c(x = "-k * x")  # x(t) = x0 * exp(-k*t)
   m <- odemodel(f, modelname = paste0("decay_d2_", as.integer(Sys.time())),
                 solver = "CppODE", deriv2 = TRUE, verbose = FALSE)
@@ -66,8 +65,7 @@ test_that("odemodel(deriv2 = TRUE) emits <m>, <m>_s, <m>_s2 and Xs.CppODE dispat
 
 test_that("Xs.deSolve refuses deriv2 = TRUE", {
   prev <- getwd(); on.exit(setwd(prev), add = TRUE)
-  setwd(tempdir())
-
+  withr::local_dir(tempdir())
   f <- c(x = "-k*x")
   m <- odemodel(f, modelname = paste0("decay_des_", as.integer(Sys.time())),
                 solver = "deSolve", verbose = FALSE)

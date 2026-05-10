@@ -48,37 +48,15 @@ An object of the same type as \code{trafo}, possibly expanded to a list if
 branching has been applied.
 }
 \description{
-Helper functions to construct and modify symbolic parameter transformations
-used by prediction functions such as \code{\link[=P]{P()}} and \code{\link[=Xs]{Xs()}}.
-}
-\details{
-The functions \code{\link[=define]{define()}}, \code{\link[=insert]{insert()}} and \code{\link[=branch]{branch()}} operate exclusively on
-the symbolic level. They are used to build transformation objects that
-describe how \emph{outer parameters} are expressed in terms of \emph{inner parameters}
-or constants.
-
-No model evaluation, sensitivity calculation or parameter checking is
-performed by these functions. The resulting transformations are interpreted
-later when prediction or objective functions are constructed.
-
+Symbolic helpers to build and modify parameter transformations used by
+\code{\link[=P]{P()}} and \code{\link[=Xs]{Xs()}}:
 \describe{
-\item{define}{
-Reset or redefine a transformation rule by explicitly specifying a new
-right-hand side.
+\item{define}{Reset or redefine a transformation rule.}
+\item{insert}{Apply symbolic substitutions to existing rules.}
+\item{branch}{Duplicate a transformation per condition with optional
+condition-specific substitutions; the condition table is stored as
+attribute \code{"tree"}.}
 }
-\item{insert}{
-Insert symbolic substitutions into existing transformation rules without
-resetting them.
-}
-\item{branch}{
-Duplicate a transformation for multiple conditions and optionally apply
-condition-specific substitutions.
-}
-}
-
-When transformations are branched, a condition table is stored as metadata
-(attribute \code{"tree"}) and may be used to restrict subsequent calls to
-\code{\link[=define]{define()}} or \code{\link[=insert]{insert()}} to specific conditions.
 }
 \examples{
 ## -------------------------------------------------------------------------

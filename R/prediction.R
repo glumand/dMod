@@ -19,20 +19,20 @@
 #' @param optionsSens list with arguments to be passed to odeC() for integration of the extended system
 #' @param fcontrol list with additional fine-tuning arguments for the forcing interpolation. 
 #' See [approxfun][stats::approxfun] for possible arguments.
-#' @return Object of class [prdfn]. If the function is called with parameters that
-#' result from a parameter transformation (see [P]), the Jacobian of the parameter transformation
-#' and the sensitivities of the ODE are multiplied according to the chain rule for
-#' differentiation. The result is saved in the attributed "deriv", 
-#' i.e. in this case the attibutes "deriv" and "sensitivities" do not coincide. 
+#' @param ... Additional arguments passed to methods.
+#' @return Object of class [prdfn]. When called with transformed parameters
+#'   (see [P]), the chain rule is applied automatically; the result is
+#'   stored in `attr(., "deriv")` (which then differs from `"sensitivities"`).
 #' @export
 Xs <- function(odemodel, ...) {
   UseMethod("Xs", odemodel)
 }
 
 #' @export
-Xs.deSolve <- function(odemodel, forcings = NULL, events = NULL, names = NULL, condition = NULL, 
-                       optionsOde = list(method = "lsoda"), optionsSens = list(method = "lsodes"), 
-                       fcontrol = NULL) {
+#' @rdname Xs
+Xs.deSolve <- function(odemodel, forcings = NULL, events = NULL, names = NULL, condition = NULL,
+                       optionsOde = list(method = "lsoda"), optionsSens = list(method = "lsodes"),
+                       fcontrol = NULL, ...) {
   
   func <- odemodel$func
   extended <- odemodel$extended
@@ -169,8 +169,9 @@ Xs.deSolve <- function(odemodel, forcings = NULL, events = NULL, names = NULL, c
 }
 
 #' @export
+#' @rdname Xs
 Xs.CppODE <- function(odemodel, forcings = NULL, events = NULL, names = NULL, condition = NULL,
-                      optionsOde = list(), optionsSens = list()) {
+                      optionsOde = list(), optionsSens = list(), ...) {
   
   if (!is.null(forcings)) {
     if (!inherits(forcings, "data.frame")) {
@@ -556,27 +557,20 @@ Xd <- function(data, condition = NULL) {
 #' derived from `f` and `g`.
 #' @param condition Either `NULL` (generic prediction for any condition) or a character 
 #' string specifying the condition for which the function generates predictions.
-#' @param attach.input Logical, indicating whether the original model input should be 
-#' included in the output.
-#' @param deriv Logical, if `TRUE`, the function evaluates first-order derivatives
-#' of observables with respect to parameters.
-#' @param deriv2 Logical, if `TRUE`, the function also evaluates second derivatives 
-#' of observables with respect to parameters.
-#' @param compile Logical, if `TRUE`, the function is compiled (see [CppODE::funCpp]).
-#' @param modelname Character, used if `compile = TRUE`, specifies a fixed filename
-#' for the generated C file.
+#' @param attach.input Logical, indicating whether the original model input
+#'   should be included in the output.
+#' @param compile Logical, if `TRUE`, the function is compiled (see
+#'   [CppODE::funCpp]).
+#' @param modelname Character, used if `compile = TRUE`, specifies a fixed
+#'   filename for the generated C file.
 #' @param verbose Logical, print compiler output to the R console.
-#' @param derivMode Character. Selects the derivative backend used by [CppODE::funCpp]
-#'   to evaluate observation Jacobians. One of `"dual"` (default, in-tree
-#'   forward-mode AD via `evaluate`, typically faster when the number of
-#'   fitted parameters is large; requires `compile = TRUE`) or `"symbolic"`
-#'   (classical SymPy Jacobian followed by an explicit chain rule against
-#'   the upstream `dX`/`dP`).
-#' @param deriv2 Logical. If `TRUE`, the compiled observation function
-#'   additionally exposes second-order derivatives. The returned `obsfn` then
-#'   carries an `attr(., "deriv2")` 4D array (`[time, observable, theta, theta]`)
-#'   on its output when called with `deriv2 = TRUE`. The AD backend for
-#'   `deriv2 = TRUE` requires `compile = TRUE`. Default `FALSE`.
+#' @param derivMode Character. Jacobian backend: `"dual"` (default,
+#'   forward-mode AD; faster for many parameters; requires compiled native
+#'   code) or `"symbolic"` (SymPy Jacobian + chain rule against upstream
+#'   `dX`/`dP`; pure R).
+#' @param deriv2 Logical. If `TRUE`, attach a second-order derivative
+#'   `attr(., "deriv2")` array of shape `[time, observable, theta, theta]`.
+#'   Default `FALSE`.
 #'
 #' @return
 #' An object of class [obsfn], i.e. a function  `g(..., fixed = NULL, deriv = TRUE, condition = NULL, env = NULL)`
@@ -829,13 +823,16 @@ Y <- function(g, f = NULL, states = NULL, parameters = NULL,
 #' the condition for which the function makes a prediction.
 #' @return Object of class [prdfn].
 #' @examples
+#' \dontrun{
 #' x <- Xt()
-#' g <- Y(c(y = "a*time^2+b"), f = NULL, parameters = c("a", "b"))
+#' g <- Y(c(y = "a*time^2+b"), f = NULL, parameters = c("a", "b"),
+#'        compile = TRUE, modelname = "Xt_example_obs")
 #'
 #' times <- seq(-1, 1, by = .05)
 #' pars <- c(a = .1, b = 1)
 #'
 #' plot((g*x)(times, pars))
+#' }
 #' @export
 Xt <- function(condition = NULL) {
   # Controls to be modified from outside

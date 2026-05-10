@@ -14,9 +14,12 @@ list of eqnlist, parameters and inits
 }
 \description{
 Reads an SBML Level 3 file via a Python helper (\code{inst/code/sbmlImport.py})
-that uses \code{python-libsbml}. dMod expects a virtualenv at
-\verb{~/.virtualenvs/libsbml/} with \code{python-libsbml} installed; create it with
-\verb{python3 -m venv ~/.virtualenvs/libsbml && ~/.virtualenvs/libsbml/bin/pip install python-libsbml}.
+that uses \code{python-libsbml}. The Python environment is provisioned
+automatically by \code{reticulate} on first use — no manual venv setup is
+required. Users who want to point dMod at an existing interpreter
+(e.g. a hand-managed venv or conda env) can set the
+\code{DMOD_LIBSBML_PYTHON} environment variable to its absolute path; that
+bypasses reticulate entirely.
 }
 \details{
 Kinetic laws coming out of SBML are \strong{extensive} (amount/time) by SBML

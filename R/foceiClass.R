@@ -58,10 +58,9 @@
 #' }
 #'
 #' @details
-#' The diagonal of `L` is parametrised on the log scale to enforce positive
-#' definiteness of `Omega`. Off-diagonal entries are unrestricted real numbers.
-#' This is the standard pharmacometric choice and matches `lme4`/`TMB`
-#' conventions.
+#' The Cholesky diagonal is on the log scale (enforces positive definiteness
+#' of \eqn{\Omega}); off-diagonal entries are unrestricted reals. Matches
+#' `lme4`/`TMB` conventions.
 #'
 #' @examples
 #' om1 <- omega(eta = c("eta_Cl", "eta_V"))
@@ -250,65 +249,24 @@ parnames.omegaSpec <- function(x, what = c("all", "eta", "chol")) {
 #'   `\partial \log|H_i|/\partial \theta` can be assembled from
 #'   `\partial^2 g / \partial \eta \partial \theta`. Pass the same prediction
 #'   function that was used to build `joint`.
-#' @param data Optional [datalist] supplying per-observation `sigma` for the
-#'   correction's residual weighting. Required when `correction != "none"`.
-#'   Stage 2 restriction: `sigma` may depend on `theta` but not on `eta`
-#'   (no error-model interaction with random effects yet).
-#' @param innerControl Named list of inner-trust options. Recognised entries:
-#'   `rtol` (relative termination tolerance, default `1e-6`), `maxit` (maximum
-#'   inner iterations, default `50`), `rinit`/`rmax` (initial / maximum
-#'   trust-region radius, default `1` / `10`).
-#' @param correction One of `"none"` (default, Stage 1 envelope-only gradient,
-#'   no `\log|H_i|` correction), `"lagged"` (Stage 2 analytical correction with
-#'   BDF-style cache + refresh triggers), or `"eager"` (Stage 2 analytical
-#'   correction recomputed every outer iteration, mostly for testing parity).
-#' @param correctionControl Named list of cache-refresh options for
-#'   `correction = "lagged"`. Recognised entries: `tau` (relative
-#'   anchor-distance threshold, default `0.1`) and `M` (periodic refresh
-#'   interval, default `5L`). A refresh additionally fires on cold start, on
-#'   any rejected outer step (when the [trust] `on_step` hook is wired up),
-#'   and when `last_rho < 0.25`.
-#' @param cores Integer. Number of cores for the per-subject inner solves.
-#'   Default `1`. On Windows, a `parLapply` cluster is created on the fly; on
-#'   Unix-likes, `mclapply` is used.
+#' @param data Optional [datalist] supplying per-observation `sigma`.
+#'   Required when `correction != "none"`. `sigma` may depend on `theta` but
+#'   not on `eta`.
+#' @param innerControl Named list of inner-trust options: `rtol`
+#'   (default `1e-6`), `maxit` (default `50`), `rinit`/`rmax`
+#'   (default `1`/`10`).
+#' @param correction One of `"none"` (default, Stage 1 envelope gradient
+#'   only), `"lagged"` (Stage 2 analytical correction with cached refresh),
+#'   or `"eager"` (Stage 2 recomputed every outer iteration).
+#' @param correctionControl Named list for `correction = "lagged"`: `tau`
+#'   (anchor-distance threshold, default `0.1`) and `M` (periodic refresh
+#'   interval, default `5L`).
+#' @param cores Integer. Cores for per-subject inner solves (default `1`).
+#'   `mclapply` on POSIX, on-the-fly `parLapply` cluster on Windows.
 #'
-#' @return An object of class `c("focei", "objfn", "fn")` callable as
-#'   `obj(pars, fixed = NULL, deriv = TRUE, env = NULL)`. Returns an `objlist`
-#'   whose `attr(., "focei_diag")` carries per-subject diagnostics
-#'   (\eqn{\eta_i^*}, eigenvalues of \eqn{H_i}, \eqn{\log|H_i|}, count of
-#'   floored eigenvalues, inner iteration count).
-#'
-#' @details
-#' The estimator implements the standard FOCEI bilevel structure. For each
-#' outer evaluation:
-#' \enumerate{
-#'   \item For each subject \eqn{i}, an inner [trust]-region optimisation
-#'     finds \eqn{\eta_i^* = \mathrm{argmin}_\eta J(\theta, \eta, \Omega, \Sigma; \mathrm{data}_i)}
-#'     starting from a warmstart cache.
-#'   \item The Hessian \eqn{H_i = \partial^2 J / \partial \eta^2} is read off
-#'     the converged inner solver and spectrally regularised: an eigenvalue
-#'     floor \eqn{\epsilon = 10^{-10}\,\mathrm{tr}(H_i)/K} is applied so
-#'     \eqn{\log|H_i|} and \eqn{H_i^{-1}} stay numerically well-defined.
-#'   \item The marginal objective is
-#'     \deqn{\mathrm{OFV} = J(\theta, \eta^*, \Omega, \Sigma) + \sum_i \log|H_i|.}
-#'   \item The outer gradient is taken from `joint` evaluated at
-#'     \eqn{(\theta, \eta^*)}; by the envelope theorem,
-#'     \eqn{\partial J/\partial \eta = 0} at \eqn{\eta^*}, so only direct
-#'     partials wrt \eqn{(\theta, \Omega, \Sigma)} contribute.
-#'   \item The outer Hessian is the Gauss-Newton Schur complement of `joint`'s
-#'     full Hessian after eliminating the eta block per subject:
-#'     \eqn{H_{\theta\theta} - \sum_i H_{\theta\eta_i}^{(i)} H_{\eta\eta}^{(i)\,-1} H_{\eta_i\theta}^{(i)}}.
-#' }
-#'
-#' Stage 2 correction: setting `correction = "lagged"` (or `"eager"`) restores
-#' the missing `\partial \log|H_i|/\partial \theta` term in the outer gradient.
-#' The correction is built analytically from second-order prediction
-#' sensitivities (`deriv2 = TRUE` on `model`) and a Gauss-Newton form of
-#' \eqn{H_i = G_i^\top \Sigma^{-1} G_i + \Omega^{-1}}. Lagging caches the
-#' correction across outer iterations and refreshes only on rejected steps,
-#' large parameter excursions, or every `M` iterations; the cache is also
-#' invalidated on any rejected outer step provided the caller wires the
-#' [trust] `on_step` hook (see Examples).
+#' @return An object of class `c("focei", "objfn", "fn")`, callable as
+#'   `obj(pars, fixed = NULL, deriv = TRUE, env = NULL)`. The returned
+#'   `objlist` carries per-subject diagnostics under `attr(., "focei_diag")`.
 #'
 #' @seealso [omega], [constraintL2], [trust]
 #' @examples

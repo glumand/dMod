@@ -1,7 +1,6 @@
 test_that("Y deriv2 (AD) reproduces analytical observation Hessian", {
   prev <- getwd(); on.exit(setwd(prev), add = TRUE)
-  setwd(tempdir())
-
+  withr::local_dir(tempdir())
   # Plain Y at the head of the chain: g = a*x^2 + b*x.
   # No upstream parameter transformation, so theta = c(states, params)
   # = c(x, a, b). Y returns d2y/dtheta^2 directly.
@@ -45,8 +44,7 @@ test_that("Y deriv2 (AD) reproduces analytical observation Hessian", {
 
 test_that("Y deriv2 (symbolic) reproduces analytical observation Hessian", {
   prev <- getwd(); on.exit(setwd(prev), add = TRUE)
-  setwd(tempdir())
-
+  withr::local_dir(tempdir())
   gfn <- Y(c(y = "a*x^2 + b*x"), states = "x", parameters = c("a", "b"),
            modelname = paste0("y_d2_sym_", as.integer(Sys.time())),
            compile = TRUE, deriv2 = TRUE, derivMode = "symbolic",

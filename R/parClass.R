@@ -570,6 +570,8 @@ unique.parframe <- function(x, incomparables = FALSE, tol = 1, ...) {
 #' @param names Optional parameter names.
 #' @param deriv Optional Jacobian matrix, \code{NULL} to inherit or
 #'   \code{FALSE} to drop.
+#' @param deriv2 Optional 3D Hessian array, \code{NULL} to inherit or
+#'   \code{FALSE} to drop.
 #' @param ... Further arguments passed to methods.
 #'
 #' @return A numeric vector of class \code{c("parvec", "numeric")}.
@@ -634,6 +636,7 @@ as.parvec.numeric <- function(x, names = NULL, deriv = NULL, deriv2 = NULL, ...)
 #' its attached derivatives and information about constant parameters in 'fixed'.
 #'
 #' @param x parvec object
+#' @param ... Currently ignored.
 #' @export
 print.parvec <- function(x, ...) {
   

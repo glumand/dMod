@@ -4,8 +4,7 @@ test_that("normL2 gradient is identical for deriv2 = FALSE and deriv2 = TRUE", {
   # produces the same first-order sensitivities as the _s integration. If
   # subsetting drops attr(., "deriv2") the gradient diverges silently.
   prev <- getwd(); on.exit(setwd(prev), add = TRUE)
-  setwd(tempdir())
-
+  withr::local_dir(tempdir())
   f <- c(x = "-k*x")
   m <- odemodel(f, modelname = paste0("nl_grad_id_", as.integer(Sys.time())),
                 solver = "CppODE", deriv2 = TRUE, nStack = 4L, verbose = FALSE)
@@ -39,8 +38,7 @@ test_that("normL2 gradient is identical for deriv2 = FALSE and deriv2 = TRUE", {
 
 test_that("normL2(deriv2 = FALSE) reproduces the pre-deriv2 GN Hessian", {
   prev <- getwd(); on.exit(setwd(prev), add = TRUE)
-  setwd(tempdir())
-
+  withr::local_dir(tempdir())
   f <- c(x = "-k*x")
   m <- odemodel(f, modelname = paste0("nl_d2_gn_", as.integer(Sys.time())),
                 solver = "CppODE", deriv2 = TRUE, nStack = 4L, verbose = FALSE)
@@ -72,8 +70,7 @@ test_that("normL2(deriv2 = FALSE) reproduces the pre-deriv2 GN Hessian", {
 
 test_that("normL2(deriv2 = TRUE) adds residual times d^2 pred / sigma^2", {
   prev <- getwd(); on.exit(setwd(prev), add = TRUE)
-  setwd(tempdir())
-
+  withr::local_dir(tempdir())
   f <- c(x = "-k*x")
   m <- odemodel(f, modelname = paste0("nl_d2_ex_", as.integer(Sys.time())),
                 solver = "CppODE", deriv2 = TRUE, nStack = 4L, verbose = FALSE)

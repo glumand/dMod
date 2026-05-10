@@ -1,7 +1,6 @@
 test_that("(Y * Xs)(times, pars, deriv2 = TRUE) chain-rule matches analytical", {
   prev <- getwd(); on.exit(setwd(prev), add = TRUE)
-  setwd(tempdir())
-
+  withr::local_dir(tempdir())
   f <- c(x = "-k * x")
   m <- odemodel(f,
                 modelname = paste0("compose_decay_", as.integer(Sys.time())),

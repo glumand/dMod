@@ -2,6 +2,8 @@
 % Please edit documentation in R/statistics.R
 \name{reduceReplicates}
 \alias{reduceReplicates}
+\alias{reduceReplicates.data.frame}
+\alias{reduceReplicates.character}
 \title{Reduce replicated measurements to mean and standard deviation}
 \format{
 The following columns are mandatory for the data frame:
@@ -18,6 +20,22 @@ fine-grained definition of conditions. The values of all columns named in
 }
 \usage{
 reduceReplicates(
+  data,
+  select = "condition",
+  datatrans = NULL,
+  keep = NULL,
+  weighted = FALSE
+)
+
+\method{reduceReplicates}{data.frame}(
+  data,
+  select = "condition",
+  datatrans = NULL,
+  keep = NULL,
+  weighted = FALSE
+)
+
+\method{reduceReplicates}{character}(
   data,
   select = "condition",
   datatrans = NULL,

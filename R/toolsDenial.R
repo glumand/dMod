@@ -4,9 +4,10 @@
 #' @param hypothesis hypothesis
 #' @param reactions eqnlist which are the basis for prd
 #' @param pubref character. pubmed link or similar
-#' @param fixed 
+#' @param fixed Named numeric of fixed parameters (defaults to the row's `fixed`).
 #' @param projectname Name of the folder being created on fermi
-#' 
+#' @param appfolder Server-side directory where the Shiny app is deployed.
+#'
 #' @export
 #' 
 #' 
@@ -126,6 +127,7 @@ getSteps <- function(myparframe, nsteps = 5, tol = 1) {
 #'
 #' @param datatimes times present in data
 #' @param eventtimes times present in events (not yet implemented)
+#' @param Nobjtimes number of objective time points to generate.
 #'
 #' @return vector of times, including datatimes
 #' @export
@@ -151,9 +153,9 @@ objtimes <- function(datatimes, eventtimes = NULL, Nobjtimes = 25) {
 #' 
 #' for nice plots
 #' 
-#' @param datatimes 
-#' @param eventtimes 
-#' @param Nobjtimes number of time points in total
+#' @param datatimes Times present in the data.
+#' @param eventtimes Times of events (not yet implemented).
+#' @param Nobjtimes Number of time points in total.
 #'
 #' @return vector of time points
 #' @export
@@ -179,9 +181,18 @@ predtimes <- function(datatimes, eventtimes = NULL, Nobjtimes = 100) {
 
 #' Get default arguments for integrators
 #'
-#' @return List of arguments
+#' Convenience wrappers returning a `list(method = ..., ...)` of solver
+#' options for [deSolve::lsodes()] / [deSolve::lsode()] / [deSolve::lsoda()].
+#'
+#' @param rtol,atol,hmin,hmax,hini,maxord,maxsteps,verbose,nroot,tcrit,ynames,rootfunc Passed through to the underlying deSolve solver.
+#' @param jacvec,sparsetype,nnz,inz,lrw,liw lsodes-specific solver controls.
+#' @param jacfunc,jactype,mf,bandup,banddown lsode/lsoda-specific solver controls.
+#' @param rpar,ipar,nout,outnames Output-aux controls forwarded to deSolve.
+#' @param maxordn,maxords Stiff/non-stiff method order limits (lsoda).
+#'
+#' @return List with first entry `method = ...` followed by the named args.
 #' @export
-optionsLSODES <- function(rtol = 1e-6, atol = 1e-6, 
+optionsLSODES <- function(rtol = 1e-6, atol = 1e-6,
                           jacvec = NULL, sparsetype = "sparseint", nnz = NULL,
                           inz = NULL,  rootfunc = NULL,
                           verbose = FALSE, nroot = 0, tcrit = NULL, hmin = 0,

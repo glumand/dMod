@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Rscript scripts/check.R)",
+      "Bash(Rscript -e \"devtools::document\\(\\)\")",
+      "Bash(git *)",
+      "Bash(Rscript -e \"devtools::load_all\\(quiet = TRUE\\); testthat::test_file\\('tests/testthat/test-plotFluxes.R'\\)\")"
+    ]
+  }
+}

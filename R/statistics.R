@@ -735,63 +735,35 @@ vcov <- function(fit, parupper = NULL, parlower = NULL) {
 #'   from randomly chosen initial values.
 #'   
 #' @param objfun Objective function, see [trust()].
-#' @param center Parameter values around which the initial values for each fit 
-#'   are randomly sampled. The initial values handed to [trust] are the sum
-#'   of center and the output of \option{samplefun}, center + 
-#'   \option{samplefun}. See [trust()], parinit.
-#'   `center` Can also be a parframe, then the parameter values are taken 
-#'   from the parframe. In this case, the `fits` argument is overwritten.
-#'   To use a reproducible set of initial guesses, generate center with 
-#'   [msParframe()]
-#' @param studyname The names of the study or fit. This name is used to 
-#'   determine filenames for interim and final results. See Details.
-#' @param rinit Starting trust region radius, see [trust()].
-#' @param rmax Maximum allowed trust region radius, see [trust()].
-#' @param fits Number of fits (jobs).
-#' @param cores Number of cores for job parallelization.
-#' @param samplefun Function to sample random initial values. It is assumed, 
-#'   that \option{samplefun} has a named parameter "n" which defines how many 
-#'   random numbers are to be returned, such as for [rnorm()] or 
-#'   [runif()]. By default [rnorm()] is used. Parameteres 
-#'   for samplefun are simply appended as named parameters to the mstrust call 
-#'   and automatically handed to samplefun by matching parameter names.
-#' @param resultPath character indicating the folder where the results should 
-#'   be stored. Defaults to ".". 
-#' @param stats If true, the same summary statistic as written to the logfile is
-#'   printed to command line on mstrust completion.
-#' @param ... Additional parameters handed to trust(), samplefun(), or the 
-#'   objective function by matching parameter names. All unmatched parameters 
-#'   are handed to the objective function objfun(). The log file starts with a 
-#'   table telling which parameter was assigend to which function.
-#' @param output logical. If true, writes output to the disc.
-#' @param cautiousMode Logical, write every fit to disk in deparsed form (avoids the RDA incompatibility trap) and don't delete intermediate results
+#' @param center Parameter centre. Initial values are `center + samplefun(...)`.
+#'   May also be a parframe (rows are then used directly; `fits` is overwritten).
+#'   Use [msParframe()] for reproducible random starts.
+#' @param studyname Character. Used as folder/filename stem for results.
+#' @param rinit Starting trust-region radius, see [trust()].
+#' @param rmax Maximum trust-region radius, see [trust()].
+#' @param fits Number of fits.
+#' @param cores Number of parallel workers.
+#' @param optmethod Character. Name of the optimiser function to call via
+#'   `do.call(optmethod, ...)`. Default `"trust"`.
+#' @param start1stfromCenter Logical. If `TRUE`, the first fit starts exactly
+#'   at `center` (no random offset).
+#' @param samplefun Sampler for random initial values; must accept an `n`
+#'   argument. Default [rnorm()]. Extra named args from `...` matching
+#'   `samplefun` parameters are forwarded.
+#' @param resultPath Output folder. Default `"."`.
+#' @param stats Logical. Print the summary statistics to the console.
+#' @param ... Forwarded to [trust()], `samplefun`, or `objfun` by name match.
+#'   Unmatched names go to `objfun`.
+#' @param output Logical. Write per-fit output to disk.
+#' @param cautiousMode Logical. Persist every fit deparsed (avoids RDA-version
+#'   pitfalls) and keep intermediate files.
 #'   
-#' @details By running multiple fits starting at randomly chosen inital 
-#'   parameters, the chisquare landscape can be explored using a deterministic 
-#'   optimizer. Here, [trust()] is used for optimization. The standard
-#'   procedure to obtain random initial values is to sample random variables 
-#'   from a uniform distribution ([rnorm()]) and adding these to 
-#'   \option{center}. It is, however, possible, to employ any other sampling 
-#'   strategy by handing the respective function to mstrust(), 
-#'   \option{samplefun}.
-#'   
-#'   In case a special sampling is required, a customized sampling function can 
-#'   be used. If, e.g., inital values leading to a non-physical systems are to 
-#'   be discarded upfront, the objective function can be addapted accordingly.
-#'   
-#'   All started fits either lead to an error or complete converged or
-#'   unconverged. A statistics about the return status of fits can be shown by
-#'   setting \option{stats} to TRUE.
-#'   
-#'   Fit final and intermediat results are stored under \option{studyname}. For
-#'   each run of mstrust for the same study name, a folder under
-#'   \option{studyname} of the form "trial-x-date" is created. "x" is the number
-#'   of the trial, date is the current time stamp. In this folder, the
-#'   intermediate results are stored. These intermediate results can be loaded
-#'   by [load.parlist()]. These are removed on successfull completion
-#'   of mstrust. In this case, the final list of fit parameters
-#'   (parameterList.Rda) and the fit log (mstrust.log) are found instead.
-#'   
+#' @details Runs `fits` independent [trust()] optimisations from random
+#'   starts (sampled by `samplefun`, default [rnorm()]) added to `center`,
+#'   exploring the chi-square landscape. Intermediate fits are written to
+#'   `<studyname>/trial-x-<date>/` and removed on successful completion;
+#'   the final `parameterList.Rda` and `mstrust.log` are kept.
+#'
 #' @return A parlist holding errored and converged fits.
 #'   
 #' @seealso 1. [trust()], for the used optimizer,
@@ -1251,7 +1223,7 @@ reduceReplicates <- function(data, select = "condition", datatrans = NULL, keep 
   UseMethod("reduceReplicates")
 }
 
-#' Method for data frames
+#' @rdname reduceReplicates
 #' @export
 reduceReplicates.data.frame <- function(data, select = "condition", datatrans = NULL, keep = NULL, weighted = FALSE) {
   # File format definition
@@ -1330,9 +1302,9 @@ reduceReplicates.data.frame <- function(data, select = "condition", datatrans = 
 }
 
 
-#' Method for files (character)
+#' @rdname reduceReplicates
 #' @export
-reduceReplicates.character <- function(data, select = "condition", datatrans = NULL, keep = NULL) {
+reduceReplicates.character <- function(data, select = "condition", datatrans = NULL, keep = NULL, weighted = FALSE) {
   # Ensure the file exists
   if (!file.exists(data)) {
     stop("The specified file does not exist.")
@@ -1352,7 +1324,8 @@ reduceReplicates.character <- function(data, select = "condition", datatrans = N
   }
   
   # Call the data.frame method
-  reduceReplicates(as.data.frame(data), select = select, datatrans = datatrans)
+  reduceReplicates(as.data.frame(data), select = select, datatrans = datatrans,
+                   keep = keep, weighted = weighted)
 }
 
 

@@ -35,7 +35,12 @@
 symmetryDetection <- function(f, obsvect = NULL, prediction = NULL,
                               initial = NULL, ansatz = 'uni', pMax = 2, inputs = NULL, fixed = NULL,
                               cores = 1, allTrafos = FALSE){
-  
+
+  if (!requireNamespace("rPython", quietly = TRUE)) {
+    stop("Package 'rPython' is required for symmetryDetection(). ",
+         "Install it with install.packages('rPython').")
+  }
+
   f <- as.eqnvec(f)
   
   f <- as.character(lapply(1:length(f), function(i)

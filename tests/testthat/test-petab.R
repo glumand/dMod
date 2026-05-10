@@ -1,35 +1,17 @@
 context("PEtab importer / exporter")
 
-# Repo-relative path to the bundled PEtab test suite. The package does NOT
-# ship PEtabTests/ in the installed tarball (it lives at the repo root), so
-# we walk up from inst/tests/ when running interactively. testthat may
-# change cwd, so we also try DMOD_PETABTESTS env var and a hardcoded path
-# matching the user's checkout.
+# PEtabTests/ and BenchmarkModels/ are .Rbuildignore'd (too large to ship),
+# so they live at the repo root and tests find them via env vars set in
+# tests/testthat/setup.R (which walks up before any test changes cwd).
+# CI / external runs can override either by exporting the env var directly.
 .petab_repo_dir <- function() {
-  envp <- Sys.getenv("DMOD_PETABTESTS", unset = "")
-  candidates <- c(
-    if (nzchar(envp)) envp,
-    file.path(getwd(), "PEtabTests"),
-    file.path(getwd(), "..", "..", "PEtabTests"),
-    file.path(dirname(getwd()), "..", "PEtabTests"),
-    "/home/simon/Documents/Projects/dMod/PEtabTests"
-  )
-  for (p in candidates) if (nzchar(p) && dir.exists(p)) return(normalizePath(p))
-  ""
+  p <- Sys.getenv("DMOD_PETABTESTS", unset = "")
+  if (nzchar(p) && dir.exists(p)) normalizePath(p, winslash = "/") else ""
 }
 
-# Same idea for the BenchmarkModels/ directory (real-world PEtab benchmarks).
 .benchmark_dir <- function() {
-  envp <- Sys.getenv("DMOD_BENCHMARKMODELS", unset = "")
-  candidates <- c(
-    if (nzchar(envp)) envp,
-    file.path(getwd(), "BenchmarkModels"),
-    file.path(getwd(), "..", "..", "BenchmarkModels"),
-    file.path(dirname(getwd()), "..", "BenchmarkModels"),
-    "/home/simon/Documents/Projects/dMod/BenchmarkModels"
-  )
-  for (p in candidates) if (nzchar(p) && dir.exists(p)) return(normalizePath(p))
-  ""
+  p <- Sys.getenv("DMOD_BENCHMARKMODELS", unset = "")
+  if (nzchar(p) && dir.exists(p)) normalizePath(p, winslash = "/") else ""
 }
 
 # Skip integration tests that need import_sbml() when the libsbml virtualenv
@@ -202,8 +184,7 @@ test_that("read_petab_tables returns the expected slots for v1", {
 
 test_that("hand-built case-0001 fixture produces solution-matching llh", {
 
-  setwd(tempdir())
-
+  withr::local_dir(tempdir())
   # Reaction network identical to PEtabTests/0001/_model.xml after libsbml
   # would have inlined the kinetic law's compartment factor. We use a unit
   # compartment so kinetic laws read just k1*A and k2*B.
@@ -262,8 +243,7 @@ test_that("hand-built case-0001 fixture produces solution-matching llh", {
 
 test_that("PEtab test cases 0001-0006 import and produce solution-matching llh", {
 
-  setwd(tempdir())
-
+  withr::local_dir(tempdir())
   petab_dir <- .petab_repo_dir()
   if (!nzchar(petab_dir)) skip("PEtabTests/ directory not found")
   if (!.libsbml_works())   skip("libsbml virtualenv not available")
@@ -292,8 +272,7 @@ test_that("PEtab test cases 0001-0006 import and produce solution-matching llh",
 
 test_that("PEtab Stage-2 test cases 0007-0016 produce solution-matching llh", {
 
-  setwd(tempdir())
-
+  withr::local_dir(tempdir())
   petab_dir <- .petab_repo_dir()
   if (!nzchar(petab_dir)) skip("PEtabTests/ directory not found")
   if (!.libsbml_works())   skip("libsbml virtualenv not available")
@@ -327,8 +306,7 @@ test_that("PEtab Stage-2 test cases 0007-0016 produce solution-matching llh", {
 
 test_that("two-condition roundtrip preserves objective value", {
 
-  setwd(tempdir())
-
+  withr::local_dir(tempdir())
   petab_dir <- .petab_repo_dir()
   if (!nzchar(petab_dir)) skip("PEtabTests/ directory not found")
   if (!.libsbml_works())   skip("libsbml virtualenv not available")
@@ -378,8 +356,7 @@ test_that("two-condition roundtrip preserves objective value", {
 
 test_that("Boehm_JProteomeRes2014 benchmark imports and matches published optimum", {
 
-  setwd(tempdir())
-
+  withr::local_dir(tempdir())
   bm_dir <- .benchmark_dir()
   if (!nzchar(bm_dir))  skip("BenchmarkModels/ directory not found")
   if (!.libsbml_works())  skip("libsbml virtualenv not available")
@@ -414,7 +391,7 @@ test_that("Boehm_JProteomeRes2014 benchmark imports and matches published optimu
 
 test_that("export_sbml emits InitialAssignment for symbolic state initials", {
 
-  setwd(tempdir())
+  withr::local_dir(tempdir())
   if (!.libsbml_works()) skip("libsbml virtualenv not available")
 
   reactions <- eqnlist()
@@ -522,7 +499,7 @@ test_that(".petab_classify_lhs collapses 10^0 -> 1 via eval_constant", {
 
 test_that("native exportPEtab roundtrips outer pouter on log10 scale (1-cond)", {
 
-  setwd(tempdir())
+  withr::local_dir(tempdir())
   if (!.libsbml_works()) skip("libsbml virtualenv not available")
 
   # Tiny 2-state model, single condition. Build the trafo via explicit
@@ -577,7 +554,7 @@ test_that("native exportPEtab roundtrips outer pouter on log10 scale (1-cond)", 
 
 test_that("native exportPEtab roundtrips per-condition k override (2-cond)", {
 
-  setwd(tempdir())
+  withr::local_dir(tempdir())
   if (!.libsbml_works()) skip("libsbml virtualenv not available")
 
   reactions <- eqnlist() %>%
@@ -635,7 +612,7 @@ test_that("native exportPEtab roundtrips per-condition k override (2-cond)", {
 
 test_that("exportPEtab errors on undeclared free symbol after strip", {
 
-  setwd(tempdir())
+  withr::local_dir(tempdir())
   if (!.libsbml_works()) skip("libsbml virtualenv not available")
 
   reactions <- eqnlist() %>%
@@ -670,7 +647,7 @@ test_that("exportPEtab errors on undeclared free symbol after strip", {
 
 test_that("native exportPEtab roundtrips per-row sigma via noiseParameters column", {
 
-  setwd(tempdir())
+  withr::local_dir(tempdir())
   if (!.libsbml_works()) skip("libsbml virtualenv not available")
 
   reactions <- eqnlist() %>%
@@ -725,7 +702,7 @@ test_that("native exportPEtab roundtrips per-row sigma via noiseParameters colum
 
 test_that("native exportPEtab roundtrips compound trafos like 10^(KM + 5)", {
 
-  setwd(tempdir())
+  withr::local_dir(tempdir())
   if (!.libsbml_works()) skip("libsbml virtualenv not available")
 
   # 1-state, 1-reaction with a non-trivial compound mapping for the rate:
@@ -1010,7 +987,7 @@ test_that("exportPEtabObject v2 writes nominalValue verbatim (no parameterScale 
   petab_dir <- .petab_repo_dir()
   if (!nzchar(petab_dir)) skip("PEtabTests/ directory not found")
 
-  setwd(tempdir())
+  withr::local_dir(tempdir())
   pp <- importPEtab(file.path(petab_dir, "0001", "_0001.yaml"),
                     solver = "deSolve", compile = FALSE)
   td <- tempfile("petab_v2_lin_"); dir.create(td)
@@ -1041,7 +1018,7 @@ test_that("exportPEtabObject v2 writes long-format conditions and experiments", 
   petab_dir <- .petab_repo_dir()
   if (!nzchar(petab_dir)) skip("PEtabTests/ directory not found")
 
-  setwd(tempdir())
+  withr::local_dir(tempdir())
   # 0001 has a single condition; trivial v2 export should produce one
   # experimentId row.
   petab <- importPEtab(file.path(petab_dir, "0001", "_0001.yaml"),
@@ -1070,7 +1047,7 @@ test_that("v2 export → v2 import roundtrips the objective on case 0001", {
   petab_dir <- .petab_repo_dir()
   if (!nzchar(petab_dir)) skip("PEtabTests/ directory not found")
 
-  setwd(tempdir())
+  withr::local_dir(tempdir())
   pp1 <- importPEtab(file.path(petab_dir, "0001", "_0001.yaml"),
                      solver = "deSolve", compile = TRUE)
   td <- tempfile("v2_rt_"); dir.create(td)
@@ -1091,7 +1068,7 @@ test_that("v2 PEtab test cases 0001/0002/0009 import and match published llh", {
   # Earlier tests may setwd() into a tempfile() dir that gets unlinked on
   # exit; reset to a guaranteed-existing cwd before any path lookup so
   # `.petab_repo_dir()`'s `getwd()` calls don't error.
-  setwd(tempdir())
+  withr::local_dir(tempdir())
   petab_dir <- .petab_repo_dir()
   if (!nzchar(petab_dir)) skip("PEtabTests/ directory not found")
   v2_dir <- file.path(petab_dir, "v2")
@@ -1113,7 +1090,7 @@ test_that("v2 PEtab test cases 0001/0002/0009 import and match published llh", {
       message("v2 case ", case, " import error: ", conditionMessage(e))
       NA_real_
     })
-    setwd(tempdir())
+    withr::local_dir(tempdir())
     expect_equal(res, -2 * as.numeric(sol$llh), tolerance = 1e-3,
                  info = sprintf("v2 case %s", case))
   }

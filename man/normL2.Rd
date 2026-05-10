@@ -48,17 +48,10 @@ The returned objective function can be used with optimizers such as
 \link{mstrust} and supports aggregation over multiple experimental conditions.
 }
 \details{
-Objective functions can be combined using the \code{+} operator, see
-\link{sumobjfn}.
-
-The Bessel correction is applied globally across all conditions and is given by
-\deqn{\sqrt{n / (n - p)}}
-where \eqn{n} is the total number of data points and \eqn{p} is the number of
-structural (non-error-model) parameters.
-
-Parallelization is performed over experimental conditions if
-\code{cores > 1}. The number of cores is fixed when calling \code{normL2()}
-and cannot be changed at evaluation time.
+Combine objectives with \code{+} (see \link{sumobjfn}). The Bessel correction
+\eqn{\sqrt{n/(n-p)}} is applied globally (\eqn{n} = total data points,
+\eqn{p} = structural parameters). When \code{cores > 1}, conditions are
+evaluated in parallel; the core count is fixed at construction.
 }
 \examples{
 \dontrun{

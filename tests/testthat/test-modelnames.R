@@ -14,16 +14,22 @@ test_that("modelnames behave as expected", {
   #-! library(conveniencefunctions)
   #-! library(dMod)
   library(dplyr)
-  setwd(tempdir())  
-  
+  # Run codegen in a temp dir so the .c/.so artefacts don't leak into
+  # tests/testthat/. withr::local_dir auto-restores at test_that exit so
+  # later tests don't load stale shared libs from this test's tempdir.
+  withr::local_dir(tempdir())
+
   ## Model definition (text-based, scripting part)
   f <- NULL %>%
     addReaction("A", "B", "k1*A", "translation") %>%
     addReaction("B",  "", "k2*B", "degradation") %>%
     as.eqnvec()
   events <- eventlist(var = "A", time = 5, value = "A_add", method = "add")
-  
-  x1 <- odemodel(f, events = events, modelname = "odemodel") %>% Xs
+
+  # Use a name distinct from the default `odemodel` used in test-odemodel.R —
+  # both tests would otherwise share a DLL symbol space across the testthat
+  # session and corrupt each other's parms-length contract.
+  x1 <- odemodel(f, events = events, modelname = "mn_odemodel") %>% Xs
   g1 <- Y(c(Bobs = "s1*B"), x1, compile = T, modelname = "obsfn")
   
   conditions <- c("a", "b")
@@ -48,13 +54,13 @@ test_that("modelnames behave as expected", {
   
   # 3. Compiling the same structural model into a different modelname lets both functions intact
   g3 <- Y(c(Bobs = "s1*B"), x1, compile = T, modelname = "obsfn3")
-  x3 <- odemodel(f, events = events, modelname = "odemodel3") %>% Xs
-  
+  x3 <- odemodel(f, events = events, modelname = "mn_odemodel3") %>% Xs
+
   # Define your expectations here
   # 1. Modelname is what goes in. P() with compile=TRUE links the per-condition
   #    sources into a single SO named `modelname`, so modelname(p1) is "p"
   #    rather than the per-condition codegen names ("p_a", "p_b").
-  expect_equal(modelname(x1), "odemodel")
+  expect_equal(modelname(x1), "mn_odemodel")
   expect_equal(modelname(g1), "obsfn")
   expect_equal(modelname(p1), "p")
   # 2. Recompiling the same modelname is rebuild-safe: every combination still

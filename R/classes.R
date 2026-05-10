@@ -335,37 +335,25 @@ eqnvec <- function(...) {
 
 #' Generate eqnlist object
 #'
-#' @description The eqnlist object stores an ODE as a list of stoichiometric matrix,
-#' rate expressions, state names, and compartment information. Compartments are
-#' first-class entities: `compartments` maps a compartment ID to a record holding
-#' its volume expression (and a reserved `rule` field for future dynamic-volume
-#' support); `compartmentOf` assigns each state to a compartment by ID.
+#' @description The eqnlist object stores an ODE as a stoichiometric matrix,
+#' rate expressions, state names, and compartment information.
 #' @export
-#' @param smatrix Matrix of class numeric. The stoichiometric matrix,
-#' one row per reaction/process and one column per state.
-#' @param states Character vector. Names of the states.
-#' @param rates Character vector. The rate expressions.
-#' @param volumes Named character, volume parameters for states. Names must be a
-#' subset of the states. Kept for backward compatibility: when supplied without
-#' `compartments`/`compartmentOf`, distinct expressions are auto-assigned
-#' compartment IDs `c1`, `c2`, ... The `$volumes` slot on the returned object is
-#' a derived view of `compartments` and `compartmentOf` and should not be used
-#' as the authoritative source.
-#' @param description Character vector. Description of the single processes.
-#' @param compartments Named list keyed by compartment ID. Each entry is either
-#' a character volume expression (e.g. `"V_cyt"`) or a list with fields
-#' `volume` (character) and `rule` (character or `NULL`). `rule` is reserved
-#' for future dynamic-volume support and must be `NULL` in the current version.
-#' @param compartmentOf Named character vector keyed by state; value = compartment
-#' ID from `names(compartments)`. States not present are assigned to an implicit
-#' `"defaultComp"` compartment with volume `"1"`.
-#' @param reactionCompartment Optional character vector of length `nrow(smatrix)`
-#' giving, per reaction, the compartment ID in which the rate expression is a
-#' concentration-rate (the "reference" compartment for that reaction). Use `NA`
-#' to ask [getFluxes()] to infer the reference compartment from the educts.
-#' Required when a reaction's educts span multiple compartments (e.g. membrane
-#' binding `L_ext + R_cyt -> Complex`) — there is no single educt compartment
-#' to infer from.
+#' @param smatrix Numeric stoichiometric matrix; one row per reaction, one
+#'   column per state.
+#' @param states Character vector of state names.
+#' @param rates Character vector of rate expressions.
+#' @param volumes Named character of state volumes (kept for back-compat; when
+#'   supplied without `compartments`/`compartmentOf`, distinct expressions are
+#'   auto-assigned IDs `c1`, `c2`, ...).
+#' @param description Character vector describing each reaction.
+#' @param compartments Named list keyed by compartment ID; each entry is a
+#'   volume expression (character) or a list with fields `volume` and `rule`
+#'   (`rule` reserved for future dynamic-volume support, must be `NULL`).
+#' @param compartmentOf Named character vector mapping state → compartment ID.
+#'   States not listed default to compartment `"defaultComp"` with volume `"1"`.
+#' @param reactionCompartment Optional character vector of length
+#'   `nrow(smatrix)`. Per-reaction reference compartment ID; use `NA` to infer
+#'   from educts. Required when educts span multiple compartments.
 #' @return An object of class `eqnlist`, basically a list.
 #' @example inst/examples/eqnlist.R
 eqnlist <- function(smatrix = NULL, states = colnames(smatrix), rates = NULL,

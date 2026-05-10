@@ -149,7 +149,7 @@ appendObj <- function(dMod.frame,
 #'
 #' @param dMod.frame A dmod.frame, preferably with a column `fits`.
 #' @param parframes Expression to turn a column containing a parlist (e.g. fits) into a column of parframes
-#' @param keepFits 
+#' @param keepFits Logical. If `FALSE` (default), drop the original `fits` column.
 #' @param ... Other columns you want to mutate
 #' @param keepCalls Store a record of the calls in a new colun? See [mutatedMod.frame].
 #'
@@ -177,25 +177,36 @@ appendParframes <- function(dMod.frame,
 
 #' @export
 #' @rdname plotCombined
-#' @param plotErrorBands If the dMod.frame contains an observation function for the 
-#' error model, use it to show error bands.
-plotCombined.tbl_df <- function(model, hypothesis = 1, index = 1, ... , plotErrorBands = F) {
+#' @param hypothesis Integer or character. Row index (or name) of the
+#'   `dMod.frame` to plot. Default `1`.
+#' @param index Integer. Row index inside the selected hypothesis's
+#'   `parframes` (multi-start fit). Default `1`.
+#' @param plotErrorBands If the `dMod.frame` contains an observation function
+#'   for the error model, use it to show error bands.
+plotCombined.tbl_df <- function(prediction, hypothesis = 1, index = 1, ..., plotErrorBands = FALSE) {
+
+  # `prediction` here is the dMod.frame the user passed in (S3 dispatch arg
+  # name has to match the generic). Rebind to `model` so the body keeps its
+  # original terminology, freeing the local `prediction` for the actual
+  # prdlist computed below.
+  model <- prediction
+  prediction <- NULL
 
   dots <- substitute(alist(...))
   message("If you want to subset() the plot, specify hypothesis AND index")
-  if(is.character(hypothesis)) hypothesis <- which(model$hypothesis == hypothesis)
+  if (is.character(hypothesis)) hypothesis <- which(model$hypothesis == hypothesis)
 
-  
+
   data <- model[["data"]][[hypothesis]]
-  prediction <- title <- NULL
+  title <- NULL
   if (is.null(model[["parframes"]])) {
-    prediction <- model[["prd"]][[hypothesis]](model[["times"]][[hypothesis]], 
-                                                    model[["pars"]][[hypothesis]], 
+    prediction <- model[["prd"]][[hypothesis]](model[["times"]][[hypothesis]],
+                                                    model[["pars"]][[hypothesis]],
                                                     deriv = F,
                                                     fixed = model[["fixed"]][[hypothesis]])
     title <- paste(model[["hypothesis"]][[hypothesis]], "initiated with predefined (probably random) parameters")
   }
-  
+
   if (!is.null(model[["parframes"]])) {
     myparvec <- as.parvec(model[["parframes"]][[hypothesis]], index = index)
     prediction <- model[["prd"]][[hypothesis]](model[["times"]][[hypothesis]],
@@ -209,25 +220,31 @@ plotCombined.tbl_df <- function(model, hypothesis = 1, index = 1, ... , plotErro
   }
 
 
-  
-  myplot <- plotCombined.prdlist(prediction, data, ...) + 
+  myplot <- plotCombined.prdlist(prediction, data, ...) +
     ggtitle(label = title)
-  
+
   if (plotErrorBands) {
     predicition_with_error <- NULL
     if (!is.null(model[["e"]][[hypothesis]])){
-      predicition_with_error <- dMod:::as.data.frame.prdlist(prediction, data = data, errfn = model[["e"]][[hypothesis]])
+      predicition_with_error <- as.data.frame.prdlist(prediction, data = data, errfn = model[["e"]][[hypothesis]])
       predicition_with_error <- subset(predicition_with_error, ...)
     }
     myplot <- myplot +
       geom_ribbon(data = predicition_with_error, alpha = 0.15, size = 0)
-  }  
+  }
   return(myplot)
 }
 
 #' @export
 #' @rdname plotPrediction
-plotPrediction.tbl_df <- function(dMod.frame, hypothesis = 1, index = 1, ... ) {
+#' @param hypothesis Integer or character. Row index (or name) of the
+#'   `dMod.frame` to plot. Default `1`.
+#' @param index Integer. Row index inside the selected hypothesis's
+#'   `parframes`. Default `1`.
+plotPrediction.tbl_df <- function(prediction, hypothesis = 1, index = 1, ... ) {
+
+  # S3 first-arg name must match the generic; body keeps the dMod.frame alias.
+  dMod.frame <- prediction
 
   dots <- substitute(alist(...))
   message("If you want to subset() the plot, specify hypothesis AND index")
@@ -261,7 +278,12 @@ plotPrediction.tbl_df <- function(dMod.frame, hypothesis = 1, index = 1, ... ) {
 
 #' @export
 #' @rdname plotData
-plotData.tbl_df <- function(dMod.frame, hypothesis = 1, ... ) {
+#' @param hypothesis Integer or character. Row index (or name) of the
+#'   `dMod.frame` to plot. Default `1`.
+plotData.tbl_df <- function(data, hypothesis = 1, ... ) {
+
+  # S3 first-arg name must match the generic; body keeps the dMod.frame alias.
+  dMod.frame <- data
 
   dots <- substitute(alist(...))
   if(is.character(hypothesis)) hypothesis <- which(dMod.frame$hypothesis == hypothesis)
@@ -275,8 +297,13 @@ plotData.tbl_df <- function(dMod.frame, hypothesis = 1, ... ) {
 
 #' @export
 #' @rdname plotPars
-#' @param nsteps number of steps from the waterfall plot
-plotPars.tbl_df <- function(dMod.frame, hypothesis = 1,  ..., nsteps = 3, tol = 1 ) {
+#' @param hypothesis Integer or character. Row index (or name) of the
+#'   `dMod.frame` to plot. Default `1`.
+#' @param nsteps Number of steps from the waterfall plot.
+plotPars.tbl_df <- function(x, hypothesis = 1,  ..., nsteps = 3, tol = 1 ) {
+
+  # S3 first-arg name must match the generic; body keeps the dMod.frame alias.
+  dMod.frame <- x
 
   if (!missing(...)) {dots <- substitute(...)
   } else {
@@ -320,7 +347,12 @@ plotPars.tbl_df <- function(dMod.frame, hypothesis = 1,  ..., nsteps = 3, tol = 
 
 #' @export
 #' @rdname plotValues
-plotValues.tbl_df <- function(dMod.frame, hypothesis = 1, ..., tol = 1 ) {
+#' @param hypothesis Integer or character. Row index (or name) of the
+#'   `dMod.frame` to plot. Default `1`.
+plotValues.tbl_df <- function(x, hypothesis = 1, ..., tol = 1 ) {
+
+  # S3 first-arg name must match the generic; body keeps the dMod.frame alias.
+  dMod.frame <- x
 
   dots <- substitute(...)
 
@@ -357,7 +389,11 @@ plotValues.tbl_df <- function(dMod.frame, hypothesis = 1, ..., tol = 1 ) {
 #' @export
 #' @rdname plotProfile
 #' @param hypothesis numeric, can be longer than 1
-plotProfile.tbl_df <- function(dMod.frame, hypothesis = 1, ...) {
+plotProfile.tbl_df <- function(profs, hypothesis = 1, ...) {
+
+  # S3 first-arg name must match the generic; body keeps the dMod.frame alias.
+  dMod.frame <- profs
+
   dots <- substitute(alist(...))
 
   if(is.character(hypothesis)) hypothesis <- which(dMod.frame$hypothesis == hypothesis)
@@ -373,14 +409,18 @@ plotProfile.tbl_df <- function(dMod.frame, hypothesis = 1, ...) {
 #' @export
 #' @rdname plotPaths
 #' @param hypothesis numeric, can be longer than 1
-plotPaths.tbl_df <- function(dMod.frame, hypothesis = 1, ...) {
+plotPaths.tbl_df <- function(profs, hypothesis = 1, ...) {
+
+  # S3 first-arg name must match the generic; body keeps the dMod.frame alias.
+  dMod.frame <- profs
+
   dots <- substitute(alist(...))
-  
+
   if(is.character(hypothesis)) hypothesis <- which(dMod.frame$hypothesis == hypothesis)
   
   myprofs <- dMod.frame[["profiles"]][hypothesis] %>% setNames(dMod.frame[["hypothesis"]][hypothesis])
   
-  plotPaths.list(myprofs, ...)
+  plotPaths(myprofs, ...)
 }
 
 
@@ -389,7 +429,7 @@ plotPaths.tbl_df <- function(dMod.frame, hypothesis = 1, ...) {
 #' @export 
 #' @param hypothesis The hypothesis in the dMod.frame
 #' @rdname covariates
-covariates.tbl_df <- function(x, hypothesis = 1) {
+covariates.tbl_df <- function(x, hypothesis = 1, ...) {
   covariates.datalist(x[["data"]][[hypothesis]])
 }
 

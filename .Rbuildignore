@@ -7,3 +7,31 @@
 ^\.claude$
 ^doc$
 ^Meta$
+^scripts$
+^check$
+^CLAUDE\.md$
+^check.*\.log$
+^.*\.tar\.gz$
+
+# Test-time build artefacts written into tests/testthat/ by cOde and CppODE.
+# Without these the source tarball ships .dll/.so/.o test outputs, which
+# triggers CRAN-style "executable files" / "object files" WARNINGs.
+^tests/testthat/.*\.(dll|so|o|c)$
+^tests/testthat/odemodel.*$
+^tests/testthat/decay_des_.*$
+^tests/testthat/petab_fixture_.*$
+^tests/testthat/rep_trafo_.*$
+^tests/testthat/focei_.*$
+^tests/testthat/reactions_for_Alyssa$
+^tests/testthat/reactions_for_Alyssa_model\.csv$
+
+# Unrelated working directories and notes
+^BenchmarkModels$
+^PEtabTests$
+^PEtab2dmod_example\.Rmd$
+^README\.Rmd$
+^README\.html$
+^README_files$
+^notes$
+^testing$
+^todo\.txt$

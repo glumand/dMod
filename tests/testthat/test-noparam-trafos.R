@@ -7,8 +7,7 @@ context("Parameter transformations and observation functions with empty outer pa
 
 test_that("Pexpl with pure-numeric trafo evaluates (symbolic and dual)", {
 
-  setwd(tempdir())
-
+  withr::local_dir(tempdir())
   trafo <- c(A = "1.0", B = "2.5")
 
   p_sym <- Pexpl(trafo, derivMode = "symbolic", compile = FALSE,
@@ -25,8 +24,7 @@ test_that("Pexpl with pure-numeric trafo evaluates (symbolic and dual)", {
 
 test_that("Pimpl with no outer parameters does not crash in build_jacobian", {
 
-  setwd(tempdir())
-
+  withr::local_dir(tempdir())
   # One dependent state, no parameters: unique root A = 1.
   trafo <- c(A = "A - 1.0")
   p <- Pimpl(trafo, parameters = NULL, compile = TRUE,
@@ -40,8 +38,7 @@ test_that("Pimpl with no outer parameters does not crash in build_jacobian", {
 
 test_that("Y with pure-numeric observable composes with an Xs prediction", {
 
-  setwd(tempdir())
-
+  withr::local_dir(tempdir())
   f <- as.eqnvec(c(A = "-k*A"))
   m <- odemodel(f, modelname = "noparam_y_ode", compile = TRUE,
                 solver = "CppODE")
@@ -61,8 +58,7 @@ test_that("Y with pure-numeric observable composes with an Xs prediction", {
 
 test_that("Full g*x*p chain with constant-only Pexpl evaluates", {
 
-  setwd(tempdir())
-
+  withr::local_dir(tempdir())
   f <- as.eqnvec(c(A = "-k*A"))
   m <- odemodel(f, modelname = "noparam_full_ode", compile = TRUE,
                 solver = "CppODE")

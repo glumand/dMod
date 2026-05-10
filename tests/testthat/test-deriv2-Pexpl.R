@@ -1,7 +1,6 @@
 test_that("Pexpl deriv2 (AD) reproduces analytical Hessian", {
   prev <- getwd(); on.exit(setwd(prev), add = TRUE)
-  setwd(tempdir())
-
+  withr::local_dir(tempdir())
   trafo <- c(a = "exp(la)", b = "la^2 + lb", c = "la*lb")
   p <- Pexpl(trafo, parameters = NULL,
              modelname = paste0("ad_pexpl_d2_", as.integer(Sys.time())),
@@ -31,8 +30,7 @@ test_that("Pexpl deriv2 (AD) reproduces analytical Hessian", {
 
 test_that("Pexpl deriv2 (symbolic) reproduces analytical Hessian", {
   prev <- getwd(); on.exit(setwd(prev), add = TRUE)
-  setwd(tempdir())
-
+  withr::local_dir(tempdir())
   trafo <- c(a = "exp(la)", b = "la^2 + lb", c = "la*lb")
   p <- Pexpl(trafo, parameters = NULL,
              modelname = paste0("sym_pexpl_d2_", as.integer(Sys.time())),
@@ -59,8 +57,7 @@ test_that("Pexpl deriv2 (AD) handles identity pass-through entries", {
   # appended to the trafo. The compiled AD2 entry must propagate dual2nd
   # values through these without corrupting derivatives.
   prev <- getwd(); on.exit(setwd(prev), add = TRUE)
-  setwd(tempdir())
-
+  withr::local_dir(tempdir())
   trafo <- c(a = "exp(la)", b = "la^2 + lb")
   p <- Pexpl(trafo, parameters = c("la", "lb"),
              modelname = paste0("id_pexpl_d2_", as.integer(Sys.time())),
@@ -104,8 +101,7 @@ test_that("[.parvec and c.parvec propagate deriv2 attributes", {
 
 test_that("Pexpl(deriv2 = FALSE) refuses deriv2 = TRUE at call time", {
   prev <- getwd(); on.exit(setwd(prev), add = TRUE)
-  setwd(tempdir())
-
+  withr::local_dir(tempdir())
   trafo <- c(a = "exp(la)")
   p <- Pexpl(trafo, parameters = NULL,
              modelname = paste0("nod2_pexpl_", as.integer(Sys.time())),

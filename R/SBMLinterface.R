@@ -1,10 +1,12 @@
 #' Import an SBML model
 #'
 #' Reads an SBML Level 3 file via a Python helper (`inst/code/sbmlImport.py`)
-#' that uses `python-libsbml`. dMod expects a virtualenv at
-#' `~/.virtualenvs/libsbml/` with `python-libsbml` installed; create it with
-#' `python3 -m venv ~/.virtualenvs/libsbml && ~/.virtualenvs/libsbml/bin/pip
-#' install python-libsbml`.
+#' that uses `python-libsbml`. The Python environment is provisioned
+#' automatically by `reticulate` on first use — no manual venv setup is
+#' required. Users who want to point dMod at an existing interpreter
+#' (e.g. a hand-managed venv or conda env) can set the
+#' `DMOD_LIBSBML_PYTHON` environment variable to its absolute path; that
+#' bypasses reticulate entirely.
 #'
 #' Kinetic laws coming out of SBML are **extensive** (amount/time) by SBML
 #' convention, whereas dMod stores rates in **concentration-style**. On import,
@@ -341,24 +343,42 @@ export_sbml <- function(eqnlist, parameters = NULL, inits = NULL, filepath,
 
 
 .dmod_libsbml_python <- function() {
-  python <- path.expand("~/.virtualenvs/libsbml/bin/python")
-  if (!file.exists(python))
-    stop("dMod expects a Python virtualenv at ~/.virtualenvs/libsbml/. ",
-         "Create one with `python3 -m venv ~/.virtualenvs/libsbml && ",
-         "~/.virtualenvs/libsbml/bin/pip install python-libsbml`.")
+  # Explicit override wins (existing user envs, conda, CI with prebuilt
+  # interpreters, ...). Skip reticulate provisioning entirely.
+  override <- Sys.getenv("DMOD_LIBSBML_PYTHON", unset = "")
+  python <- if (nzchar(override)) {
+    if (!file.exists(override))
+      stop("DMOD_LIBSBML_PYTHON=", override, " does not exist.")
+    override
+  } else {
+    # `python-libsbml` was declared via reticulate::py_require() in
+    # .onLoad(). py_exe() materialises the managed env (downloads Python +
+    # installs the requirement on first call) and returns the interpreter
+    # path so the existing system2() invocations downstream keep working.
+    tryCatch(reticulate::py_exe(), error = function(e) {
+      stop("Could not provision a Python with python-libsbml via ",
+           "reticulate (", conditionMessage(e), "). Set ",
+           "DMOD_LIBSBML_PYTHON to point at a Python interpreter that ",
+           "has python-libsbml installed.")
+    })
+  }
 
-  # Probe `import libsbml` once per session. Without this, a venv that
-  # exists but lacks python-libsbml fails deep inside sbmlImport.py with
-  # an opaque exit code. Cached via an env var so the ~30 ms python
-  # spawn does not repeat across import_sbml / export_sbml calls.
+  # Probe `import libsbml` once per session. For the override path this
+  # catches a wrong interpreter early; for the reticulate path it is a
+  # cheap sanity check that the requirement actually resolved. Cached via
+  # an env var so the ~30 ms python spawn does not repeat across
+  # import_sbml / export_sbml calls.
   if (!identical(Sys.getenv("DMOD_LIBSBML_OK", unset = ""), "1")) {
     status <- suppressWarnings(
       system2(python, args = c("-c", shQuote("import libsbml")),
               stdout = FALSE, stderr = FALSE))
     if (status != 0L)
-      stop("Python at ~/.virtualenvs/libsbml/ exists but `import libsbml` ",
-           "failed (status ", status, "). Install python-libsbml with ",
-           "`~/.virtualenvs/libsbml/bin/pip install python-libsbml`.")
+      stop("Python at ", python, " could not `import libsbml` ",
+           "(status ", status, "). ",
+           if (nzchar(override))
+             "Install python-libsbml into that env."
+           else
+             "reticulate did not provision python-libsbml as expected.")
     Sys.setenv(DMOD_LIBSBML_OK = "1")
   }
   python

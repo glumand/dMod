@@ -20,7 +20,9 @@ nll(
 
 \item{pars}{Named vector of ALL outer parameters (union across conditions)}
 
-\item{deriv}{Logical. If TRUE, compute gradient and hessian}
+\item{deriv}{Logical. If TRUE, compute gradient and hessian.}
+
+\item{deriv2}{Logical. If TRUE, also propagate second-order derivatives.}
 
 \item{opt.BLOQ}{Character denoting the method to deal with BLOQ data.
 One of "M1", "M3", "M4NM", or "M4BEAL".}

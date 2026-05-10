@@ -26,7 +26,9 @@
 #' @param method character, one of \code{"explicit"}, \code{"implicit"}, or \code{"equilibrate"}.
 #'   If \code{NULL} (default), auto-selects \code{"equilibrate"} for [eqnlist] entries 
 #'   and \code{"explicit"} for all others.
-#' @param cores Number of cores for parallel method call per condition
+#' @param cores Number of cores for the per-condition `mclapply()`.
+#'   `NULL` (default) auto-detects via [detectFreeCores]; forced to 1 on
+#'   Windows.
 #' @param verbose Print out information during compilation
 #' @param ... Additional arguments passed to the underlying transformation function
 #'   ([Pexpl], [Pimpl], or [Pequil]).
@@ -40,17 +42,28 @@
 #' @export
 P <- function(trafo = NULL, parameters = NULL, condition = NULL,
               compile = FALSE, modelname = NULL, method = NULL,
-              cores = detectFreeCores(), verbose = FALSE, ...) {
-  
+              cores = NULL, verbose = FALSE, ...) {
+
   if (is.null(trafo)) return()
-  
+
   # Wrap single trafo in named list
   if (!is.list(trafo) || inherits(trafo, "eqnlist") || inherits(trafo, "eqnvec")) {
     trafo_list <- list(trafo)
     names(trafo_list) <- condition
   } else { trafo_list <- trafo }
-  
-  if (Sys.info()[['sysname']] == "Windows") cores <- 1
+
+  # Resolve `cores`. mclapply forks aren't available on Windows, so we cap at
+  # 1 there unconditionally. On POSIX, defer to detectFreeCores() unless the
+  # caller passed an explicit value — and call detectFreeCores() at most once,
+  # since it has visible side effects (warnings on Windows, SSH on remotes).
+  on_windows <- Sys.info()[['sysname']] == "Windows"
+  if (on_windows) {
+    cores <- 1L
+  } else if (is.null(cores)) {
+    cores <- detectFreeCores()
+  } else {
+    cores <- min(detectFreeCores(), cores)
+  }
 
   # Always do codegen-only inside mclapply; actual compile + dyn.load must
   # happen in the parent process below, because dyn.load in a forked worker
@@ -74,7 +87,7 @@ P <- function(trafo = NULL, parameters = NULL, condition = NULL,
                                 compile = FALSE, modelname = modelname, verbose = verbose, ...)
     )
 
-  }, mc.cores = min(detectFreeCores(), cores)))
+  }, mc.cores = cores))
 
   if (compile) compile(result, cores = cores, output = modelname, verbose = verbose)
 
@@ -84,23 +97,10 @@ P <- function(trafo = NULL, parameters = NULL, condition = NULL,
 
 #' Parameter transformation (explicit)
 #'
-#' Constructs a parameter transformation function that maps **outer parameters**
-#' \eqn{p_{\text{outer}}} to **inner parameters** \eqn{p_{\text{inner}}}
-#' according to symbolic expressions.
-#'
-#' @description
-#' The explicit parameter transformation defines a direct, algebraic mapping
-#'
-#' \deqn{p_{\text{inner}} = \mathrm{parfn}(p_{\text{outer}}),}
-#'
-#' where \eqn{\mathrm{parfn}} is a vector-valued function composed from symbolic
-#' expressions. Each element of `trafo` defines one component of
-#' \eqn{p_{\text{inner}}}.
-#'
-#' The **Jacobian** is obtained by **symbolic differentiation**.
-#' It is attached as attribute `"deriv"`
-#' to the resulting function output and automatically composed when
-#' transformations are combined via the [parfn] interface.
+#' Constructs an explicit, algebraic mapping
+#' \eqn{p_{\text{inner}} = \mathrm{parfn}(p_{\text{outer}})} from symbolic
+#' expressions. The Jacobian is obtained by symbolic differentiation and
+#' attached as `attr(., "deriv")` on each evaluation.
 #'
 #' @param trafo `eqnvec` or named character vector.
 #' Names correspond to **inner parameters**; each element defines how it depends
@@ -114,16 +114,11 @@ P <- function(trafo = NULL, parameters = NULL, condition = NULL,
 #' for faster evaluation.
 #' @param modelname Base name for generated C++ code if `compile = TRUE`.
 #' @param verbose Logical. Print compiler messages.
-#' @param derivMode Character. Selects the derivative backend used by [CppODE::funCpp]
-#'   to evaluate the transformation Jacobian. One of `"dual"` (default,
-#'   in-tree forward-mode AD via `evaluate`; requires `compile = TRUE`) or
-#'   `"symbolic"` (classical SymPy Jacobian, appropriate for typically small
-#'   parameter transformations).
-#' @param deriv2 Logical. If `TRUE`, the compiled trafo additionally exposes
-#'   second-order derivatives. The returned `parfn` then carries an
-#'   `attr(., "deriv2")` 3D array (`[p, theta, theta]`) on its output when
-#'   called with `deriv2 = TRUE`. The AD backend for `deriv2 = TRUE` requires
-#'   `compile = TRUE`. Default `FALSE`.
+#' @param derivMode Character. Jacobian backend: `"dual"` (default,
+#'   forward-mode AD; requires compiled native code) or `"symbolic"`
+#'   (SymPy Jacobian; pure R).
+#' @param deriv2 Logical. If `TRUE`, attach a second-order derivative
+#'   `attr(., "deriv2")` array of shape `[p, theta, theta]`. Default `FALSE`.
 #'
 #' @return
 #' A function of class [parfn].
@@ -410,10 +405,9 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
 #' Parameter transformation (implicit, root-finding)
 #'
 #' @param trafo Named character vector, \code{\link{eqnvec}}, or
-#'   \code{\link{eqnlist}} defining the equations to be set to zero.
-#'   For \code{eqnlist} inputs, conserved quantities are detected and
-#'   eliminated species are substituted automatically. The user then
-#'   provides \code{total_*} parameters instead of the eliminated species.
+#'   \code{\link{eqnlist}} defining the equations to be set to zero. For
+#'   \code{eqnlist} inputs, conserved quantities are auto-detected and
+#'   eliminated species replaced by \code{total_*} parameters.
 #' @param parameters Character vector, the independent variables.
 #' @param forcings Character vector of forcing/dummy state names.
 #' @param condition Character, the condition label.
@@ -834,9 +828,14 @@ Pimpl <- function(trafo, parameters = NULL, forcings = NULL, condition = NULL, k
 #' @param keep.root Logical. Cache steady state for warm-starting.
 #' @param controlsODE Named list of ODE solver options, accessible via
 #'   \code{\link{controls}()}.
+#' @param start.time Numeric. Start time of the equilibration integration
+#'   (default `-1e7`).
+#' @param end.time Numeric. End time at which the steady state is read off
+#'   (default `0`).
 #' @param compile Logical. Compile the C++ ODE model.
 #' @param modelname Character, base name for C++ code files.
 #' @param verbose Logical. Print compiler output.
+#' @param deriv2 Logical. Emit second-order sensitivities. Default `FALSE`.
 #' @param ... Additional arguments passed to \code{\link[CppODE]{CppODE}}.
 #'
 #' @return A function of class \code{\link{parfn}}.
@@ -1118,36 +1117,15 @@ Pequil <- function(trafo, parameters = NULL, forcings = NULL, condition = NULL, 
 
 #' Construct parameter transformations
 #'
-#' Helper functions to construct and modify symbolic parameter transformations
-#' used by prediction functions such as [P()] and [Xs()].
-#'
-#' The functions [define()], [insert()] and [branch()] operate exclusively on
-#' the symbolic level. They are used to build transformation objects that
-#' describe how *outer parameters* are expressed in terms of *inner parameters*
-#' or constants.
-#'
-#' No model evaluation, sensitivity calculation or parameter checking is
-#' performed by these functions. The resulting transformations are interpreted
-#' later when prediction or objective functions are constructed.
-#'
+#' Symbolic helpers to build and modify parameter transformations used by
+#' [P()] and [Xs()]:
 #' \describe{
-#'   \item{define}{
-#'     Reset or redefine a transformation rule by explicitly specifying a new
-#'     right-hand side.
-#'   }
-#'   \item{insert}{
-#'     Insert symbolic substitutions into existing transformation rules without
-#'     resetting them.
-#'   }
-#'   \item{branch}{
-#'     Duplicate a transformation for multiple conditions and optionally apply
-#'     condition-specific substitutions.
-#'   }
+#'   \item{define}{Reset or redefine a transformation rule.}
+#'   \item{insert}{Apply symbolic substitutions to existing rules.}
+#'   \item{branch}{Duplicate a transformation per condition with optional
+#'     condition-specific substitutions; the condition table is stored as
+#'     attribute `"tree"`.}
 #' }
-#'
-#' When transformations are branched, a condition table is stored as metadata
-#' (attribute \code{"tree"}) and may be used to restrict subsequent calls to
-#' [define()] or [insert()] to specific conditions.
 #'
 #' @param trafo
 #'   A named character vector, an object of class \code{eqnvec}, or a list

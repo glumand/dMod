@@ -31,7 +31,7 @@ A list with class \code{"PEtabProblem"} holding \code{dataList},
 closure has the PEtab fixed parameters baked in, so calling
 \code{obj(bestfit)} evaluates the likelihood at the published MLE
 without the user having to pass \code{fixed = ...}. \code{bestfit} is the
-PEtab \code{nominalValue} for every estimated parameter — for benchmark
+PEtab \code{nominalValue} for every estimated parameter -- for benchmark
 problems this is the published maximum-likelihood estimate
 transported through the manifest; for user-authored problems it is
 the current best estimate (and serves as the optimizer's starting

@@ -8,6 +8,8 @@
 }
 \arguments{
 \item{x}{parvec object}
+
+\item{...}{Currently ignored.}
 }
 \description{
 Prints a parameter vector along with information about
