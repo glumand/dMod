@@ -47,8 +47,7 @@ Suggests:
     withr,
     deSolve,
     JuliaCall,
-    openxlsx,
-    rPython
+    openxlsx
 VignetteBuilder: knitr
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)

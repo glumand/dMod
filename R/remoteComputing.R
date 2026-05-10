@@ -1,11 +1,13 @@
 #' Detect number of free cores
-#' 
+#'
 #' @description Estimates free cores from the 1-min load average.
 #' Supports Linux, macOS, and remote machines via SSH.
 #' On Windows, returns 1 with a warning (no load average available).
+#' Result is floored at 1 so it can be fed straight into
+#' `mclapply(mc.cores = ...)` without crashing under heavy load.
 #' @param machine character vector of SSH hosts, e.g. "user@@localhost".
 #' NULL (default) for the local machine.
-#' @return numeric vector of free cores with attributes "ncores" and "used".
+#' @return numeric vector of free cores (>= 1) with attributes "ncores" and "used".
 #' @export
 detectFreeCores <- function(machine = NULL) {
   
@@ -35,7 +37,11 @@ detectFreeCores <- function(machine = NULL) {
       nCores <- as.numeric(cmd("nproc --all"))
     }
     
-    list(free = max(0, round(nCores - occupied)), nCores = nCores, occupied = occupied)
+    # Floor at 1: callers feed `free` straight into mclapply(mc.cores = ...)
+    # which rejects 0. On a CI runner under heavy compile load the 1-min load
+    # average can exceed nCores, which previously gave free = 0 and crashed
+    # downstream. Reporting 1 instead of 0 here means "serialise, don't die".
+    list(free = max(1L, round(nCores - occupied)), nCores = nCores, occupied = occupied)
   }
   
   if (!is.null(machine)) {

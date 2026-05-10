@@ -12,7 +12,7 @@ except:
 
 def checkPredictions(predictions, predFunctions, infisAll, allVariables):
 	n = len(allVariables)
-	print '\nChecking predictions:'
+	print('\nChecking predictions:')
 
 	printStrings = []
 	for i in range(len(predictions)):
@@ -70,21 +70,21 @@ def checkPredictions(predictions, predFunctions, infisAll, allVariables):
 			if length2 <= len(printStrings[i][j][2]):
 				length2 = len(printStrings[i][j][2])
 
-	print ('{0:'+str(length0)+'s} : ').format('prediction') \
-		+ ('{0:'+str(length1)+'s} : ').format('symmetry')\
-		+ str('infinitesimal')
+	print((('{0:'+str(length0)+'s} : ').format('prediction')
+		+ ('{0:'+str(length1)+'s} : ').format('symmetry')
+		+ str('infinitesimal')))
 	for i in range(len(predictions)):
-		print '-'*(length0+length1+length2+6)
+		print('-'*(length0+length1+length2+6))
 		if printStrings[i] == True:
-			print ('{0:'+str(length0)+'s} : ').format(tmp) \
-				+ ('{0:'+str(length1)+'s} : ').format('admits all')\
-				+ ('{0:'+str(length2)+'s}').format('      -      ')
+			print((('{0:'+str(length0)+'s} : ').format(tmp)
+				+ ('{0:'+str(length1)+'s} : ').format('admits all')
+				+ ('{0:'+str(length2)+'s}').format('      -      ')))
 			continue
-			
-		print ('{0:'+str(length0)+'s} : ').format(printStrings[i][0][0]) \
-			+ ('{0:'+str(length1)+'s} : ').format(printStrings[i][0][1])\
-			+ str(printStrings[i][0][2])
+
+		print((('{0:'+str(length0)+'s} : ').format(printStrings[i][0][0])
+			+ ('{0:'+str(length1)+'s} : ').format(printStrings[i][0][1])
+			+ str(printStrings[i][0][2])))
 		for j in range(1,len(printStrings[i])):
-			print ('{0:'+str(length0)+'s} : ').format('') \
-				+ ('{0:'+str(length1)+'s} : ').format(printStrings[i][j][1])\
-				+ str(printStrings[i][j][2])
+			print((('{0:'+str(length0)+'s} : ').format('')
+				+ ('{0:'+str(length1)+'s} : ').format(printStrings[i][j][1])
+				+ str(printStrings[i][j][2])))

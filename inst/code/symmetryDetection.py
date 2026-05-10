@@ -167,13 +167,13 @@ def symmetryDetection(allVariables, diffEquations, observables, obsFunctions, in
 		else:
 			if not checkForCommonFactor(infisTmp, allVariables, m):
 				infisAll.append(infisTmp)
-			
-	print ''
+
+	print('')
 	sys.stdout.write('done\n')
 	sys.stdout.flush()
 
 	# print transformations
-	print '\n\n' + str(len(infisAll)) + ' transformation(s) found:'
+	print('\n\n' + str(len(infisAll)) + ' transformation(s) found:')
 	if len(infisAll) != 0: printTransformations(infisAll, allVariables)
 
 	###########################################################################################
@@ -182,7 +182,7 @@ def symmetryDetection(allVariables, diffEquations, observables, obsFunctions, in
 	if predictions != False:
 		checkPredictions(predictions, predFunctions, infisAll, allVariables)
 
-	print time.strftime('\nTotal time: %Hh:%Mm:%Ss', time.gmtime(time.time()-t0))
+	print(time.strftime('\nTotal time: %Hh:%Mm:%Ss', time.gmtime(time.time()-t0)))
 
 
 def main():	
@@ -282,27 +282,27 @@ def symmetryDetectiondMod(model, observation, prediction, initial, ansatz, pMax,
 
 	if model == None:
 		model = []
-	elif isinstance(model, basestring):
+	elif isinstance(model, str):
 		model = [model]
-		
+
 	if observation == None:
 		observation = []
-	elif isinstance(observation, basestring):
+	elif isinstance(observation, str):
 		observation = [observation]
-		
+
 	if prediction == None:
 		prediction = []
-	elif isinstance(prediction, basestring):
+	elif isinstance(prediction, str):
 		prediction = [prediction]
-		
+
 	if initial == None:
 		initial = []
-	elif isinstance(initial, basestring):
-		initial = [initial]	
+	elif isinstance(initial, str):
+		initial = [initial]
 
 	if fixed == None:
 		fixed = []
-	elif isinstance(fixed, basestring):
+	elif isinstance(fixed, str):
 		fixed = [str(fixed)]
 	if len(fixed) != 0:
 		s = 'Fixed variables: '
@@ -314,7 +314,7 @@ def symmetryDetectiondMod(model, observation, prediction, initial, ansatz, pMax,
 
 	if inputs == None:
 		inputs = []
-	elif isinstance(inputs, basestring):
+	elif isinstance(inputs, str):
 		inputs = [str(inputs)]
 	if len(inputs) != 0:
 		s = 'Input variables: '

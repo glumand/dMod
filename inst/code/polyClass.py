@@ -17,18 +17,18 @@ class Apoly:
 			poly = spy.Poly(expr, variables).as_dict()
 			#extract coefficients from polynomial
 			if rs is None:
-				self.coefs = poly.values()
+				self.coefs = list(poly.values())
 			else:
-				coefsTmp = poly.values()
+				coefsTmp = list(poly.values())
 				self.coefs = [0]*len(coefsTmp)
-				for i in xrange(len(coefsTmp)):
+				for i in range(len(coefsTmp)):
 					self.coefs[i] = np.zeros(len(rs))
 					for j, r in enumerate(rs):
 						if coefsTmp[i].has(r):
 							self.coefs[i][j] = spy.diff(coefsTmp[i], r)
 			#extract exponents from polynomial
-			self.exps = poly.keys()
-			for i in xrange(len(self.exps)):
+			self.exps = list(poly.keys())
+			for i in range(len(self.exps)):
 				self.exps[i] = np.array(self.exps[i])
 			self.vars = variables
 			self.rs = rs
@@ -49,8 +49,8 @@ class Apoly:
 	### add a second polynomial
 	### self is overwritten with result
 	def add(self, otherPoly):
-		for i in xrange(len(otherPoly.exps)):
-			for j in xrange(len(self.exps)):
+		for i in range(len(otherPoly.exps)):
+			for j in range(len(self.exps)):
 				if np.array_equal(otherPoly.exps[i], self.exps[j]):
 					self.coefs[j] = self.coefs[j] + otherPoly.coefs[i]
 					if not np.any(self.coefs[j]):
@@ -64,8 +64,8 @@ class Apoly:
 	### substract a second polynomial
 	### self is overwritten with result
 	def sub(self, otherPoly):
-		for i in xrange(len(otherPoly.exps)):
-			for j in xrange(len(self.exps)):
+		for i in range(len(otherPoly.exps)):
+			for j in range(len(self.exps)):
 				if np.array_equal(otherPoly.exps[i], self.exps[j]):
 					self.coefs[j] = self.coefs[j] - otherPoly.coefs[i]
 					if not np.any(self.coefs[j]):
@@ -84,8 +84,8 @@ class Apoly:
 		newPoly.exps = [0]*(len(self.coefs)*len(otherPoly.coefs))
 
 		k = 0
-		for i in xrange(len(otherPoly.exps)):
-			for j in xrange(len(self.exps)):
+		for i in range(len(otherPoly.exps)):
+			for j in range(len(self.exps)):
 				newPoly.coefs[k] = otherPoly.coefs[i] * self.coefs[j] #works only because only one poly has rs
 				newPoly.exps[k] = otherPoly.exps[i] + self.exps[j]
 				k += 1

@@ -61,8 +61,8 @@ cat("[check] running rcmdcheck (mirrors CI flags)\n")
 # `--ignore-vignettes` skips the package-vignettes check; the petab vignette
 # needs the libsbml Python venv that CI doesn't provision.
 # _R_CHECK_FORCE_SUGGESTS_=false: don't hard-fail when packages in Suggests
-# are not installed locally. rPython is archived on CRAN; JuliaCall/openxlsx
-# are heavyweight optional deps. CI installs Suggests via setup-r-dependencies.
+# are not installed locally. JuliaCall/openxlsx are heavyweight optional
+# deps. CI installs Suggests via setup-r-dependencies.
 res <- rcmdcheck::rcmdcheck(
   path        = ".",
   args        = c("--no-manual", "--ignore-vignettes"),

@@ -1,10 +1,13 @@
 
 #' Search for symmetries in the loaded model
-#' 
-#' @description This function follows the method published in \[1\].
-#' @description The function calls a python script via rPython. Usage problems might occur when different python versions are used. The script was written and tested for python 2.7.12, sympy 0.7.6.
-#' @description Recently, users went into problems with RJSONIO when rPython was used. Unless a sound solution is available, please try to reinstall RJSONIO in these cases.
-#' 
+#'
+#' @description This function follows the method published in \[1\]. The
+#'   underlying Python implementation (originally written for Python 2.7 /
+#'   sympy 0.7) was ported to Python 3 and is now driven through
+#'   `reticulate` instead of the archived `rPython` package. The Python
+#'   environment is provisioned via `reticulate::py_require()` in
+#'   `.onLoad()` and pulls in `sympy`, `scipy`, and `numpy`.
+#'
 #' @param f object containing the ODE for which `as.eqnvec()` is defined
 #' @param obsvect vector of observation functions
 #' @param prediction vector containing prediction to be tested
@@ -16,58 +19,60 @@
 #' @param cores maximal number of cores used for the analysis
 #' @param allTrafos do not remove transformations with a common parameter factor
 #' @return NULL
-#' 
+#'
 #' @references \[1\]
 #' <https://journals.aps.org/pre/abstract/10.1103/PhysRevE.92.012920>
-#' 
+#'
 #' @examples
 #' \dontrun{
 #' eq <- NULL
 #' eq <- addReaction(eq, "A", "B", "k1*A")
 #' eq <- addReaction(eq, "B", "A", "k2*B")
-#' 
+#'
 #' observables <- eqnvec(Aobs = "alpha * A")
-#' 
+#'
 #' symmetryDetection(eq, observables)
-#' 
+#'
 #' }
 #' @export
 symmetryDetection <- function(f, obsvect = NULL, prediction = NULL,
                               initial = NULL, ansatz = 'uni', pMax = 2, inputs = NULL, fixed = NULL,
                               cores = 1, allTrafos = FALSE){
 
-  if (!requireNamespace("rPython", quietly = TRUE)) {
-    stop("Package 'rPython' is required for symmetryDetection(). ",
-         "Install it with install.packages('rPython').")
+  if (!requireNamespace("reticulate", quietly = TRUE)) {
+    stop("Package 'reticulate' is required for symmetryDetection().")
   }
 
   f <- as.eqnvec(f)
-  
+
   f <- as.character(lapply(1:length(f), function(i)
     paste(names(f)[i],'=',f[i])))
-  
+
   obsvect <- as.character(lapply(1:length(obsvect), function(i)
     paste(names(obsvect)[i],'=',obsvect[i])))
-  
+
   if (!is.null(prediction)) {
     prediction <- as.character(lapply(1:length(prediction), function(i)
       paste(names(prediction)[i],'=',prediction[i])))
   }
-  
+
   if (!is.null(initial)) {
     initial <- as.character(lapply(1:length(initial), function(i)
       paste(names(initial)[i],'=',initial[i])))
   }
-  
-  
-  rPython::python.load(paste(system.file(package = "dMod"),"/code/polyClass.py", sep = ""))
-  rPython::python.load(paste(system.file(package = "dMod"),"/code/functions.py", sep = ""))
-  rPython::python.load(paste(system.file(package = "dMod"),"/code/readData.py", sep = ""))
-  rPython::python.load(paste(system.file(package = "dMod"),"/code/buildSystem.py", sep = ""))
-  rPython::python.load(paste(system.file(package = "dMod"),"/code/checkPredictions.py", sep = ""))
-  rPython::python.load(paste(system.file(package = "dMod"),"/code/symmetryDetection.py", sep = ""))
-  
-  rPython::python.call("symmetryDetectiondMod", f, obsvect, prediction,
-                       initial, ansatz, pMax, inputs, fixed, cores, allTrafos)
-  
+
+  # Make the script directory importable, then load the entry-point module.
+  # The Python sources import each other unqualified (`from functions import *`),
+  # so they must live on sys.path; using reticulate::source_python() would not
+  # achieve that for the transitive imports.
+  code_dir <- system.file("code", package = "dMod")
+  sys <- reticulate::import("sys", convert = TRUE)
+  if (!(code_dir %in% sys$path)) sys$path <- c(code_dir, sys$path)
+
+  sd <- reticulate::import("symmetryDetection", convert = TRUE)
+
+  sd$symmetryDetectiondMod(f, obsvect, prediction, initial,
+                           ansatz, as.integer(pMax),
+                           inputs, fixed,
+                           as.integer(cores), allTrafos)
 }

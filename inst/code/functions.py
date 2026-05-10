@@ -210,7 +210,7 @@ def getrref(rSystem):
 	pivots = []
 	pivotLines = []
 	i = -1
-	for j in xrange(rSystem.shape[1]):
+	for j in range(rSystem.shape[1]):
 		if rSystem[j,j] == 0:
 			k = 1
 			while j-k > i:
@@ -236,7 +236,7 @@ def getrref(rSystem):
 		coeff = rSystem[i,j]
 		rSystem[i,:] = rSystem[i,:]/coeff
 
-		for k in xrange(i):
+		for k in range(i):
 			coeff = rSystem[k,j]
 			if coeff != 0:
 				rSystem[k,:] = rSystem[k,:] - coeff*rSystem[i,:]
@@ -355,8 +355,8 @@ def buildTransformation(infis, allVariables):
 			transformations[i] = allVariables[i]
 		else:
 			poly = spy.Poly(infis[i], allVariables).as_dict()
-			monomials = poly.keys()
-			coefs = poly.values()
+			monomials = list(poly.keys())
+			coefs = list(poly.values())
 			if len(monomials) == 1:
 				p = None
 				for j in range(n):
@@ -436,18 +436,18 @@ def printTransformations(infisAll, allVariables):
 					length3 = len(outputs[-1][-1][2])
 
 	# print all stuff
-	print ('{0:'+str(length1)+'s} : ').format('variable') \
+	print(('{0:'+str(length1)+'s} : ').format('variable') \
 		+ ('{0:'+str(length2)+'s} : ').format('infinitesimal')\
-		+ str('transformation')
+		+ str('transformation'))
 
 	for l in range(len(infisAll)):
-		print '-'*(length1+length2+length3+6)
-		print '#' + str(l+1) + ': ' + types[l]
-		
+		print('-'*(length1+length2+length3+6))
+		print('#' + str(l+1) + ': ' + types[l])
+
 		for lst in outputs[l]:
-			print ('{0:'+str(length1)+'s} : ').format(lst[0]) \
+			print(('{0:'+str(length1)+'s} : ').format(lst[0]) \
 					+ ('{0:'+str(length2)+'s} : ').format(str(lst[1]))\
-					+ str(lst[2])
+					+ str(lst[2]))
 			
 						
 

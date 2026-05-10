@@ -39,11 +39,12 @@ symmetryDetection(
 \item{allTrafos}{do not remove transformations with a common parameter factor}
 }
 \description{
-This function follows the method published in [1].
-
-The function calls a python script via rPython. Usage problems might occur when different python versions are used. The script was written and tested for python 2.7.12, sympy 0.7.6.
-
-Recently, users went into problems with RJSONIO when rPython was used. Unless a sound solution is available, please try to reinstall RJSONIO in these cases.
+This function follows the method published in [1]. The
+underlying Python implementation (originally written for Python 2.7 /
+sympy 0.7) was ported to Python 3 and is now driven through
+\code{reticulate} instead of the archived \code{rPython} package. The Python
+environment is provisioned via \code{reticulate::py_require()} in
+\code{.onLoad()} and pulls in \code{sympy}, \code{scipy}, and \code{numpy}.
 }
 \examples{
 \dontrun{
