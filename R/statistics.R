@@ -687,8 +687,8 @@ vcov <- function(fit, parupper = NULL, parlower = NULL) {
   arg__ <- fit[["argument"]]
   
   if (is.null(arg__)) return()
-  
-  if (is.null(hessian)) {
+
+  if (is.null(hessian__)) {
     vcov__ <- matrix(NA, nrow = length(arg__), ncol = length(arg__), 
                      dimnames = list(names(arg__), names(arg__)))
     return(vcov__)

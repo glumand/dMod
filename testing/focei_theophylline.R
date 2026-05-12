@@ -137,11 +137,11 @@ run_fit <- function(focei_obj, label) {
   sd_eta <- exp(fit$argument[c("omega_Ka_Ka", "omega_V_V", "omega_Cl_Cl")])
   names(sd_eta) <- c("sd_eta_Ka", "sd_eta_V", "sd_eta_Cl")
   cat("Random-effect SDs:\n"); print(round(sd_eta, 4))
-  diag_info <- attr(focei_obj(fit$argument, deriv = FALSE), "focei_diag")
-  cat(sprintf("Mean inner iter/subject: %.1f, refresh_count: %s\n",
+  diag_info <- attr(focei_obj(fit$argument, deriv = FALSE), "emDiag")
+  cat(sprintf("Mean inner iter/subject: %.1f, refreshCount: %s\n",
               mean(diag_info$iter),
-              if (is.null(diag_info$refresh_count)) "n/a"
-              else as.character(diag_info$refresh_count)))
+              if (is.null(diag_info$refreshCount)) "n/a"
+              else as.character(diag_info$refreshCount)))
   fit
 }
 

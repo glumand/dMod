@@ -21,6 +21,7 @@ trust(
   printIter = FALSE,
   traceFile = NULL,
   on_step = NULL,
+  engine = c("R", "cpp"),
   ...
 )
 
@@ -94,7 +95,12 @@ value and parameters are written there.}
 
 \item{on_step}{Optional callback \verb{function(rho, accepted, iter, r)}
 invoked once per step decision; return value is ignored. Used by
-\code{\link[=focei]{focei()}} to invalidate cached corrections on rejected steps.}
+\code{\link[=nlmeFit]{nlmeFit()}} to invalidate cached FOCEI corrections on rejected steps.}
+
+\item{engine}{Character. \code{"R"} (default) uses the historical R implementation;
+\code{"cpp"} dispatches to the compiled outer-loop kernel when the problem
+matches its supported shape (no \code{parscale}, no bounds, no callbacks).
+The function silently falls back to \code{"R"} for unsupported cases.}
 
 \item{...}{additional argument to objfun}
 

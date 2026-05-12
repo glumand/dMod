@@ -483,10 +483,14 @@ Xd <- function(data, condition = NULL) {
   
   controls <- list()  
   
-  P2X <- function(times, pars, deriv=TRUE, deriv2 = FALSE){
+  P2X <- function(times, pars, fixed = NULL, deriv = TRUE, deriv2 = FALSE){
 
     if (deriv2)
       stop("Xd: second-order sensitivities are not implemented for data-driven prediction.")
+    # `fixed` is accepted for prdfn-wrapper symmetry; Xd is purely
+    # data-grid-driven, so any fixed parameters are merged into `pars`
+    # for the lookup.
+    if (!is.null(fixed)) pars <- c(unclass(pars), unclass(fixed))
 
 
     predictions <- lapply(states, function(s) predL[[s]](times, pars)); names(predictions) <- states

@@ -1,0 +1,61 @@
+# Regression smoke for the C++ kernel paths of the classical fit pipeline.
+#
+# Behavioral correctness of both backends is verified in the test-normL2-*
+# and test-constraintL2-* files via for_each_backend(). This file adds a
+# minimal cross-backend parity check on a fixed input so a future kernel
+# refactor that silently breaks the wiring is caught even if the
+# behavioural tests pass on one backend only.
+#
+# Three blocks, one per kernel pair (normL2, constraintL2, trust). The
+# residual kernel (src/residual_kernel.{h,cpp}) retains its own dedicated
+# behavioural-plus-parity file (test-residual-kernel.R) because that file
+# also covers BLOQ-deriv2-exact via finite-difference Hessian validation
+# which has no equivalent at the R / dMod-API layer.
+
+skip_if_no_compile <- function() {
+  testthat::skip_if_not_installed("CppODE")
+  testthat::skip_on_cran()
+}
+
+
+test_that("normL2 cpp kernel agrees with R reference on the linear-decay fixture", {
+  skip_if_no_compile()
+  bench <- fx_decay_compiled()
+  data  <- fx_decay_data(sigma = 0.05)
+  pars  <- bench$outerpars_id
+
+  with_cpp_backend(FALSE, {
+    o_R <- normL2(data, bench$prd_id)(pars)
+  })
+  with_cpp_backend(TRUE, {
+    o_C <- normL2(data, bench$prd_id)(pars)
+  })
+  expect_equal(o_C$value,    o_R$value,    tolerance = 1e-9)
+  expect_equal(o_C$gradient, o_R$gradient, tolerance = 1e-8)
+  expect_equal(o_C$hessian,  o_R$hessian,  tolerance = 1e-8)
+})
+
+
+test_that("constraintL2 cpp kernel agrees with R reference on a small diagonal case", {
+  obj <- constraintL2(mu = c(a = 0.0, b = 1.0, c = -0.5), sigma = c(0.5, 1, 2))
+  pars <- c(a = 0.3, b = 1.4, c = -0.6)
+  with_cpp_backend(FALSE, { o_R <- obj(pars) })
+  with_cpp_backend(TRUE,  { o_C <- obj(pars) })
+  expect_equal(o_C$value,    o_R$value,    tolerance = 1e-12)
+  expect_equal(o_C$gradient, o_R$gradient, tolerance = 1e-12)
+  expect_equal(o_C$hessian,  o_R$hessian,  tolerance = 1e-12)
+})
+
+
+test_that("trust engine R and engine cpp converge to the same optimum on a simple quadratic", {
+  target <- c(a = 1.0, b = -0.7)
+  obj <- constraintL2(mu = target, sigma = 1)
+  init <- c(a = 0, b = 0)
+
+  fit_R <- trust(obj, init, rinit = 1, rmax = 10, iterlim = 50,
+                 engine = "R", printIter = FALSE)
+  fit_C <- trust(obj, init, rinit = 1, rmax = 10, iterlim = 50,
+                 engine = "cpp", printIter = FALSE)
+  expect_equal(fit_C$value,    fit_R$value,    tolerance = 1e-9)
+  expect_equal(fit_C$argument, fit_R$argument, tolerance = 1e-8)
+})

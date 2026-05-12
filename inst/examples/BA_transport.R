@@ -28,12 +28,12 @@ reactions <- eqnlist() %>%
 #             TCA_cell = "k_import * TCA_buffer - k_export_sinus * TCA_cell - k_export_cana * TCA_cell")
 
 # Translate reactions into ODE model object
-mymodel <- odemodel(reactions, deriv2 = TRUE, modelname = "bamodel", solver = "CppODE",compile = F)
+mymodel <- odemodel(reactions, modelname = "bamodel", compile = F)
 x <- Xs(mymodel)
 
 # Define observables buffer and cellular
 observables <- eqnvec(buffer = "s*TCA_buffer", cellular = "s*(TCA_cana + TCA_cell)")
-g <- Y(observables, f = x, condition = NULL, compile = F, modelname = "obsfn_bamodel", attach.input = T, deriv2 = TRUE)
+g <- Y(observables, f = x, condition = NULL, compile = F, modelname = "obsfn_bamodel", attach.input = T)
 
 # Define parameter transformations using define(), insert() and branch(). Old function repar also avaiable!
 innerpars <- getParameters(x,g)
@@ -53,7 +53,7 @@ trafo <- NULL %>%
 #                 k_reflux = "10^k_reflux",
 #                 s = "10^s")
 
-p <- P(trafo, condition = "closed", compile = F, deriv2 = TRUE)
+p <- P(trafo, condition = "closed", compile = F)
 
 
 # Compile the objects
@@ -67,26 +67,23 @@ prd <- g*x*p
 # debugonce(x)
 times <- seq(0, 45, len = 300)
 # debugonce(g)
-out <- prd(times, pouter, deriv2 = TRUE)
+out <- prd(times, pouter)
 plot(out, data)
 plot(getDerivs(out))
 
-myderivs2 <- getDerivs2(out)
 # Define objective function
 obj <- normL2(data, g * x * p)
 # Test objective function with and without explicit calculation of second derivatives
-obj(pouter, deriv2 = TRUE)
+obj(pouter)
 
 # Fit on time (starting from pouter)
 myfit <- trust(obj, pouter, rinit = 0.1, rmax = 10, iterlim = 500, printIter = T)
-myfit <- trust(obj, pouter, rinit = 0.1, rmax = 10, iterlim = 500, printIter = T, deriv2 = T)
 times <- seq(0, 45, len = 300)
 mypred <- (g * x * p)(times, myfit$argument)
 plot(mypred, data)
 
 obj(myfit$argument)
 
-system.time({obj(myfit$argument, deriv2 = T)})
 ## Handling different experimental conditions
 
 # Parameter Trafo, usage of "+" operator for trafo functions (output of P())
@@ -95,11 +92,11 @@ plot(data)
 
 trafo <- getEquations(p, conditions = "closed") %>% 
   insert("K_REFLUX~K_REFLUX_OPEN")
-p <- p + P(trafo, condition = "open", compile = T, deriv2 = TRUE)
+p <- p + P(trafo, condition = "open", compile = T)
 
 outerpars <- getParameters(p)
 pouter <- structure(rep(-1, length(outerpars)), names = outerpars)
-p(pouter, deriv2 = TRUE)
+p(pouter)
 (g*x*p)(times, pouter) %>% plot(data)
 
 # Objective function
@@ -186,7 +183,7 @@ plot(pred, data)
 # Calculate Parameter Profiles
 profiles <- profile(obj, bestfit, whichPar = names(bestfit), method = "integrate", cores = 10, limits = c(lower = -5, upper = 5), 
                     stepControl = list(stop = "data"),
-                    algoControl = list(gamma = 1, reoptimize = T))
+                    algoControl = list(reoptimize = T))
 plotProfile(profiles,mode %in% c("data", "prior"))
 plotPaths(profiles, whichPar = "K_REFLUX_OPEN")
 
@@ -197,17 +194,29 @@ plotPaths(profiles, whichPar = "K_REFLUX_OPEN")
 # One could also check the models ability to produce reliable predictions, by the calculation of prediction uncertainty with profile likelihood
 # The calculation of prediction confidence intervals is done at next
 
+trafo <- eqnvec() %>%
+  define("x~x", x = innerpars) %>% # identity
+  define("TCA_buffer~0") %>%
+  define("x~y", x = names(mysteadies), y = mysteadies) %>% 
+  insert("x~10^y", x = .currentSymbols, y = toupper(.currentSymbols)) %>% 
+  branch(conditions = c("closed", "open")) %>% 
+  define("k_reflux~10^3", conditionMatch = "open") %>% 
+  insert("S~0") # fixed structural non identifiablility
+
+# debugonce(P)
+p <- P(trafo, modelname = "bamodel_final", compile = TRUE)
+
 ## Prediction uncertainty taken from validation profile --------------------------------------------------------------------------
 
 # choose sigma below 1 percent of the prediction in order to pull the prediction strongly towards d1
 obj.validation <- normL2(data, g * x * p, times = c(20), attr.name = "data") +
-  datapointL2(name = "TCA_cell", time = 20, value = "v", sigma = 1, attr.name = "validation", condition = "closed")
+  datapointL2(name = "TCA_cell", time = 20, value = "v", sigma = 0.01, attr.name = "validation", condition = "closed")
 
 # If sigma is not known, and you therefore decide to calculate prediction confidence intervals, just choose a very small sigma, in order to "pull strongly" on the trajectory
-obj.validation(c(v = 180, bestfit))
+obj.validation(c(v = 180, bestfit[getParameters(p)]))
 
 # refit
-myfit <- trust(obj.validation, parinit = c(v = 190, bestfit), rinit = 1, rmax = 10, iterlim = 1000)
+myfit <- trust(obj.validation, parinit = c(v = 190, bestfit[getParameters(p)]), rinit = 1, rmax = 10, iterlim = 1000)
 
 # Calculate profile
 validation_profile <- profile(obj.validation, myfit$argument, "v", cores = 4, method = "optimize",
@@ -224,17 +233,17 @@ plotProfile(validation_profile, mode %in% c("validation", "data")) # Plots only 
 confint(validation_profile, val.column = "value")
 
 
-
+plotProfilesAndPaths(validation_profile, "v", ncols = 1)
 ## Prediction band (prediction uncertainty for several time points) --------------------------------------------------------------
 # Here we calculate a prediction CI for different timepoints. In the end we interpolate to a "prediction band"
 library(parallel)
 predprofs <- list()
-prediction_band <- do.call(rbind, mclapply(c(0,1,2,3,4,seq(5, 50, 5)), function(t) {
+prediction_band <- do.call(rbind, mclapply(c(0,1,2,3,4,seq(5, 50, 2)), function(t) {
   
   cat("Computing prediction profile for t =", t, "\n")
   
   obj.validation <- normL2(data, g * x * p, times = c(t), attr.name = "data") +
-    datapointL2(name = "TCA_cell", time = t, value = "v", sigma = 0.001, attr.name = "validation", condition = "closed")
+    datapointL2(name = "TCA_cell", time = t, value = "v", sigma = 0.1, attr.name = "validation", condition = "closed")
   
   refit <- trust(obj.validation, parinit = c(v = 190, bestfit), rinit = 1, rmax = 10, iterlim = 1000)
   

@@ -1,0 +1,804 @@
+---
+title: "Marginal likelihood estimation for NLME models in dMod: EM, FOCEI, and adaptive sparse-grid Gauss-Hermite quadrature"
+author: "Simon Beyer"
+date: "`r format(Sys.Date(), '%Y-%m-%d')`"
+output:
+  rmarkdown::pdf_document:
+    toc: false
+    number_sections: true
+    keep_tex: false
+header-includes:
+  - \usepackage{amsmath,amssymb}
+  - \usepackage{bm}
+  - \usepackage{booktabs}
+vignette: >
+  %\VignetteIndexEntry{Marginal likelihood estimation for NLME models in dMod}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment  = "#>",
+  eval     = FALSE,
+  echo     = TRUE
+)
+```
+
+\setcounter{tocdepth}{3}
+\tableofcontents
+\newpage
+
+# Introduction
+
+Nonlinear mixed-effects (NLME) models are the standard tool of population
+pharmacokinetics, pharmacodynamics, and other settings where each subject
+contributes a short, noisy trajectory of an underlying nonlinear
+dynamical system. The challenge of estimating their parameters is
+fundamentally the challenge of computing or approximating an intractable
+integral: the marginal likelihood.
+
+This vignette has three parts. The first introduces the NLME model in
+the ODE modelling context that dMod is built for, and writes down the
+marginal likelihood. The second develops the Expectation-Maximisation
+(EM) algorithm rigorously, since both estimators in dMod are
+particular instances of it. The third covers the two estimators
+themselves:
+
+* **FOCEI** (first-order conditional estimation with interaction), in
+  which the E-step is replaced by a Laplace (one-point) approximation
+  at the per-subject posterior mode.
+* **Adaptive sparse-grid Gauss-Hermite quadrature**, in which the
+  E-step is replaced by a multi-point Smolyak rule adapted to the
+  per-subject posterior, embedded in an ECM (expectation conditional
+  maximisation) outer loop.
+
+The code references in this vignette point at specific entries in the
+package source so that the implementation can be audited against the
+math.
+
+# The NLME model in the dMod / ODE context
+
+dMod composes a fit problem from four named function-objects:
+
+* `x(times, pars)` solves the ODE
+  $$
+  \dot{\mathbf{x}}(t) \;=\; f\!\left(\mathbf{x}(t),\, \phi\right),
+  \qquad \mathbf{x}(0) \;=\; \mathbf{x}_0(\phi),
+  $$
+  with state vector $\mathbf{x}$ and parameter-dependent right-hand
+  side $f$. Code-generated and compiled to native code through
+  `odemodel()`. Hereafter $f$ is reserved for this RHS.
+* `g(...)` is the *observation function* mapping the ODE solution to
+  observables,
+  $$
+  g\!\left(\mathbf{x}(t; \phi)\right) \;\in\; \mathbb{R}^{d_y}.
+  $$
+  Concentrations, transformed states, ratios, sums; whatever the
+  experiment actually measures. Hereafter $g$ is reserved for this
+  observation map.
+* `p(...)` is the *parameter transformation* mapping outer parameters
+  to inner ODE/observation parameters. For NLME this is exactly the
+  place where the population structure
+  $\phi_i = h(\theta, \eta_i)$ enters: typically
+  $\phi_{i,k} = \exp(\theta_k + \eta_{i,k})$ for log-normal random
+  effects, with `branch(trafo, table = subj_table, apply = "insert")`
+  routing per-subject etas (see `R/parameters.R`).
+* `errmodel` defines the residual variance structure, with
+  $\sigma(\phi_i, t_{ij})$ optionally depending on parameters and time.
+
+The composed prediction function $g \circ x \circ p$ produces, for
+subject $i$ at time $t_{ij}$,
+
+$$
+\mu_{ij}(\psi, \eta_i) \;=\; g\!\left(\mathbf{x}\!\left(t_{ij};\, h(\theta, \eta_i)\right)\right),
+$$
+
+and the observation model is
+
+\begin{equation}
+y_{ij} \;=\; \mu_{ij}(\psi, \eta_i) \;+\; \varepsilon_{ij},
+\qquad \varepsilon_{ij} \;\sim\; \mathcal{N}\!\left(0,\, \sigma^2(\phi_i, t_{ij})\right),
+\qquad \eta_i \;\sim\; \mathcal{N}\!\left(0,\, \Omega\right).
+\label{eq:nlme}
+\end{equation}
+
+The population parameters are $\psi = (\theta, \Omega, \sigma)$. The
+NLME-specific parts of \eqref{eq:nlme}, the random effects $\eta_i$
+and the covariance $\Omega$, sit *outside* the ODE: $f$ does not see
+$\eta_i$ at all; $\eta_i$ only enters through
+$\phi_i = h(\theta, \eta_i)$, which is what `p()` evaluates. This
+separation matters for two reasons:
+
+1. Sensitivities $\partial \mu_{ij} / \partial \eta_{i,k}$ come from
+   the standard dMod sensitivity pipeline composed via the chain rule
+   $\partial \mu / \partial \eta = \partial g / \partial x \cdot \partial x / \partial \phi \cdot \partial \phi / \partial \eta$.
+   No separate machinery is needed for the random effects.
+2. The marginal likelihood (next section) factorises over subjects
+   because each $\eta_i$ couples only to $y_i$ via the ODE and back to
+   the population through the prior $\mathcal{N}(0, \Omega)$.
+
+The marginal log-likelihood is, summing over subjects,
+
+\begin{equation}
+\ell(\psi) \;=\; \sum_{i=1}^N \log L_i(\psi),
+\qquad
+L_i(\psi) \;=\; \int p\!\left(y_i \mid \eta_i, \psi\right) \, p\!\left(\eta_i \mid \Omega\right) \, d\eta_i.
+\label{eq:marginal}
+\end{equation}
+
+For an ODE-based $\mu_{ij}$ this integral has no closed form. Every
+NLME estimator is a particular strategy for approximating
+\eqref{eq:marginal} cheaply enough to be evaluated thousands of times
+during outer optimisation while still being faithful enough to recover
+the true maximum.
+
+In code, the integrand of \eqref{eq:marginal} is built by composing
+`normL2(data, g * x * p, errmodel = err)`, which provides
+$-2 \log p(y_i \mid \eta_i, \psi)$ summed across subjects, with
+`constraintL2(mu = 0, Omega = om)`, which provides the MVN prior
+$-2 \log p(\eta_i \mid \Omega)$ including the $N \log |\Omega|$
+normalisation. Their sum is the unintegrated joint negative
+log-density $-2 \log p(y, \eta \mid \psi)$ that both estimators
+consume. The exact call is shown in the example at the end of this
+vignette.
+
+# The Expectation-Maximisation algorithm
+
+The marginal likelihood \eqref{eq:marginal} couples observed data $y$
+and latent variables $\eta$. EM is the canonical algorithm for
+maximising likelihoods of this form. Both FOCEI and the quadrature
+method are particular approximations of it; we therefore develop EM
+in full first, then specialise.
+
+## Jensen's lower bound
+
+Pick any reference parameter value $\psi^{(t)}$ and let
+$q_i(\eta_i) \;=\; p(\eta_i \mid y_i, \psi^{(t)})$ be the posterior of
+$\eta_i$ given the data under $\psi^{(t)}$. For any other $\psi$,
+
+\begin{align*}
+\log L_i(\psi)
+\;&=\; \log \int q_i(\eta_i) \, \frac{p(y_i, \eta_i \mid \psi)}{q_i(\eta_i)} \, d\eta_i \\
+\;&\geq\; \int q_i(\eta_i) \, \log \frac{p(y_i, \eta_i \mid \psi)}{q_i(\eta_i)} \, d\eta_i
+&&\text{(Jensen)} \\
+\;&=\; \underbrace{\mathbb{E}_{q_i}\!\left[\log p(y_i, \eta_i \mid \psi)\right]}_{Q_i(\psi \mid \psi^{(t)})}
+\;-\; \underbrace{\mathbb{E}_{q_i}\!\left[\log q_i(\eta_i)\right]}_{\text{entropy, independent of }\psi}.
+\end{align*}
+
+The inequality is *tight* when $\psi = \psi^{(t)}$, because then
+$p(y_i, \eta_i \mid \psi) / q_i(\eta_i) = p(y_i \mid \psi^{(t)})$,
+which is constant in $\eta_i$ and Jensen becomes an equality.
+
+Summing across subjects, the population $Q$-function is
+
+$$
+Q(\psi \mid \psi^{(t)}) \;=\; \sum_{i=1}^N Q_i(\psi \mid \psi^{(t)})
+\;=\; \sum_{i=1}^N \mathbb{E}_{q_i}\!\left[\log p(y_i, \eta_i \mid \psi)\right].
+$$
+
+## The EM iteration
+
+EM alternates between
+
+* **E-step:** at $\psi^{(t)}$, evaluate $q_i = p(\eta_i \mid y_i, \psi^{(t)})$
+  and assemble $Q(\psi \mid \psi^{(t)})$ as a function of $\psi$.
+* **M-step:** $\psi^{(t+1)} = \arg\max_\psi Q(\psi \mid \psi^{(t)})$.
+
+## Monotone improvement
+
+The EM iterate never decreases the marginal log-likelihood. From the
+Jensen bound,
+
+$$
+\ell(\psi^{(t+1)}) \;\geq\; Q(\psi^{(t+1)} \mid \psi^{(t)}) - \mathcal{H}(q)
+\;\geq\; Q(\psi^{(t)} \mid \psi^{(t)}) - \mathcal{H}(q)
+\;=\; \ell(\psi^{(t)}),
+$$
+
+where the first inequality is Jensen at $\psi^{(t+1)}$, the second
+follows from the M-step (since $\psi^{(t+1)}$ maximises $Q$, and
+$\mathcal{H}(q) = -\mathbb{E}_q \log q$ does not depend on $\psi$),
+and the equality is tightness at $\psi = \psi^{(t)}$. Strict
+improvement unless the current iterate is already a stationary point
+of $\ell$.
+
+## Expectation Conditional Maximisation (ECM)
+
+When the M-step is itself a hard nonlinear problem, but $\psi$ splits
+into blocks $\psi = (\psi_A, \psi_B)$ such that the conditional
+updates $\psi_A \mid \psi_B$ and $\psi_B \mid \psi_A$ are easy,
+replace the M-step with a sequence of conditional maximisations:
+
+* **CM-1:** $\psi_A^{(t+1)} \;=\; \arg\max_{\psi_A} \; Q\!\left((\psi_A, \psi_B^{(t)}) \mid \psi^{(t)}\right)$.
+* **CM-2:** $\psi_B^{(t+1)} \;=\; \arg\max_{\psi_B} \; Q\!\left((\psi_A^{(t+1)}, \psi_B) \mid \psi^{(t)}\right)$.
+
+Each CM step still increases $Q$, hence each ECM cycle still increases
+$\ell$. The blockwise structure is critical for NLME models where the
+variance component $\Omega$ admits a closed-form conditional update
+from sufficient statistics while the structural parameters $\theta$
+do not.
+
+## Specialising to NLME
+
+In our setting
+$\log p(y_i, \eta_i \mid \psi) = \log p(y_i \mid \eta_i, \psi) + \log p(\eta_i \mid \Omega)$,
+both pieces depend on $\psi$, and the latent posterior is the
+nonstandard
+
+$$
+q_i(\eta_i) \;\propto\; p(y_i \mid \eta_i, \psi^{(t)}) \, p(\eta_i \mid \Omega^{(t)}).
+$$
+
+Two things make this difficult:
+
+1. The E-step expectation
+   $\mathbb{E}_{q_i}[\log p(y_i, \eta_i \mid \psi)]$ is, as a function
+   of $\psi$, an integral against a posterior that itself has no closed
+   form because $p(y_i \mid \eta_i, \psi)$ runs through the nonlinear
+   ODE solution.
+2. The M-step still needs derivatives of $Q$ to drive a population
+   solver.
+
+Every NLME estimator is a recipe for replacing the intractable E-step
+expectation with something computable. Two natural categories of
+deterministic methods:
+
+* **Low-order:** approximate $q_i$ by a Gaussian centred at its mode
+  and replace the expectation by a one-point rule at that mode. This
+  is FOCEI.
+* **High-order:** approximate the expectation by a multi-point
+  quadrature rule adapted to the local Gaussian approximation of
+  $q_i$. This is the sparse-grid Gauss-Hermite path.
+
+Stochastic alternatives (SAEM, etc.) replace the expectation by a
+Monte Carlo average drawn from $q_i$ via MCMC. dMod does not
+currently implement a stochastic path.
+
+# FOCEI
+
+## Laplace approximation in the E-step
+
+Fix $\psi$ and define the per-subject negative joint log-density
+
+$$
+\Phi_i(\eta) \;\equiv\; -\log p\!\left(y_i \mid \eta, \psi\right) -\log p\!\left(\eta \mid \Omega\right).
+$$
+
+$\Phi_i$ is smooth and locally convex: the prior pulls it towards the
+origin, the likelihood towards the empirical-Bayes optimum. Let
+$\hat\eta_i = \arg\min_\eta \Phi_i(\eta)$ and
+$H_i = \nabla^2_\eta \Phi_i(\hat\eta_i)$. Expanding $\Phi_i$ to second
+order around $\hat\eta_i$ and integrating the resulting Gaussian gives
+the Laplace approximation,
+
+\begin{equation}
+L_i(\psi) \;\approx\; (2\pi)^{K/2} \, |H_i|^{-1/2} \, \exp\!\left(-\Phi_i(\hat\eta_i)\right).
+\label{eq:laplace}
+\end{equation}
+
+Taking $-2 \log$ gives the per-subject objective function value (OFV)
+
+$$
+\mathrm{OFV}_i(\psi) \;\approx\; 2\, \Phi_i(\hat\eta_i) \;+\; \log |H_i| \;-\; K \log(2\pi).
+$$
+
+Summed across subjects, this is the surrogate dMod minimises in place
+of $-2 \ell(\psi)$. The constant drops out under optimisation.
+
+The "I" in FOCEI is the *interaction* between the random effects and
+the residual variance: $H_i$ is the *full* Hessian of $\Phi_i$ at
+$\hat\eta_i$, which couples structural and error-model contributions
+through the residual second-derivative term. Methods that drop this
+coupling (FOCE without I) lose accuracy whenever $\sigma$ depends on
+$\eta$.
+
+## Why this is approximate EM
+
+In the EM language of section 4, FOCEI uses a one-point rule for the
+E-step expectation. Specifically, $q_i$ is approximated by the local
+Gaussian
+$\tilde q_i(\eta_i) = \mathcal{N}(\eta_i \mid \hat\eta_i, H_i^{-1})$
+and the expectation is replaced by a single evaluation at
+$\hat\eta_i$ plus the normalising factor $\log |H_i|$ from
+\eqref{eq:laplace}. The "M-step" then becomes a single combined
+optimisation over $\psi$, since the surrogate is now an analytic
+function and there is no benefit from conditional splitting.
+
+| EM ingredient | FOCEI approximation |
+|---|---|
+| posterior $q_i(\eta_i) = p(\eta_i \mid y_i, \psi)$ | Gaussian centred at $\hat\eta_i$ with covariance $H_i^{-1}$ |
+| E-step expectation | Laplace one-point rule at $\hat\eta_i$ with $\log |H_i|$ correction |
+| M-step | gradient-based outer optimisation of $\sum_i \mathrm{OFV}_i$ |
+
+## Bilevel optimisation
+
+In code, FOCEI is a bilevel problem. The R-side reference
+implementation is `R/nlme.R::.emObjfn_laplace`. Per call to the outer
+objective at $\psi$:
+
+1. **Inner loop** (one trust-region solve per subject) finds
+   $\hat\eta_i(\psi) = \arg\min_\eta \Phi_i(\eta; \psi)$ using dMod's
+   exact analytical gradient and Hessian, warmstarted from a
+   per-subject cache populated by the previous outer iteration. After
+   convergence an eigen-floor is applied,
+   $$
+   \lambda_k(H_i) \;\leftarrow\; \max\!\left(\lambda_k(H_i),\; \varepsilon\right),
+   \qquad \varepsilon \;=\; 10^{-10} \frac{\operatorname{tr} H_i}{K},
+   $$
+   to guarantee a well-defined $\log |H_i|$ and an invertible Hessian
+   at parameter values where the local curvature is degenerate.
+
+2. **Population objective** assembles
+   $$
+   F(\psi) \;=\; \sum_{i=1}^N \left[ 2\, \Phi_i\!\left(\hat\eta_i\right) \;+\; \log |H_i| \right].
+   $$
+
+3. **Outer gradient** is computed via the envelope theorem. Because
+   $\hat\eta_i$ minimises $\Phi_i$ in $\eta$, the implicit dependence
+   $\hat\eta_i(\psi)$ contributes zero to
+   $\nabla_\psi \Phi_i(\hat\eta_i)$, so the only $\eta$-derivative
+   that survives is the explicit one,
+   $$
+   \nabla_\psi F \;=\; 2 \sum_i \nabla_\psi \Phi_i\!\big|_{\eta=\hat\eta_i} \;+\; \sum_i \frac{d \log |H_i|}{d \psi}.
+   $$
+   The second term is the *Stage-2 correction* (section 5.4).
+
+4. **Outer Hessian** uses the Schur complement of the block-Hessian
+   of $\sum_i \Phi_i(\hat\eta_i)$,
+   $$
+   \nabla^2_\psi F \;\approx\; 2 \sum_i \left[ H_i^{\psi\psi} - H_i^{\psi\eta} \left(H_i^{\eta\eta}\right)^{-1} \left(H_i^{\psi\eta}\right)^{\!\top} \right],
+   $$
+   where the blocks come from a single batched `joint(deriv = TRUE)`
+   call evaluated at every subject's mode.
+
+5. **Outer trust region** (dMod's `trust()`) takes a Newton step on
+   $F(\psi)$, the inner cache is updated with the new $\hat\eta_i$
+   values, and the loop repeats.
+
+## The Stage-2 analytical correction
+
+dMod's Hessian in step 4 is built from the Gauss-Newton form
+$H_{i,\mathrm{GN}} = 2 \nabla_\eta r_i^\top \Sigma_i^{-1} \nabla_\eta r_i + 2 \Omega^{-1}$,
+not the true Newton Hessian. Under the GN form the surrogate
+$\log |H_i|$ is still needed in the objective and its gradient
+$d \log |H_i| / d\psi$ is no longer immediate from the inner solve,
+because the GN approximation introduces a discrepancy that vanishes
+only at a perfect fit.
+
+`R/nlme.R::.computeFoceiCorrection` computes the closed-form
+$d \log |H_{i,\mathrm{GN}}| / d\psi$ via
+
+$$
+\frac{d \log |H_i|}{d \psi_k}
+\;=\;
+\operatorname{tr}\!\left(H_i^{-1} \frac{\partial H_i}{\partial \psi_k}\bigg|_\eta\right)
+\;+\;
+\sum_l \operatorname{tr}\!\left(H_i^{-1} \frac{\partial H_i}{\partial \eta_l}\right) \cdot \frac{d \hat\eta_l}{d \psi_k}.
+$$
+
+The chain term $d \hat\eta / d \psi$ comes from the implicit function
+theorem applied to the inner first-order condition: the exact
+(Newton) Hessian closes the IFT block, while $H_{i,\mathrm{GN}}^{-1}$
+is used in the traces. The required mixed third derivatives are
+provided by dMod's deriv2 pipeline (`_s2` files emitted by `CppODE`
+and `cOde`).
+
+The correction is recomputed at every outer call so the gradient
+remains exactly the gradient of $F(\psi)$. This matches NONMEM /
+Monolix / `nlmixr2` semantics, and is what cross-tool comparisons
+expect.
+
+## The C++ FOCEI kernel
+
+The bilevel orchestration runs entirely in C++
+(`src/focei_kernel.cpp`). The inner per-subject trust region inlines
+the residual, the Fisher-information Hessian (Gauss-Newton on the
+mean plus the $\partial \log \sigma / \partial \eta$ contribution),
+and the MVN $\eta$-prior directly in C++, bypassing
+`normL2` / `constraintL2` / `evalConditionResidual` per call. Model
+and error functions are still invoked via R (they wrap compiled
+native code anyway), but the per-iteration glue is gone. Multi-output
+models and $\eta$-dependent $\sigma$ (proportional or combined error
+models) are handled in the same loop: the kernel reads
+$\partial \sigma / \partial \eta$ from the error model's `deriv`
+attribute and propagates it through the per-row gradient and
+Hessian.
+
+# Adaptive sparse-grid Gauss-Hermite quadrature
+
+## Why move beyond Laplace
+
+The Laplace approximation \eqref{eq:laplace} treats $\Phi_i$ as
+locally quadratic. Its error is $O(K / n_i)$ per subject and is
+dominated by the third and fourth derivatives of $\Phi_i$ at the
+mode. Two practical scenarios where this matters:
+
+* Datasets with informative-but-short trajectories (oral PK at the
+  absorption limit, sparse sampling near saturation) where $\Phi_i$
+  is noticeably skewed.
+* Variance components $\Omega$ that are themselves the target of
+  inference. Laplace systematically over-estimates the marginal
+  likelihood because $|H_i|^{-1/2}$ overweights the peak relative to
+  the tails, which biases $\Omega$ downward.
+
+A multi-point quadrature rule integrating $L_i$ exactly when its
+log-density is a polynomial of bounded degree fixes both, at the cost
+of an exponential factor in $K$ if you use a full tensor-product
+grid. The Smolyak construction sidesteps that factor.
+
+## Smolyak sparse-grid Gauss-Hermite
+
+For fixed dimension $K$ and level $L \geq K$, the Smolyak rule
+combines tensor products of 1D physicists' Gauss-Hermite rules,
+
+$$
+A(L, K) \;=\; \sum_{\substack{|\mathbf{i}| = q \\ L-K+1 \leq q \leq L}} (-1)^{L-q} \binom{K-1}{L-q} \; \mathcal{U}^{i_1} \otimes \mathcal{U}^{i_2} \otimes \cdots \otimes \mathcal{U}^{i_K},
+$$
+
+where $\mathcal{U}^l$ is the 1D level-$l$ Gauss-Hermite rule with
+$m(l) = 2l - 1$ nodes and weight $\exp(-z^2)$. 1D nodes and weights
+come from Golub-Welsch: eigendecompose the symmetric tridiagonal
+Hermite Jacobi matrix (diagonal $0$, off-diagonal $\sqrt{i/2}$) using
+LAPACK `dstev`. The node count grows as $O(K^{L - K})$ rather than
+the full-tensor $O(m(L)^K)$.
+
+`src/quadrature.cpp::sparse_grid_gh(K, level)` implements this. It
+returns a batch-first $[B, K]$ matrix of $z$-space nodes and a
+length-$B$ vector of signed weights. Signs appear because
+Gauss-Hermite is non-nested: the Smolyak combination of tensor
+products at different levels does not fully cancel at coincident
+nodes. The downstream evaluator handles mixed-sign aggregation via
+signed log-sum-exp; see section 6.4.
+
+Typical node counts for $K = 3$:
+
+\begin{center}
+\begin{tabular}{rrl}
+\toprule
+Level & Nodes & Comment \\
+\midrule
+3 & 1   & single-point, trivial \\
+4 & 7   & first useful level \\
+5 & 31  & polynomial exactness degree $\sim$ 9 \\
+6 & 105 & polynomial exactness degree $\sim$ 11 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+## Adapting to the local posterior
+
+The raw Smolyak rule integrates against the weight
+$\exp(-\mathbf{z}^\top \mathbf{z})$ on $\mathbb{R}^K$. To target the
+subject-specific posterior $p(\eta_i \mid y_i, \psi)$ we recentre and
+rescale around the local Gaussian approximation
+$\mathcal{N}(\hat\eta_i, H_i^{-1})$.
+
+Let $L_H$ be the lower Cholesky factor of $H_i$. The change of
+variable
+
+$$
+\eta \;=\; \hat\eta_i + \sqrt{2} \, L_H^{-\top} \mathbf{z}
+$$
+
+maps $z$-space nodes onto $\eta$-space nodes and folds the Jacobian
+$2^{K/2} / |\det L_H|$ plus the implicit $\exp(\mathbf{z}^\top \mathbf{z})$
+back-correction into augmented weights,
+
+$$
+\log |W_b| \;=\; \tfrac{K}{2} \log 2 \;-\; \log |\det L_H| \;+\; \log |w_b^{\mathrm{GH}}| \;+\; \mathbf{z}_b^\top \mathbf{z}_b,
+$$
+
+with sign tracked separately. `R/quadrature.R::makeSubjectNodes`
+performs this transform. The result is a per-subject grid that puts
+most of its mass where the joint posterior actually lives, recovers
+exact answers for products of Gaussians with the local approximation
+as a special case, and reduces gracefully to Laplace at level $K$ (a
+single node at the mode).
+
+## Signed log-sum-exp aggregation
+
+For numerical stability the per-subject log-likelihood is built in
+log space. For nodes $b = 1, \dots, B$ define
+
+$$
+\ell_b \;=\; \log |W_b| \;-\; \tfrac{1}{2} \Phi_i(\eta_b),
+\qquad
+s_b \;=\; \operatorname{sgn}(W_b).
+$$
+
+Then
+
+$$
+\log L_i \;=\; \log \!\left| \sum_b s_b \exp \ell_b \right|
+\;=\; M_i \;+\; \log \!\left| \sum_b s_b \exp(\ell_b - M_i) \right|,
+\qquad M_i \;=\; \max_b \ell_b.
+$$
+
+Downstream moments use the same softmax weights with carried sign,
+
+$$
+w^{\mathrm{sm}}_b \;=\; s_b \exp(\ell_b - \log L_i),
+\qquad
+\hat m_i \;=\; \sum_b w^{\mathrm{sm}}_b \, \eta_b,
+\qquad
+\hat M_i \;=\; \sum_b w^{\mathrm{sm}}_b \, \eta_b \eta_b^\top.
+$$
+
+If $\sum_b s_b \exp(\ell_b - M_i)$ is non-positive or non-finite, the
+grid is under-resolved: the evaluator warns and asks for a higher
+level. The effective sample size
+$1 / \sum_b (w^{\mathrm{sm}}_b)^2$ is exported in the per-subject
+diagnostics so grid adequacy can be monitored per subject.
+
+`R/nlme.R::ecmEvaluateSubject` implements the inner kernel, including
+the gradient and Hessian pieces below.
+
+## Gradient and Hessian through the integral
+
+The marginal log-likelihood gradient is, at node level,
+
+$$
+\nabla_\psi \log L_i \;=\; \sum_b w^{\mathrm{sm}}_b \, \nabla_\psi \ell_b,
+\qquad
+\nabla_\psi \ell_b \;=\; -\tfrac{1}{2} \nabla_\psi \Phi_i(\eta_b),
+$$
+
+a softmax-weighted average. The Hessian uses the log-sum-exp identity
+
+$$
+\nabla^2_\psi \log L_i \;=\; \underbrace{\sum_b w^{\mathrm{sm}}_b \, \nabla^2_\psi \ell_b}_{\text{average Hessian}} \;+\; \underbrace{\operatorname{Cov}_{w^{\mathrm{sm}}} (\nabla_\psi \ell_b)}_{\text{spread term}},
+$$
+
+where the covariance is taken with $w^{\mathrm{sm}}$ as a signed
+probability measure,
+$\operatorname{Cov}(g) = \mathbb{E}[g g^\top] - \mathbb{E}[g]\mathbb{E}[g]^\top$.
+The identity is algebraically exact for signed weights (it uses only
+that the weights sum to one).
+
+Per-node $\nabla_\psi \ell_b$ and $\nabla^2_\psi \ell_b$ come from a
+single call to the prediction function plus `evalConditionResidual`.
+dMod's existing analytical sensitivity chain through the ODE solver
+supplies the derivatives, so the quadrature kernel itself emits pure
+numbers and does not need to know anything about the model.
+
+## ECM orchestration
+
+Combining a non-trivial integration rule with population-level
+optimisation needs more care than FOCEI. Joint optimisation over
+$\psi$ with the modes recomputed every inner step would either
+re-locate the grid constantly (expensive) or keep it frozen and stall
+on the wrong objective (biased). The classical fix is the ECM
+decomposition of section 4.4: per outer pass, split $\psi$ into
+blocks and update each block conditionally on the others held fixed.
+
+`R/nlme.R::.runQuadratureEcm` runs the following per stage:
+
+1. **E-step** (refresh quadrature, `R/nlme.R::.emObjfn_quadrature::rebuildQuadrature`).
+   Fix the current $\psi$. For each subject, run an inner trust solve
+   to find $\hat\eta_i(\psi)$ and the eigen-floored $H_i$. Build the
+   adapted Smolyak grid. Freeze the grid for the rest of the stage.
+2. **CM-1** (structural). With the grid frozen, run an outer trust on
+   the structural parameters $\theta$ (and $\sigma$), using the
+   gradient and Hessian from section 6.5.
+3. **CM-2** (omega). With $\theta$ frozen at the CM-1 minimiser,
+   update $\Omega$ in closed form via the empirical second moments
+   $\{\hat M_i\}$.
+4. Iterate CM-1 / CM-2 within the stage until $|\Delta \psi|$ or
+   $|\Delta \mathrm{OFV} / \mathrm{OFV}|$ falls below tolerance.
+
+After convergence, the stage advances to a higher quadrature level,
+re-runs the E-step at the new $\psi$, and repeats CM-1 / CM-2. By
+default the stage levels are $\{K{+}1, K{+}2, K{+}3\}$, which for
+$K = 3$ gives $\{4, 5, 6\}$ corresponding to $\{7, 31, 105\}$ nodes
+per subject.
+
+The default outer mode is `foceiQuadrature`: run FOCEI to convergence
+first, then use the converged $\psi$ and $\hat\eta_i$ as warmstart
+for the quadrature ECM, so the first E-step starts near the right
+grid centres. The interpretation is that FOCEI provides a fast,
+low-accuracy E-step (Laplace) used to bootstrap; the subsequent
+quadrature ECM provides a higher-accuracy E-step used to refine the
+estimate.
+
+## Closed-form omega update
+
+The full-data log-density of the random effects is
+
+$$
+\log p(\eta \mid \Omega) \;=\; -\tfrac{1}{2} \sum_i \left[ \log |\Omega| \;+\; \eta_i^\top \Omega^{-1} \eta_i \right] \;+\; \text{const}.
+$$
+
+Taking the expectation under the current grid replaces
+$\eta_i \eta_i^\top$ by its posterior expectation $\hat M_i$. Setting
+the derivative with respect to $\Omega$ to zero gives the sufficient
+statistic
+
+$$
+S \;=\; \frac{1}{N} \sum_{i=1}^N \hat M_i.
+$$
+
+`R/omegaClass.R::updateOmegaChol` consumes $S$ and re-parameterises
+into the Cholesky entries that `omegaSpec` exposes. Three structural
+cases:
+
+* **Pure diagonal** (`structure = "diag"`):
+  $\omega_{kk} = \tfrac{1}{2} \log S_{kk}$, the log-Cholesky entry
+  that satisfies $L_{kk}^2 = S_{kk}$.
+* **Full unconstrained**: take the Cholesky factor of $S$,
+  $L = \mathrm{chol}(S)^\top$, and read entries off positionally;
+  log-Cholesky on the diagonal, raw entry off-diagonal.
+* **Selective correlate / structural constraints**: no closed form.
+  Fall back to a small inner trust on the Q-function,
+  $$
+  \tfrac{1}{2}\, N \!\left(\log |\Omega| \;+\; \operatorname{tr}(\Omega^{-1} S)\right),
+  $$
+  with closed-form gradient in $L$; convergence is typically a
+  handful of inner iterations.
+
+In all cases CM-2 is a global update (not local around the previous
+$\Omega$); it is the exact M-step under the E-step's softmax-weighted
+empirical second moment. The deterministic-quadrature analogue of
+NONMEM's $\Omega$ update under SAEM, without sampling noise.
+
+## Diagnostics
+
+Each call to the quadrature objective carries an `emDiag` attribute
+with components
+
+* `etaModes`, `HiList`: frozen modes and Hessians used to build the
+  grid.
+* `mHatList`, `MHatList`: first and second posterior moments per
+  subject.
+* `maxSoftmax`: $\max_b |w^{\mathrm{sm}}_b|$ per subject. A value
+  near 1.0 means the integral is dominated by a single node, which
+  is fine if the local Gaussian is a good approximation but a warning
+  sign otherwise.
+* `n_eff`: effective sample size per subject. Falls when the softmax
+  concentrates; the ECM loop's `nEffMin` diagnostic surfaces this.
+* `nFloored`: per-subject count of eigenvalues clipped at the
+  Hessian floor. Persistent nonzero values indicate near-singular
+  per-subject Fisher information, usually a missing identifiability
+  constraint upstream.
+* `level`, `innerConverged`, `innerIter`: bookkeeping.
+
+`plotTrace(fit)` shows the per-stage ECM convergence (OFV vs. ECM
+iteration with stage markers). `plotHistIndivs(fit)` overlays
+per-subject $\hat\eta_i$ histograms with the QQ line against the
+fitted $\mathcal{N}(0, \Omega_{kk})$ and is informative for spotting
+mis-specified variance structures.
+
+# End-user API
+
+This chapter collects the relevant function calls. The full
+walkthrough on the Theophylline dataset (12 subjects, 1-compartment
+oral PK) is `inst/examples/theophylline.R`.
+
+## Building the objective
+
+The joint negative log-density of \eqref{eq:marginal} is built from
+the standard dMod composable function pipeline:
+
+```{r joint-objfn}
+library(dMod)
+
+# x: ODE solution (from odemodel + Xs).
+# g: observation function.
+# p: parameter transformation, with branch(..., apply = "insert") to
+#    route per-subject etas.
+# err: optional error model (errmodel = NULL for fixed sigma in data).
+# om: omegaSpec with subject expansion, built via omega(..., subjects = ...).
+
+joint <- normL2(dlist, g * x * p, errmodel = err) +
+         constraintL2(mu = 0, Omega = om)
+```
+
+The `init` vector must contain every structural parameter, every
+log-scale residual SD, and every Cholesky entry `om$cholPars`. See
+the Theophylline example for a worked starting vector.
+
+## FOCEI
+
+```{r focei-call}
+fit_focei <- nlmeFit(
+  joint, om, init,
+  model    = model,           # the prdfn g * x * p
+  data     = dlist,
+  errmodel = err,
+  method   = "focei",
+  control  = list(focei = list(
+    innerControl = list(rtol = 1e-7, maxit = 30),
+    trustControl = list(iterlim = 100))))
+
+print(fit_focei)
+```
+
+There is one FOCEI path: the C++ kernel with eager Stage-2 correction.
+`innerControl` tunes the per-subject inner trust region (warmstart
+radius, convergence tolerances, eigenvalue floor); `trustControl`
+tunes the outer trust region. Multi-output and $\eta$-dependent
+$\sigma$ models are handled by the same loop. There are no other
+knobs.
+
+## Quadrature refinement
+
+In the same spirit as a polish step in optimisation, the
+`foceiQuadrature` workflow uses FOCEI as a fast low-accuracy
+estimator to converge on a parameter neighbourhood, then refines the
+estimate with the higher-accuracy quadrature ECM:
+
+```{r quad-call}
+fit_quad <- nlmeFit(
+  joint, om, init,
+  model    = model, data = dlist, errmodel = err,
+  method   = "foceiQuadrature",
+  control  = list(
+    quadrature = list(epsQuadLevels  = c(4, 5, 6),
+                      maxEcmPerStage = 5L,
+                      maxCm1Iter     = 30L)))
+
+print(fit_quad)
+print(fit_quad$stageTrace)
+```
+
+`epsQuadLevels` is the sequence of Smolyak depths used by the outer
+stages. Defaults to $K{+}1{:}3$ (for $K{=}3$, that is
+$\{4, 5, 6\}$, corresponding to $\{7, 31, 105\}$ nodes per subject).
+The cost scales linearly in nodes-per-subject and in the number of
+E-step refreshes (one per ECM iteration per stage), so problems with
+$K > 3$ or levels above $K{+}3$ become expensive quickly. For
+exploratory work, FOCEI alone is the recommended starting point;
+the quadrature refinement is a confirmatory step once the model
+structure is settled.
+
+On the Theophylline example the refinement leaves the structural
+means essentially unchanged and corrects the omega-Cholesky entries
+downward, the textbook Laplace-bias correction. Quantitative
+numbers depend on the exact starting values, the local hardware,
+and the BLAS in use.
+
+## Inspecting the fit
+
+`fit_focei` and `fit_quad` are `nlmeFit` S3 objects with the same
+field layout (`argument`, `value`, `gradient`, `hessian`, `omega`,
+`etaModes`, `converged`, `iterations`, `emDiag`, `method`, ...).
+The diagnostic generics are camelCase S3 methods:
+
+```{r diagnostics}
+plot          (fit_focei)   # DV vs IPRED + DV vs PRED
+plotIndivs    (fit_focei)   # per-subject IPRED/PRED curves
+plotResiduals (fit_focei)   # IWRES vs IPRED + IWRES vs TIME
+plotHistIndivs(fit_focei)   # eta histogram + QQ vs N(0, Omega_kk)
+plotTrace     (fit_quad)    # ECM convergence trace (quadrature only)
+```
+
+Per-call quadrature diagnostics (modes, Hessians, moments, effective
+node count, softmax mass) live on `attr(em(psi), "emDiag")` and on
+`fit_quad$emDiag` after the run.
+
+# References
+
+Wang, Y. (2007). Derivation of various NONMEM estimation methods.
+*J. Pharmacokinet. Pharmacodyn.* 34, 575-593.
+
+Pinheiro, J. C., Bates, D. M. (1995). Approximations to the
+log-likelihood function in the nonlinear mixed-effects model.
+*J. Comput. Graph. Stat.* 4, 12-35.
+
+Smolyak, S. A. (1963). Quadrature and interpolation formulas for
+tensor products of certain classes of functions. *Soviet Math. Dokl.*
+4, 240-243.
+
+Pinheiro, J. C., Bates, D. M. (2000). *Mixed-Effects Models in S and
+S-PLUS*. Springer.
+
+Lavielle, M. (2014). *Mixed Effects Models for the Population
+Approach*. Chapman & Hall / CRC.
+
+Meng, X.-L., Rubin, D. B. (1993). Maximum likelihood estimation via
+the ECM algorithm: A general framework. *Biometrika* 80, 267-278.
+
+Dempster, A. P., Laird, N. M., Rubin, D. B. (1977). Maximum
+likelihood from incomplete data via the EM algorithm.
+*J. R. Stat. Soc. B* 39, 1-38.

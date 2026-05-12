@@ -205,9 +205,8 @@ Damit erreicht dMod auf der Genauigkeitsachse Parität mit nlmixr2/NONMEM, gewin
 ## 8. Referenzen für die Folge-Session
 
 - Brainstorming-Doc: `notes/focei-brainstorm.md` (Theorie, Architekturentscheidungen, Verfahrensvergleich)
-- Stage-1-Implementierung: `R/foceiClass.R`, `R/objClass.R`, Tests in `tests/testthat/test-focei.R`
+- Stage-1-Implementierung: `R/nlme.R`, `R/objClass.R`, Tests in `tests/testthat/test-focei.R`
 - Benchmark: `testing/focei_theophylline.R`
-- Plan-Datei für Stage 1: `~/.claude/plans/snoopy-imagining-castle.md`
 - BDF-Lag-Referenz für die Analogie: Hairer & Wanner, "Solving Ordinary Differential Equations II", Kapitel IV.8 (Implementation of implicit Runge-Kutta methods).
 
 ---
@@ -218,7 +217,7 @@ Sobald `deriv2` für die gesamte `g*x*p`-Pipeline verfügbar wurde
 (`Pexpl/Pequil` als 3D-Tensor, `Xs.CppODE/Y` als 4D-Tensor, plus
 Compositions-Chain-Rule), kann der Korrekturterm rein analytisch ausgewertet
 werden -- der FD-Pfad in §4.2 entfällt damit. Die in dMod gemergte Stage-2
-Implementierung (`R/foceiClass.R`, signature `focei(joint, omegaSpec, model,
+Implementierung (`R/nlme.R`, signature `focei(joint, omegaSpec, model,
 data, correction, correctionControl, ...)`) verwendet konsequent die
 **Gauss-Newton-Form**
 

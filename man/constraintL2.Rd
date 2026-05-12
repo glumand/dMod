@@ -9,7 +9,8 @@ constraintL2(
   sigma = 1,
   Omega = NULL,
   attr.name = "prior",
-  condition = NULL
+  condition = NULL,
+  threads = 1L
 )
 }
 \arguments{
@@ -28,6 +29,9 @@ the MVN path and ignores \code{sigma}.}
 \item{attr.name}{Character. Name of the attribute storing the constraint value.}
 
 \item{condition}{Optional character vector of conditions.}
+
+\item{threads}{Integer. Per-call OpenMP threads passed to the C++ constraint
+kernel. Default 1.}
 }
 \value{
 Object of class \code{objfn}.
@@ -47,6 +51,6 @@ When \code{Omega} is set, computes the multivariate-normal prior
 over subject-level random effects \eqn{\eta_i}, where \eqn{\Omega = L L^T}
 with \eqn{L} lower-triangular and log-parametrised on the diagonal. The
 parameter vector at evaluation time must contain all subject-level eta
-parameters listed in \code{Omega$subject_etas} and all Cholesky parameters in
-\code{Omega$chol_pars}.
+parameters listed in \code{Omega$subjectEtas} and all Cholesky parameters in
+\code{Omega$cholPars}.
 }

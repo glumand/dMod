@@ -1,4 +1,17 @@
 
+# Pharmacometric abbreviations used in the NLME plot helpers below:
+#   DV    observed value
+#   IPRED individual prediction (per subject, with eta_i*)
+#   PRED  population prediction (eta = 0)
+#   IRES  individual residual = DV - IPRED
+#   IWRES individual weighted residual = (DV - IPRED) / sigma
+
+# ggplot2 / dplyr NSE column references; declared so R CMD check does not
+# flag them as undefined globals.
+utils::globalVariables(c("IPRED", "PRED", "predicted", "observed",
+                         "sd_est", "iter", "level"))
+
+
 # Custom interface to ggplot2 ---
 
 #' Open last plot in external pdf viewer
@@ -30,19 +43,7 @@ theme_dMod <- function(base_size = 12, base_family = "") {
   )
   gray <- colors$medium["gray"]
   black <- colors$dark["black"]
-  
-  # theme_bw(base_size = base_size, base_family = base_family) + 
-  #   theme(line = element_line(colour = black), 
-  #         rect = element_rect(fill = "white", colour = NA), 
-  #         text = element_text(colour = black), 
-  #         axis.ticks = element_line(colour = black), 
-  #         axis.text = element_text(color = black),
-  #         legend.key = element_rect(colour = NA), 
-  #         panel.border = element_rect(colour = black), 
-  #         panel.grid = element_line(colour = "gray90", size = 0.2), 
-  #         #panel.grid = element_blank(), 
-  #         strip.background = element_rect(fill = "white", colour = NA))
-  
+
   theme_bw(base_size = base_size, base_family = base_family) +
     theme(line = element_line(colour = "black"),
           rect = element_rect(fill = "white", colour = NA),
@@ -485,7 +486,12 @@ plotPars <- function(x,...) {
 #' @importFrom dplyr group_by summarise across
 #' @importFrom rlang data_sym syms
 plotResiduals <- function(parframe, x, data, split = "condition", errmodel = NULL, ...) {
-  
+
+  # Internal dispatch: NLME nlmeFit objects get their own residual diagnostic
+  # (IWRES vs IPRED + vs TIME, see plotResiduals.nlmeFit below). The classical
+  # parframe/x/data path below is preserved unchanged for back-compat.
+  if (inherits(parframe, "nlmeFit")) return(plotResiduals.nlmeFit(parframe))
+
   timesD <- sort(unique(c(0, unlist(lapply(data, function(d) d$time)))))
   
   if (!("index" %in% colnames(parframe))) {
@@ -537,4 +543,336 @@ plotResiduals <- function(parframe, x, data, split = "condition", errmodel = NUL
   
   attr(p, "out") <- out
   p
+}
+
+
+# NLME plot helpers ---------------------------------------------------------
+
+#' Predictions from an nlmeFit object
+#'
+#' @description
+#' Returns a long-format `data.frame` of observed values vs population (`PRED`,
+#' eta = 0) and individual (`IPRED`, eta at posterior modes) predictions per
+#' condition, plus residuals. Used directly by the diagnostic plot helpers.
+#'
+#' @param object An [nlmeFit] (from [nlmeFit]).
+#' @param times Optional numeric vector of additional times for the smooth
+#'   IPRED/PRED curves. Defaults to the union of observed times.
+#' @param ... Ignored.
+#'
+#' @return A long-format `data.frame` with columns
+#'   `condition, time, name, observed, sigma, IPRED, PRED, IRES, IWRES, PRES,
+#'   PWRES, source` where `source = "obs"` for rows aligned with data
+#'   observations and `source = "grid"` for the dense IPRED/PRED smooth grid
+#'   (observed/sigma NA for grid rows).
+#' @export
+predict.nlmeFit <- function(object, times = NULL, ...) {
+  if (is.null(object$model) || is.null(object$data) || is.null(object$omegaSpec))
+    stop("predict.nlmeFit: fit is missing `model`, `data`, or `omegaSpec` ",
+         "(was the fit built by nlmeFit()?).")
+
+  model <- object$model
+  data  <- object$data
+  om    <- object$omegaSpec
+  etaModes <- object$etaModes
+  pars      <- object$argument
+
+  subjects <- rownames(om$subjectEtas)
+  N <- length(subjects)
+  obs_times <- sort(unique(unlist(lapply(data, `[[`, "time"))))
+  grid_times <- if (is.null(times)) sort(unique(c(0, obs_times)))
+                else sort(unique(c(0, obs_times, times)))
+
+  eta_full <- as.vector(etaModes)
+  names(eta_full) <- as.vector(om$subjectEtas)
+  pars_ipred <- c(pars, eta_full)
+  pars_pred  <- c(pars, setNames(rep(0, length(eta_full)), names(eta_full)))
+
+  pred_ipred <- model(times = grid_times, pars = pars_ipred, conditions = subjects)
+  pred_pred  <- model(times = grid_times, pars = pars_pred,  conditions = subjects)
+
+  obs_names <- setdiff(colnames(pred_ipred[[1]]), "time")
+
+  # If an errmodel is attached and the data table has NA sigmas, evaluate
+  # the errmodel per-condition on the prediction so IWRES diagnostics get a
+  # meaningful weight. Mirrors evalConditionResidual's contract.
+  err <- object$errmodel
+  sigma_ipred <- NULL
+  if (!is.null(err)) {
+    sigma_ipred <- setNames(lapply(subjects, function(s) {
+      pinner <- getParameters(pred_ipred[[s]])
+      err(out = pred_ipred[[s]], pars = pinner, conditions = s)[[s]]
+    }), subjects)
+  }
+
+  rows <- list()
+  for (s in subjects) {
+    d_s <- data[[s]]
+    pi  <- pred_ipred[[s]]
+    pp  <- pred_pred[[s]]
+    si  <- if (!is.null(sigma_ipred)) sigma_ipred[[s]] else NULL
+    # Coerce prdframe class away so plain matrix indexing works.
+    if (!is.null(si)) si <- unclass(si)
+    for (nm in obs_names) {
+      d_nm <- d_s[d_s$name == nm, , drop = FALSE]
+      get_sigma <- function(row_idx) {
+        if (!is.null(si) && nm %in% colnames(si) && all(row_idx <= nrow(si)))
+          as.numeric(si[row_idx, nm])
+        else rep(NA_real_, length(row_idx))
+      }
+      if (nrow(d_nm)) {
+        idx <- match(d_nm$time, pi[, "time"])
+        sig_obs <- if (!is.null(si)) get_sigma(idx)
+                   else if (all(is.na(d_nm$sigma))) rep(NA_real_, nrow(d_nm))
+                   else d_nm$sigma
+        rows[[length(rows) + 1L]] <- data.frame(
+          condition = s, time = d_nm$time, name = nm,
+          observed  = d_nm$value, sigma = sig_obs,
+          IPRED     = pi[idx, nm], PRED  = pp[idx, nm],
+          source    = "obs", stringsAsFactors = FALSE
+        )
+      }
+      grid_idx <- setdiff(seq_len(nrow(pi)), match(d_nm$time, pi[, "time"]))
+      if (length(grid_idx)) {
+        rows[[length(rows) + 1L]] <- data.frame(
+          condition = s, time = pi[grid_idx, "time"], name = nm,
+          observed  = NA_real_, sigma = get_sigma(grid_idx),
+          IPRED     = pi[grid_idx, nm], PRED = pp[grid_idx, nm],
+          source    = "grid", stringsAsFactors = FALSE
+        )
+      }
+    }
+  }
+  out <- do.call(rbind, rows)
+  out$IRES  <- out$observed - out$IPRED
+  out$PRES  <- out$observed - out$PRED
+  out$IWRES <- out$IRES / out$sigma
+  out$PWRES <- out$PRES / out$sigma
+  rownames(out) <- NULL
+  out
+}
+
+
+
+#' Per-subject individual fits (spaghetti plot)
+#'
+#' @description Faceted plot with one panel per subject: observed dots, IPRED
+#'   curve, and (optionally) the population PRED curve overlaid dashed.
+#' @param x Object to plot.
+#' @param ... Method-specific arguments.
+#' @return A ggplot.
+#' @export
+plotIndivs <- function(x, ...) UseMethod("plotIndivs", x)
+
+
+#' Per-subject individual fits for an nlmeFit
+#' @param x An [nlmeFit].
+#' @param times Optional grid of additional times for the smooth IPRED/PRED.
+#' @param ncol Facet column count (default 4).
+#' @param showPred Logical; overlay population PRED dashed (default TRUE).
+#' @param ... Ignored.
+#' @return A ggplot.
+#' @export
+plotIndivs.nlmeFit <- function(x, times = NULL, ncol = 4L,
+                              showPred = TRUE, ...) {
+  fit <- x
+  if (is.null(times)) {
+    obs_times <- sort(unique(unlist(lapply(fit$data, `[[`, "time"))))
+    times <- seq(min(obs_times), max(obs_times), length.out = 200L)
+  }
+  pf <- predict(fit, times = times)
+  obs <- pf[pf$source == "obs", , drop = FALSE]
+  grd <- pf[order(pf$condition, pf$name, pf$time), , drop = FALSE]
+
+  p <- ggplot2::ggplot() +
+    ggplot2::geom_line(data = grd,
+                       ggplot2::aes(x = time, y = IPRED, color = "IPRED"),
+                       linewidth = 0.7) +
+    {if (showPred) ggplot2::geom_line(data = grd,
+                       ggplot2::aes(x = time, y = PRED, color = "PRED"),
+                       linewidth = 0.5, linetype = "dashed")
+     else NULL} +
+    ggplot2::geom_point(data = obs,
+                        ggplot2::aes(x = time, y = observed),
+                        size = 1.6, alpha = 0.85) +
+    ggplot2::facet_wrap(~ condition, ncol = ncol, scales = "free_y") +
+    ggplot2::scale_color_manual(values = c(IPRED = "#1f77b4", PRED = "#d62728")) +
+    ggplot2::labs(x = "Time", y = "Value", color = NULL,
+                  title = sprintf("Individual fits (method = %s)", fit$method)) +
+    ggplot2::theme_bw(base_size = 11)
+  p
+}
+
+
+
+#' Observed vs predicted scatter (DV vs IPRED and DV vs PRED)
+#'
+#' @description S3 plot method for [nlmeFit]. Two-panel scatter: DV vs IPRED on
+#'   the left, DV vs PRED on the right, identity line shown dashed.
+#' @param x An [nlmeFit].
+#' @param ... Ignored.
+#' @return A ggplot.
+#' @export
+plot.nlmeFit <- function(x, ...) {
+  fit <- x
+  pf <- predict(fit)
+  pf <- pf[pf$source == "obs", , drop = FALSE]
+  long <- rbind(
+    data.frame(condition = pf$condition, name = pf$name,
+               observed = pf$observed, predicted = pf$IPRED,
+               panel = "IPRED", stringsAsFactors = FALSE),
+    data.frame(condition = pf$condition, name = pf$name,
+               observed = pf$observed, predicted = pf$PRED,
+               panel = "PRED", stringsAsFactors = FALSE))
+  rng <- range(c(long$observed, long$predicted), na.rm = TRUE)
+  ggplot2::ggplot(long, ggplot2::aes(x = predicted, y = observed,
+                                     color = condition)) +
+    ggplot2::geom_abline(slope = 1, intercept = 0, linetype = "dashed",
+                         color = "grey50") +
+    ggplot2::geom_point(alpha = 0.75) +
+    ggplot2::coord_equal(xlim = rng, ylim = rng) +
+    ggplot2::facet_wrap(~ panel) +
+    ggplot2::labs(x = "Prediction", y = "Observed",
+                  title = sprintf("Observed vs predicted (method = %s)", fit$method)) +
+    ggplot2::theme_bw(base_size = 11) +
+    ggplot2::theme(legend.position = "none")
+}
+
+
+
+#' Weighted-residual diagnostics for an nlmeFit
+#'
+#' @description Two-panel scatter: IWRES vs IPRED and IWRES vs TIME with a
+#'   loess smoother. Sourced from `plotResiduals(fit, ...)` when the first
+#'   argument inherits from `nlmeFit` (internal type dispatch, see
+#'   [plotResiduals]).
+#' @param fit An [nlmeFit].
+#' @param ... Ignored.
+#' @return A ggplot.
+#' @keywords internal
+plotResiduals.nlmeFit <- function(fit, ...) {
+  pf <- predict(fit)
+  pf <- pf[pf$source == "obs", , drop = FALSE]
+  long <- rbind(
+    data.frame(x = pf$IPRED, y = pf$IWRES, name = pf$name,
+               panel = "IWRES vs IPRED", stringsAsFactors = FALSE),
+    data.frame(x = pf$time,  y = pf$IWRES, name = pf$name,
+               panel = "IWRES vs TIME",  stringsAsFactors = FALSE))
+  ggplot2::ggplot(long, ggplot2::aes(x = x, y = y, color = name)) +
+    ggplot2::geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
+    ggplot2::geom_point(alpha = 0.8) +
+    ggplot2::geom_smooth(se = FALSE, method = "loess", formula = y ~ x,
+                         color = "tomato", linewidth = 0.6) +
+    ggplot2::facet_wrap(~ panel, scales = "free_x") +
+    ggplot2::labs(x = NULL, y = "IWRES",
+                  title = "Weighted residual diagnostics") +
+    ggplot2::theme_bw(base_size = 11)
+}
+
+
+
+#' Random-effect distribution diagnostics
+#'
+#' @description Per-eta histogram against the estimated `N(0, Omega_kk)`
+#'   density plus a QQ-plot against the estimated normal. Detects systematic
+#'   shrinkage, bimodality, or distributional misfit. Generic to leave room
+#'   for non-nlmeFit methods in the future.
+#' @param x Object to plot.
+#' @param ... Method-specific arguments.
+#' @return A ggplot (or a list of ggplots if `cowplot` is unavailable).
+#' @export
+plotHistIndivs <- function(x, ...) UseMethod("plotHistIndivs", x)
+
+
+#' @rdname plotHistIndivs
+#' @param x An [nlmeFit].
+#' @param ... Ignored.
+#' @return A ggplot (or a list with `hist` and `qq` if cowplot is unavailable).
+#' @export
+plotHistIndivs.nlmeFit <- function(x, ...) {
+  fit <- x
+  etaModes <- fit$etaModes
+  om <- fit$omegaSpec
+  if (is.null(etaModes) || is.null(om))
+    stop("plotHistIndivs.nlmeFit: fit has no etaModes or omegaSpec.")
+  Omega <- if (!is.null(fit$omega)) fit$omega else {
+    L <- om$buildL(fit$argument[om$cholPars])
+    tcrossprod(L)
+  }
+  K <- ncol(etaModes)
+  eta_long <- do.call(rbind, lapply(seq_len(K), function(k) {
+    sd_k <- sqrt(Omega[k, k])
+    data.frame(eta_name = om$eta[k],
+               value    = etaModes[, k],
+               sd_est   = sd_k,
+               stringsAsFactors = FALSE)
+  }))
+  p_hist <- ggplot2::ggplot(eta_long, ggplot2::aes(x = value)) +
+    ggplot2::geom_histogram(ggplot2::aes(y = ggplot2::after_stat(density)),
+                            bins = 12, fill = "grey80", color = "grey40") +
+    ggplot2::stat_function(fun = function(x, mean, sd) dnorm(x, mean, sd),
+                           args = list(mean = 0,
+                                       sd = mean(eta_long$sd_est)),
+                           inherit.aes = FALSE,
+                           ggplot2::aes(x = value),
+                           color = "tomato", linewidth = 0.8) +
+    ggplot2::facet_wrap(~ eta_name, scales = "free") +
+    ggplot2::labs(x = "eta value", y = "density",
+                  title = "Eta distribution vs N(0, Omega_kk)") +
+    ggplot2::theme_bw(base_size = 11)
+  p_qq <- ggplot2::ggplot(eta_long,
+                          ggplot2::aes(sample = value / sd_est)) +
+    ggplot2::stat_qq() +
+    ggplot2::stat_qq_line(color = "tomato") +
+    ggplot2::facet_wrap(~ eta_name) +
+    ggplot2::labs(x = "Theoretical quantile (N(0,1))",
+                  y = "Standardised eta",
+                  title = "Eta QQ vs N(0,1)") +
+    ggplot2::theme_bw(base_size = 11)
+  if (requireNamespace("cowplot", quietly = TRUE))
+    cowplot::plot_grid(p_hist, p_qq, ncol = 1)
+  else list(hist = p_hist, qq = p_qq)
+}
+
+
+
+#' ECM convergence trace (OFV, |delta-psi|) per stage
+#'
+#' @description Four-panel trace of OFV, structural-parameter step
+#'   `|delta psi|`, max softmax weight, and minimum effective node count
+#'   across ECM iterations. Quadrature-method nlmeFit only.
+#' @param x Object to plot.
+#' @param ... Method-specific arguments.
+#' @return A ggplot.
+#' @export
+plotTrace <- function(x, ...) UseMethod("plotTrace", x)
+
+
+#' @rdname plotTrace
+#' @param x An [nlmeFit] with `method = "quadrature"`. Errors otherwise.
+#' @param ... Ignored.
+#' @return A ggplot.
+#' @export
+plotTrace.nlmeFit <- function(x, ...) {
+  fit <- x
+  if (!fit$method %in% c("quadrature", "foceiQuadrature") ||
+      is.null(fit$stageTrace))
+    stop("plotTrace requires an nlmeFit fit with method 'quadrature' or 'foceiQuadrature'.")
+  tr <- fit$stageTrace
+  tr$iter <- seq_len(nrow(tr))
+  long <- rbind(
+    data.frame(iter = tr$iter, value = tr$OFV,        panel = "OFV",
+               level = factor(tr$level)),
+    data.frame(iter = tr$iter, value = tr$deltaPsi,  panel = "|delta psi|",
+               level = factor(tr$level)),
+    data.frame(iter = tr$iter, value = tr$maxSoftmax, panel = "max softmax",
+               level = factor(tr$level)),
+    data.frame(iter = tr$iter, value = tr$nEffMin,   panel = "n_eff min",
+               level = factor(tr$level)))
+  ggplot2::ggplot(long, ggplot2::aes(x = iter, y = value, color = level)) +
+    ggplot2::geom_line() + ggplot2::geom_point() +
+    ggplot2::facet_wrap(~ panel, scales = "free_y") +
+    ggplot2::labs(x = "ECM iteration",
+                  title = "ECM convergence trace") +
+    ggplot2::theme_bw(base_size = 11)
 }

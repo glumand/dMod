@@ -1,110 +1,1189 @@
-#' Adapter from a dMod prediction function to an `nlme`-compatible model
-#'
-#' Wraps a [prdfn] (typically `g * x * p`) so it can be passed to `nlme::nlme`.
-#' The returned closure expects the per-observation arguments
-#' `time, name, <parameters>, <covariates>`, evaluates the prdfn for each unique
-#' subject (defined by the covariate columns), and returns the residual prediction
-#' with the gradient against parameters attached as `"gradient"`.
-#'
-#' @param prdfn A `prdfn` (e.g. `g * x * p`) describing the deterministic part of
-#'   the mixed-effects model.
-#' @param covtable Optional `data.frame` whose column names label the subject
-#'   covariates. Used only to read the names — values are passed through `...` of
-#'   the returned closure.
-#' @param cores Number of cores for `parallel::mclapply`. Forced to 1 on Windows.
-#'
-#' @return A function `model(time, name, ...)` that returns the prediction with a
-#'   `"gradient"` attribute.
-#' @export
-modelNLME <- function(prdfn, covtable = NULL, cores = 1) {
+## Stage-2 d log|H_GN| / d theta correction. Called as an Rcpp::Function from
+## the C++ FOCEI kernel once per outer iter (after the inner trust has
+## converged at the modes), then added into the outer gradient.
+##
+## Math identities: envelope theorem for d/d theta at eta = eta*(theta),
+## implicit chain via Newton hessian for d eta*/d theta, and the sigma-driven
+## contribution when the errmodel depends on theta or eta.
+.computeFoceiCorrection <- function(full_pars, joint_hessian, fixed,
+                                    outer_names, H_inv_list,
+                                    model, errmodel, omegaSpec,
+                                    subjects, subject_etas, K, N,
+                                    data_per_subject, times_union,
+                                    conv2 = 2) {
+  Q <- length(outer_names)
+  pred <- model(times = times_union, pars = full_pars, fixed = fixed,
+                deriv = TRUE, deriv2 = TRUE, conditions = subjects)
+  correction <- setNames(numeric(Q), outer_names)
 
+  err_pred <- NULL
+  err_par_names <- character()
+  if (!is.null(errmodel)) {
+    err_pred <- vector("list", N); names(err_pred) <- subjects
+    for (i_e in seq_len(N)) {
+      cn_e   <- subjects[i_e]
+      pred_e <- pred[[cn_e]]
+      pinner     <- getParameters(pred_e)
+      fixedinner <- pinner[attr(pinner, "fixed")]
+      pinner     <- as.parvec(pinner[setdiff(names(pinner), names(fixed))])
+      fixedinner <- as.parvec(fixedinner, deriv = FALSE, deriv2 = FALSE)
+      err_pred[[cn_e]] <- errmodel(out = pred_e, pars = pinner,
+                                   fixed = fixedinner,
+                                   conditions = cn_e)[[cn_e]]
+    }
+    err_par_names <- dimnames(attr(err_pred[[1]], "deriv"))[[3]]
+  }
+  err_in_outer <- intersect(outer_names, err_par_names)
 
-  covnames <- names(covtable)
-  parnames <- getParameters(prdfn)
-
-
-  model <- function(time, name, ...) {
-
-    pars <- as.data.frame(c(list(time, name), list(...)))
-
-    names(pars) <- c("time", "name", parnames, covnames)
-
-    id <- cumsum(Reduce("|", lapply(pars[-(1:2)], function(x) !duplicated(x))))
-    pars <- split(pars, id)
-
-    output <- parallel::mclapply(pars, function(sub) {
-      timesD <- unique(sub$time)
-      parsD <- unlist(sub[1, parnames])
-      condition <- paste(unlist(sub[1, covnames]), collapse = "_")
-
-      prediction <- prdfn(timesD, parsD, conditions = condition)[[1]]
-      template <- data.frame(name = sub$name, time = sub$time, value = 0, sigma = 1, lloq = -Inf)
-
-      myres <- res(template, prediction)
-
-      output <- myres$prediction
-      deriv <- as.matrix(attr(myres, "deriv")[, -(1:2)])
-
-      list(output, deriv)
-    }, mc.cores = cores)
-
-    gradient <- do.call(rbind, lapply(output, function(x) x[[2]]))
-    output <- unlist(lapply(output, function(x) x[[1]]))
-
-    attr(output, "gradient") <- gradient
-
-    return(output)
-
+  chol_in_outer <- intersect(outer_names, omegaSpec$cholPars)
+  dOmega_inv_dchol <- list()
+  if (length(chol_in_outer) > 0L) {
+    chol_vec <- full_pars[omegaSpec$cholPars]
+    L0       <- omegaSpec$buildL(chol_vec)
+    h_chol   <- sqrt(.Machine$double.eps) * pmax(abs(chol_vec), 1)
+    for (cp in chol_in_outer) {
+      cv_p <- chol_vec; cv_p[cp] <- cv_p[cp] + h_chol[cp]
+      cv_m <- chol_vec; cv_m[cp] <- cv_m[cp] - h_chol[cp]
+      Lp <- omegaSpec$buildL(cv_p); Lm <- omegaSpec$buildL(cv_m)
+      Op_inv <- chol2inv(chol(Lp %*% t(Lp)))
+      Om_inv <- chol2inv(chol(Lm %*% t(Lm)))
+      dOmega_inv_dchol[[cp]] <- (Op_inv - Om_inv) / (2 * h_chol[cp])
+      dimnames(dOmega_inv_dchol[[cp]]) <-
+        list(omegaSpec$eta, omegaSpec$eta)
+    }
   }
 
-  return(model)
+  for (i in seq_len(N)) {
+    cn         <- subjects[i]
+    eta_i_nm   <- subject_etas[i, ]
+    d_i        <- data_per_subject[[cn]]
+    pred_i     <- pred[[cn]]
+    d_full     <- attr(pred_i, "deriv")
+    d2_full    <- attr(pred_i, "deriv2")
+    if (is.null(d_full) || is.null(d2_full))
+      stop("`model` did not produce 'deriv'/'deriv2' attributes for ",
+           "condition '", cn, "'. Did you build it with deriv2-capable ",
+           "Xs/Y/P?")
 
+    avail_pars <- dimnames(d_full)[[3]]
+    th_avail   <- intersect(outer_names, avail_pars)
+    eta_avail  <- intersect(eta_i_nm,    avail_pars)
+    if (!length(eta_avail)) next
+
+    times_i  <- d_i$time
+    names_i  <- as.character(d_i$name)
+    sigma_i  <- d_i$sigma
+    ti_e <- oi_e <- NULL
+    if (!is.null(err_pred)) {
+      err_i  <- err_pred[[cn]]
+      pt     <- as.numeric(err_i[, "time"])
+      ti_e   <- match.num(times_i, pt)
+      ni_e   <- match(names_i, colnames(err_i))
+      if (anyNA(ti_e) || anyNA(ni_e))
+        stop("compute_correction: cannot align data point to errmodel grid.")
+      sigma_from_err <- err_i[cbind(ti_e, ni_e)]
+      sigma_i <- ifelse(is.na(sigma_i), sigma_from_err, sigma_i)
+      d_err  <- attr(err_i, "deriv")
+      if (!is.null(d_err)) {
+        oi_e <- match(names_i, dimnames(d_err)[[2]])
+        if (anyNA(oi_e))
+          stop("compute_correction: data name not in errmodel deriv axis.")
+      }
+    }
+    time_idx <- match(times_i, times_union)
+    if (anyNA(time_idx))
+      stop("compute_correction: data times missing from prediction grid.")
+
+    Tn <- length(times_i)
+    Kn <- length(eta_avail)
+    Qn <- length(th_avail)
+
+    G    <- matrix(0,    Tn, Kn, dimnames = list(NULL, eta_avail))
+    Wmix <- array (0, c(Tn, Kn, Qn))
+    Veta <- array (0, c(Tn, Kn, Kn))
+    for (jr in seq_len(Tn)) {
+      ti <- time_idx[jr]; nm <- names_i[jr]
+      G[jr, ]      <- d_full [ti, nm, eta_avail]
+      Wmix[jr, , ] <- d2_full[ti, nm, eta_avail, th_avail]
+      Veta[jr, , ] <- d2_full[ti, nm, eta_avail, eta_avail]
+    }
+    Sinv <- 1 / sigma_i^2
+
+    H_inv_full <- H_inv_list[[i]]
+    H_inv      <- H_inv_full[eta_avail, eta_avail, drop = FALSE]
+
+    HG   <- G %*% H_inv
+    qf_t <- rowSums(HG * G)
+
+    if (Qn > 0L) {
+      explicit <- numeric(Qn)
+      for (k in seq_len(Qn)) {
+        Mk <- crossprod(G * Sinv, Wmix[, , k, drop = TRUE])
+        Mk <- Mk + t(Mk)
+        explicit[k] <- conv2 * sum(H_inv * Mk)
+      }
+      correction[th_avail] <- correction[th_avail] + explicit
+    }
+
+    if (length(chol_in_outer) > 0L) {
+      eta_pos  <- match(eta_avail, eta_i_nm)
+      eta_base <- omegaSpec$eta[eta_pos]
+      for (cp in chol_in_outer) {
+        dOmega_inv_sub <-
+          dOmega_inv_dchol[[cp]][eta_base, eta_base, drop = FALSE]
+        correction[cp] <- correction[cp] +
+          conv2 * sum(H_inv * dOmega_inv_sub)
+      }
+    }
+
+    if (!is.null(err_pred)) {
+      err_i <- err_pred[[cn]]
+      d_err <- attr(err_i, "deriv")
+      if (!is.null(d_err)) {
+        err_par_set  <- dimnames(d_err)[[3]]
+        theta_in_err <- intersect(outer_names, err_par_set)
+        for (q in theta_in_err) {
+          dsigma_q_t <- d_err[cbind(ti_e, oi_e, match(q, err_par_set))]
+          correction[q] <- correction[q] +
+            (-4) * sum(dsigma_q_t * qf_t / sigma_i^3)
+        }
+      }
+    }
+
+    th_for_implicit <- intersect(outer_names, colnames(joint_hessian))
+    if (length(th_for_implicit) > 0L) {
+      cross_block <- joint_hessian[eta_avail, th_for_implicit, drop = FALSE]
+      H_newton    <- joint_hessian[eta_avail, eta_avail, drop = FALSE]
+      eigN          <- eigen(H_newton, symmetric = TRUE)
+      trN           <- sum(eigN$values)
+      epsN          <- 1e-10 * abs(trN) / Kn
+      lamN          <- pmax(eigN$values, epsN)
+      H_inv_Newton  <- eigN$vectors %*% (t(eigN$vectors) / lamN)
+      dimnames(H_inv_Newton) <- dimnames(H_newton)
+
+      deta_dth <- -H_inv_Newton %*% cross_block
+
+      dlogH_deta <- numeric(Kn)
+      for (l in seq_len(Kn)) {
+        Ml <- crossprod(G * Sinv, Veta[, , l, drop = TRUE])
+        Ml <- Ml + t(Ml)
+        dlogH_deta[l] <- conv2 * sum(H_inv * Ml)
+      }
+      if (!is.null(err_pred)) {
+        err_i <- err_pred[[cn]]
+        d_err <- attr(err_i, "deriv")
+        if (!is.null(d_err)) {
+          err_par_set <- dimnames(d_err)[[3]]
+          for (l in seq_len(Kn)) {
+            et <- eta_avail[l]
+            if (et %in% err_par_set) {
+              dsigma_et_t <- d_err[cbind(ti_e, oi_e,
+                                          match(et, err_par_set))]
+              dlogH_deta[l] <- dlogH_deta[l] +
+                (-4) * sum(dsigma_et_t * qf_t / sigma_i^3)
+            }
+          }
+        }
+      }
+      implicit <- as.numeric(dlogH_deta %*% deta_dth)
+      correction[th_for_implicit] <-
+        correction[th_for_implicit] + implicit
+    }
+  }
+  correction
 }
 
 
-#' Adapter from a dMod prediction function to a `saemix`-compatible model
+
+#' Build a quadrature-based NLME marginal-likelihood objective function
 #'
-#' Wraps a [prdfn] for use as the `model` argument of `saemix::saemixModel`.
-#' The returned closure has the saemix signature `function(psi, id, xidep)`,
-#' splitting subjects by `id` and evaluating the prdfn per subject.
+#' Returns a callable `em(pars)` that integrates out the per-subject random
+#' effects using a sparse-grid Gauss-Hermite rule. The ECM E-step refreshes
+#' the integration nodes between outer iterations via
+#' `attr(em, "rebuildQuadrature")`. Most users want [nlmeFit], which builds
+#' the right `em` internally and runs a solver; use `emObjfn` directly only
+#' if you need to evaluate the objective by hand.
 #'
-#' @param prdfn A `prdfn` (e.g. `g * x * p`).
-#' @param cores Number of cores for `parallel::mclapply`. Forced to 1 on Windows.
+#' The Laplace approximation that was historically available here as
+#' `method = "laplace"` has been folded into the C++ FOCEI kernel exposed by
+#' [nlmeFit] with `method = "focei"`. Call `nlmeFit` directly.
 #'
-#' @return A function `model(psi, id, xidep)` returning a numeric vector of
-#'   predictions, in `id`-major order.
+#' @param joint An \code{objfn}, typically
+#'   `normL2(data, g*x*p, errmodel = err) + constraintL2(mu = 0, Omega = om)`.
+#' @param omegaSpec An [omega] spec with subject expansion.
+#' @param model A `prdfn` (`g*x*p`). Required.
+#' @param data A [datalist]. Required.
+#' @param errmodel Optional obsfn defining a parameter-dependent error model.
+#' @param method Character. Only `"quadrature"` is supported. Retained for
+#'   forward compatibility; the historical `"laplace"` path now lives inside
+#'   the C++ FOCEI kernel reached via [nlmeFit] with `method = "focei"`.
+#' @param control Named list with `level` (Smolyak depth, default 4) and
+#'   `cores` (default 1).
+#'
+#' @return A callable of class `c("emObjfn", "objfn", "fn")`. Calling it on
+#'   `pars` returns an [objlist] with an `emDiag` attribute carrying
+#'   quadrature diagnostics.
+#'
+#' @seealso [nlmeFit], [omega]
 #' @export
-modelSAEMIX <- function(prdfn, cores = 1) {
-
-  parnames <- getParameters(prdfn)
-
-  model <- function(psi, id, xidep) {
-
-    pars <- split(as.data.frame(psi[id, ]), id)
-
-    output <- do.call(c, parallel::mclapply(1:nrow(psi), function(i) {
-
-      parsD <- unlist(psi[i,])
-      names(parsD) <- parnames
-      timesD <- as.numeric(xidep[id == i, 1])
-      namesD <- as.character(xidep[id == i, 2])
-
-      prediction <- prdfn(timesD, parsD, deriv = FALSE)[[1]]
-      template <- data.frame(name = namesD, time = timesD, value = 0, sigma = 1)
-
-      myres <- res(template, prediction)
-
-      return(myres$prediction)
+emObjfn <- function(joint, omegaSpec,
+                    model    = NULL,
+                    data     = NULL,
+                    errmodel = NULL,
+                    method   = "quadrature",
+                    control  = list()) {
+  if (!identical(method, "quadrature"))
+    stop("emObjfn(): only `method = \"quadrature\"` is supported. The Laplace ",
+         "approximation was folded into the C++ FOCEI kernel; call ",
+         "`nlmeFit(method = \"focei\")` directly.")
+  .emObjfn_quadrature(joint, omegaSpec,
+                      model    = model,
+                      data     = data,
+                      errmodel = errmodel,
+                      level    = control$level %||% 4L,
+                      cores    = control$cores %||% 1L)
+}
 
 
-    }, mc.cores = cores))
 
-    return(output)
+## Internal quadrature-method emObjfn constructor (Phase 4b).
+##
+## Closure state separates frozen E-step (nodes_per_subject, etaModes,
+## chol_value, current_level) from the trust-varying structural pars. The
+## orchestrator (nlmeFit) calls attr(em, "rebuildQuadrature")(psiFull, level)
+## to update the frozen state, then runs trust(em, init = psi_structural) to
+## step over structural params while the integration grid stays fixed.
+.emObjfn_quadrature <- function(joint, omegaSpec, model, data, errmodel,
+                                level, cores) {
+  if (!inherits(joint, "objfn"))
+    stop("`joint` must be an objfn.")
+  if (!inherits(omegaSpec, "omegaSpec"))
+    stop("`omegaSpec` must be built by omega().")
+  if (is.null(omegaSpec$subjectEtas))
+    stop("`omegaSpec` must have subject expansion (call omega(..., subjects = ...)).")
+  if (is.null(model))
+    stop("`model` (the prdfn used to build `joint`) is required for ",
+         "method = \"quadrature\".")
+  if (is.null(data))
+    stop("`data` (the datalist used for joint) is required for ",
+         "method = \"quadrature\".")
 
+  K            <- omegaSpec$K
+  subject_etas <- omegaSpec$subjectEtas
+  subjects     <- rownames(subject_etas)
+  N            <- length(subjects)
+  all_eta_nm   <- as.vector(subject_etas)
+  chol_pars    <- omegaSpec$cholPars
+  joint_pars   <- attr(joint, "parameters")
 
+  # Frozen E-step state (mutable via <<- inside rebuildQuadrature only).
+  nodes_per_subject <- NULL
+  eta_modes_state   <- NULL
+  H_i_list_state    <- NULL
+  chol_value_state  <- NULL
+  current_level     <- as.integer(level)
+  n_floored_state   <- integer(N)
+  converged_state   <- logical(N)
+  iter_state        <- integer(N)
+
+  # Mode-finder for one subject. Per-subject inner trust over eta, with the
+  # other subjects' etas held at their cached values.
+  find_mode_one <- function(subjIdx, outer_input_with_chol, fixed,
+                            eta_init_full) {
+    eta_i_names <- subject_etas[subjIdx, ]
+    eta_i_init  <- setNames(eta_init_full[subjIdx, ], eta_i_names)
+    other_nm    <- as.vector(subject_etas[-subjIdx, , drop = FALSE])
+    other_vals  <- as.vector(eta_init_full[-subjIdx, , drop = FALSE])
+    names(other_vals) <- other_nm
+
+    inner_objfn <- function(eta_i_in, ...) {
+      full_pars <- c(outer_input_with_chol, other_vals, eta_i_in)
+      out <- joint(pars = full_pars, fixed = fixed, deriv = TRUE,
+                   conditions = subjects[subjIdx])
+      gr <- out$gradient[eta_i_names]
+      hs <- out$hessian[eta_i_names, eta_i_names, drop = FALSE]
+      objlist(value = out$value, gradient = gr, hessian = hs)
+    }
+
+    fit <- try(suppressMessages(trust(inner_objfn, parinit = eta_i_init,
+                                      rinit = 1, rmax = 10, iterlim = 50L,
+                                      fterm = 1e-7, mterm = 1e-7)), silent = TRUE)
+    if (inherits(fit, "try-error") || !isTRUE(fit$converged)) {
+      H_fallback <- diag(K)
+      dimnames(H_fallback) <- list(eta_i_names, eta_i_names)
+      list(etaStar  = eta_i_init,
+           H_i       = H_fallback,
+           iter      = NA_integer_,
+           converged = FALSE)
+    } else {
+      list(etaStar  = setNames(as.numeric(fit$argument), eta_i_names),
+           H_i       = fit$hessian,
+           iter      = fit$iterations,
+           converged = isTRUE(fit$converged))
+    }
   }
 
-  return(model)
+  # E-step: rebuild per-subject modes, eigen-floored H_i, and Smolyak nodes.
+  rebuildQuadrature <- function(psiFull, level_new = NULL,
+                                  fixed = NULL,
+                                  eta_init = NULL) {
+    if (!is.null(level_new)) current_level <<- as.integer(level_new)
+    if (!all(chol_pars %in% names(psiFull)))
+      stop("rebuildQuadrature: `psiFull` is missing omegaSpec$cholPars.")
+    outer_with_chol_names <- intersect(names(psiFull),
+                                       setdiff(joint_pars, all_eta_nm))
+    outer_with_chol <- psiFull[outer_with_chol_names]
 
+    if (is.null(eta_init)) {
+      eta_init <- if (!is.null(eta_modes_state)) eta_modes_state
+                  else matrix(0, N, K, dimnames = dimnames(subject_etas))
+    }
 
+    new_modes <- matrix(0, N, K, dimnames = dimnames(subject_etas))
+    new_H     <- vector("list", N)
+    new_nodes <- vector("list", N)
+    new_nfloor <- integer(N)
+    new_conv   <- logical(N)
+    new_iter   <- integer(N)
+
+    for (i in seq_len(N)) {
+      m <- find_mode_one(i, outer_with_chol, fixed, eta_init)
+      new_modes[i, ] <- m$etaStar
+      new_conv[i]    <- m$converged
+      new_iter[i]    <- if (is.null(m$iter)) NA_integer_ else m$iter
+      H_i <- m$H_i
+      eig <- eigen(H_i, symmetric = TRUE)
+      tr_H <- sum(eig$values)
+      eps <- 1e-10 * abs(tr_H) / K
+      lambda_floored <- pmax(eig$values, eps)
+      new_nfloor[i] <- sum(eig$values < eps)
+      H_safe <- eig$vectors %*% (lambda_floored * t(eig$vectors))
+      dimnames(H_safe) <- dimnames(H_i)
+      new_H[[i]] <- H_safe
+      new_nodes[[i]] <- makeSubjectNodes(new_modes[i, ], H_safe, current_level)
+    }
+
+    nodes_per_subject <<- new_nodes
+    eta_modes_state   <<- new_modes
+    H_i_list_state    <<- new_H
+    chol_value_state  <<- psiFull[chol_pars]
+    n_floored_state   <<- new_nfloor
+    converged_state   <<- new_conv
+    iter_state        <<- new_iter
+
+    invisible(list(etaModes  = new_modes,
+                   HiList   = new_H,
+                   level      = current_level,
+                   nFloored  = new_nfloor,
+                   converged  = new_conv,
+                   iterations = new_iter))
+  }
+
+  myfn <- function(..., fixed = NULL, deriv = TRUE, env = NULL) {
+    p <- list(...)[[match.fnargs(list(...), "pars")]]
+    if (is.null(env)) env <- new.env()
+
+    if (is.null(nodes_per_subject))
+      stop("emObjfn: no quadrature grid built. Call ",
+           "`attr(em, 'rebuildQuadrature')(psiFull, level)` first.")
+
+    # Build psiFull from p + frozen chol_value_state (CM-1 holds chol fixed).
+    structural_names <- setdiff(names(p), c(chol_pars, all_eta_nm))
+    chol_in_p <- intersect(chol_pars, names(p))
+    psiFull <- c(p[structural_names],
+                  if (length(chol_in_p)) p[chol_in_p] else chol_value_state)
+
+    # Outer-active params = those varied by the trust caller = names(p).
+    outer_active <- structural_names
+
+    if (cores == 1L) {
+      per_subj <- lapply(seq_len(N), function(i) ecmEvaluateSubject(
+        i, psiFull, eta_modes_state, omegaSpec, nodes_per_subject[[i]],
+        xPred = model, datalist = data, errmodel = errmodel,
+        fixed = fixed, outerActiveNames = outer_active,
+        mode = if (deriv) "with_grad" else "moments_only"))
+    } else if (.Platform$OS.type == "windows") {
+      cl <- parallel::makeCluster(cores)
+      on.exit(parallel::stopCluster(cl))
+      per_subj <- parallel::parLapply(cl, seq_len(N), function(i) ecmEvaluateSubject(
+        i, psiFull, eta_modes_state, omegaSpec, nodes_per_subject[[i]],
+        xPred = model, datalist = data, errmodel = errmodel,
+        fixed = fixed, outerActiveNames = outer_active,
+        mode = if (deriv) "with_grad" else "moments_only"))
+    } else {
+      per_subj <- parallel::mclapply(seq_len(N), function(i) ecmEvaluateSubject(
+        i, psiFull, eta_modes_state, omegaSpec, nodes_per_subject[[i]],
+        xPred = model, datalist = data, errmodel = errmodel,
+        fixed = fixed, outerActiveNames = outer_active,
+        mode = if (deriv) "with_grad" else "moments_only"),
+        mc.cores = cores)
+    }
+
+    tot_logL <- 0
+    tot_gr   <- setNames(numeric(length(p)), names(p))
+    tot_he   <- matrix(0, length(p), length(p),
+                       dimnames = list(names(p), names(p)))
+    MHatList      <- vector("list", N)
+    mHatList      <- vector("list", N)
+    max_softmax_per <- numeric(N)
+    n_eff_per       <- numeric(N)
+
+    for (i in seq_len(N)) {
+      o <- per_subj[[i]]
+      tot_logL          <- tot_logL + o$logLhat
+      MHatList[[i]]   <- o$M_hat
+      mHatList[[i]]   <- o$m_hat
+      max_softmax_per[i] <- o$maxSoftmax
+      n_eff_per[i]      <- o$n_eff
+      if (deriv && !is.null(o$gradient)) {
+        nm <- intersect(outer_active, names(tot_gr))
+        tot_gr[nm] <- tot_gr[nm] + o$gradient[nm]
+        tot_he[nm, nm] <- tot_he[nm, nm] + o$hessian[nm, nm]
+      }
+    }
+
+    OFV <- -2 * tot_logL
+    out <- objlist(value = OFV, gradient = tot_gr, hessian = tot_he)
+    emDiag <- list(method          = "quadrature",
+                    level           = current_level,
+                    etaModes       = eta_modes_state,
+                    HiList        = H_i_list_state,
+                    mHatList      = mHatList,
+                    MHatList      = MHatList,
+                    maxSoftmax     = max_softmax_per,
+                    n_eff           = n_eff_per,
+                    nFloored       = n_floored_state,
+                    innerConverged = converged_state,
+                    innerIter      = iter_state)
+    attr(out, "emDiag") <- emDiag
+    attr(out, "env")     <- env
+    out
+  }
+
+  class(myfn) <- c("emObjfn", "objfn", "fn")
+  attr(myfn, "method")     <- "quadrature"
+  attr(myfn, "conditions") <- attr(joint, "conditions")
+  attr(myfn, "parameters") <- setdiff(joint_pars, all_eta_nm)
+  attr(myfn, "omegaSpec")  <- omegaSpec
+  attr(myfn, "joint")      <- joint
+  attr(myfn, "model")      <- model
+  attr(myfn, "data")       <- data
+  attr(myfn, "errmodel")   <- errmodel
+  attr(myfn, "rebuildQuadrature") <- rebuildQuadrature
+  attr(myfn, "control")    <- list(level = level, cores = cores)
+  myfn
 }
+
+
+
+# nlmeFit S3 constructor. Bundles solver output with the model / data /
+# omegaSpec references that predict.nlmeFit and the diagnostic plot
+# helpers (in plots.R) consume.
+nlmeFit_make <- function(argument, value, gradient, hessian, omega, etaModes,
+                         converged, iterations, emDiag, method,
+                         foceiStart = NULL, stageTrace = NULL,
+                         model = NULL, data = NULL, omegaSpec = NULL,
+                         errmodel = NULL) {
+  etaInfo  <- .computeEtaInfo(emDiag, omega, etaModes, omegaSpec)
+  out <- list(argument   = argument,
+              value      = value,
+              gradient   = gradient,
+              hessian    = hessian,
+              omega      = omega,
+              etaModes   = etaModes,
+              etaSE      = etaInfo$etaSE,
+              shrinkage  = etaInfo$shrinkage,
+              converged  = converged,
+              iterations = iterations,
+              emDiag     = emDiag,
+              method     = method,
+              foceiStart = foceiStart,
+              stageTrace = stageTrace,
+              model      = model,
+              data       = data,
+              omegaSpec  = omegaSpec,
+              errmodel   = errmodel)
+  class(out) <- c("nlmeFit", "list")
+  out
+}
+
+# Posterior-mode standard errors and shrinkage diagnostics for the per-subject
+# random effects. Caller passes the full emDiag (which carries HInvList from
+# either the R or C++ Laplace path); returns NULLs when the inverse Hessian
+# list is unavailable (e.g. quadrature method).
+.computeEtaInfo <- function(emDiag, omega, etaModes, omegaSpec) {
+  out <- list(etaSE = NULL, shrinkage = NULL)
+  if (is.null(emDiag) || is.null(emDiag$HInvList) || is.null(etaModes))
+    return(out)
+  H_inv_list <- emDiag$HInvList
+  N <- nrow(etaModes); K <- ncol(etaModes)
+  if (length(H_inv_list) != N) return(out)
+
+  diag_template <- rep(NA_real_, K)
+  diags <- vapply(H_inv_list, function(Hi) {
+    if (is.null(Hi) || !is.matrix(Hi) || any(dim(Hi) != c(K, K)))
+      return(diag_template)
+    di <- diag(Hi)
+    di[di < 0] <- NA_real_
+    di
+  }, numeric(K))
+  dim(diags) <- c(K, N)
+  etaSE <- sqrt(t(diags))
+  dimnames(etaSE) <- dimnames(etaModes)
+  out$etaSE <- etaSE
+
+  if (!is.null(omega) && all(dim(omega) == c(K, K))) {
+    omega_sd <- sqrt(pmax(diag(omega), 0))
+    sd_mat <- matrix(omega_sd, N, K, byrow = TRUE)
+    shrink <- 1 - etaSE / sd_mat
+    shrink[, omega_sd <= 0] <- NA_real_
+    dimnames(shrink) <- dimnames(etaModes)
+    out$shrinkage <- shrink
+  }
+  out
+}
+
+
+# Synthetic err callable for the case where the user supplied no errmodel
+# and instead set `data$sigma` directly. Returns a prdlist whose matrix has
+# the per-observation sigmas (from the data) padded onto the prediction's
+# time grid. No `deriv` attribute, so the C++ kernel treats `dsigma/deta = 0`.
+.makeStaticErr <- function(data) {
+  data_per_subject <- lapply(seq_along(data), function(i) {
+    d <- data[[i]]
+    d$name <- as.character(d$name)
+    d
+  })
+  names(data_per_subject) <- names(data)
+
+  function(out, pars = NULL, conditions = NULL, ...) {
+    s <- if (!is.null(conditions)) conditions[1] else names(data_per_subject)[1]
+    out_mat <- if (inherits(out, "prdlist")) out[[s]] else out
+    pred_times <- as.numeric(out_mat[, "time"])
+    obs_names  <- setdiff(colnames(out_mat), "time")
+    d <- data_per_subject[[s]]
+    if (is.null(d))
+      stop(".makeStaticErr: condition '", s,
+           "' missing from data; supply an errmodel.")
+    if (anyNA(d$sigma))
+      stop(".makeStaticErr: condition '", s,
+           "' has NA in data$sigma; supply an errmodel.")
+    err_mat <- matrix(NA_real_, length(pred_times), length(obs_names) + 1L)
+    colnames(err_mat) <- c("time", obs_names)
+    err_mat[, "time"] <- pred_times
+    for (o in obs_names) {
+      drow <- d[d$name == o, , drop = FALSE]
+      if (!nrow(drow)) next
+      idx <- match(pred_times, drow$time)
+      err_mat[, o] <- ifelse(is.na(idx), median(drow$sigma), drow$sigma[idx])
+    }
+    setNames(list(structure(err_mat, class = c("prdframe", "matrix"))), s)
+  }
+}
+
+
+# Builds the long-format subject_meta consumed by focei_inner_trust / the
+# C++ kernel. One row in t_idx_in_pred / o_idx_in_pred / y_data / ... per
+# observed data point of the subject, covering all observables. eta_idx_in_*
+# arrays are length K (one entry per random effect). Values 0 mark "no
+# contribution" (e.g. an eta does not appear in the err model's deriv).
+.buildFastMeta <- function(model, errmodel, data, subjects,
+                           eta_names_list, pars_full_names, pars_probe) {
+  N <- length(subjects)
+  fast_meta <- vector("list", N)
+  for (i in seq_len(N)) {
+    s      <- subjects[i]
+    data_i <- data[[s]]
+    data_i$name <- as.character(data_i$name)
+    data_i <- data_i[order(data_i$time, data_i$name), , drop = FALSE]
+    times_union <- sort(unique(data_i$time))
+
+    # Probe model + err once to learn deriv array structure.
+    pred_probe <- model(times = times_union, pars = pars_probe,
+                        deriv = TRUE, conditions = s)
+    prdf  <- pred_probe[[1]]
+    pcols <- colnames(prdf)
+    d_dn  <- dimnames(attr(prdf, "deriv"))
+    eta_names_i      <- eta_names_list[[i]]
+    eta_idx_in_deriv <- match(eta_names_i, d_dn[[3]])
+    if (anyNA(eta_idx_in_deriv))
+      stop(".buildFastMeta: eta names not present in model deriv array for ",
+           "subject ", s, ".")
+
+    pinner    <- attr(prdf, "parameters")
+    err_probe <- errmodel(out = prdf, pars = pinner, conditions = s)
+    erm       <- err_probe[[1]]
+    ecols     <- colnames(erm)
+    e_attr    <- attr(erm, "deriv")
+    if (!is.null(e_attr)) {
+      e_dn               <- dimnames(e_attr)
+      eta_idx_in_err_deriv <- match(eta_names_i, e_dn[[3]])
+      eta_idx_in_err_deriv[is.na(eta_idx_in_err_deriv)] <- 0L
+    } else {
+      e_dn               <- NULL
+      eta_idx_in_err_deriv <- rep(0L, length(eta_names_i))
+    }
+
+    # Long-format per-row indices.
+    t_idx_in_pred  <- match(data_i$time, prdf[, "time"])
+    o_idx_in_pred  <- match(data_i$name, pcols)
+    if (anyNA(o_idx_in_pred))
+      stop(".buildFastMeta: observable(s) not found in model output for ",
+           "subject ", s, ": ",
+           paste(setdiff(unique(data_i$name), pcols), collapse = ", "))
+    o_idx_in_deriv <- match(data_i$name, d_dn[[2]])
+    t_idx_in_err   <- match(data_i$time, erm[, "time"])
+    o_idx_in_err   <- match(data_i$name, ecols)
+    if (!is.null(e_dn)) {
+      o_idx_in_err_deriv <- match(data_i$name, e_dn[[2]])
+      o_idx_in_err_deriv[is.na(o_idx_in_err_deriv)] <- 0L
+    } else {
+      o_idx_in_err_deriv <- rep(0L, nrow(data_i))
+    }
+
+    fast_meta[[i]] <- list(
+      times                = as.numeric(times_union),
+      eta_idx_in_pars      = as.integer(match(eta_names_i, pars_full_names)),
+      t_idx_in_pred        = as.integer(t_idx_in_pred),
+      y_data               = as.numeric(data_i$value),
+      o_idx_in_pred        = as.integer(o_idx_in_pred),
+      eta_idx_in_deriv     = as.integer(eta_idx_in_deriv),
+      o_idx_in_deriv       = as.integer(o_idx_in_deriv),
+      t_idx_in_err         = as.integer(t_idx_in_err),
+      o_idx_in_err         = as.integer(o_idx_in_err),
+      eta_idx_in_err_deriv = as.integer(eta_idx_in_err_deriv),
+      o_idx_in_err_deriv   = as.integer(o_idx_in_err_deriv),
+      condition            = s,
+      eta_names            = eta_names_i)
+  }
+  fast_meta
+}
+
+
+# Internal: run the C++ FOCEI kernel and package its output as nlmeFit.
+# Used by nlmeFit(method = "focei"). Always uses the fast-inner C++ path
+# with eager Stage-2 correction, calling .computeFoceiCorrection as an
+# Rcpp::Function once per outer iter.
+.runFoceiCpp <- function(joint, omegaSpec, init, model, data, errmodel,
+                         fixed = NULL,
+                         innerControl = list(), trustControl = list(),
+                         methodLabel = "focei") {
+  if (is.null(model))
+    stop(".runFoceiCpp: `model` (the prdfn) is required.")
+  if (is.null(data))
+    stop(".runFoceiCpp: `data` (the datalist) is required.")
+  if (is.null(omegaSpec$subjectEtas))
+    stop(".runFoceiCpp: omegaSpec has no subject expansion. Call ",
+         "omega(..., subjects = ...).")
+
+  # When the user did not supply an errmodel but recorded sigma in the data
+  # itself, wrap the per-row sigmas into a synthetic obsfn-like callable.
+  # The fast-inner kernel treats this as "sigma constant in eta" (no err
+  # deriv attribute -> Js = 0).
+  if (is.null(errmodel)) errmodel <- .makeStaticErr(data)
+
+  K        <- omegaSpec$K
+  subjects <- rownames(omegaSpec$subjectEtas)
+  N        <- length(subjects)
+  outer_names <- names(init)
+  eta_names_all <- as.vector(omegaSpec$subjectEtas)
+  pars_full_names <- c(outer_names, eta_names_all)
+  eta_idx_global <- matrix(0L, N, K)
+  eta_names_list <- vector("list", N)
+  for (i in seq_len(N)) {
+    nms <- omegaSpec$subjectEtas[i, ]
+    eta_names_list[[i]] <- nms
+    eta_idx_global[i, ] <- match(nms, pars_full_names)
+  }
+  outer_idx_full  <- match(outer_names, pars_full_names)
+  other_etas_init <- setNames(rep(0, length(eta_names_all)), eta_names_all)
+  subject_meta <- list(
+    subjects          = subjects,
+    eta_idx_global    = eta_idx_global,
+    eta_names         = eta_names_list,
+    K                 = K,
+    outer_names       = outer_names,
+    outer_idx_in_full = outer_idx_full,
+    other_etas_init   = other_etas_init,
+    pars_full_names   = pars_full_names
+  )
+  ic <- modifyList(list(rinit = 1, rmax = 10, iterlim = 30,
+                        fterm = 1e-7, mterm = 1e-7,
+                        eigen_floor_relative = 1e-10),
+                   innerControl)
+  oc <- modifyList(list(rinit = 1, rmax = 10, iterlim = 200,
+                        fterm = 1e-7, mterm = 1e-7),
+                   trustControl)
+  control_cpp <- list(inner = ic, outer = oc)
+
+  pars_probe <- setNames(numeric(length(pars_full_names)), pars_full_names)
+  pars_probe[outer_names] <- init
+  fast_meta <- .buildFastMeta(model, errmodel, data, subjects,
+                              eta_names_list, pars_full_names, pars_probe)
+  om_meta <- list(
+    chol_pars = omegaSpec$cholPars,
+    chol_loc  = matrix(as.integer(omegaSpec$cholLoc), ncol = 2,
+                       dimnames = NULL),
+    is_diag   = as.logical(omegaSpec$isDiag))
+  subject_meta$fast_meta  <- fast_meta
+  subject_meta$omega_meta <- om_meta
+
+  data_per_subject <- lapply(subjects, function(s) data[[s]])
+  names(data_per_subject) <- subjects
+  times_union <- sort(unique(c(0, unlist(lapply(data_per_subject, `[[`,
+                                                "time")))))
+  correction_cb <- function(full_pars, joint_hessian, H_inv_list) {
+    .computeFoceiCorrection(
+      full_pars = full_pars, joint_hessian = joint_hessian,
+      fixed = fixed, outer_names = outer_names, H_inv_list = H_inv_list,
+      model = model, errmodel = errmodel, omegaSpec = omegaSpec,
+      subjects = subjects, subject_etas = omegaSpec$subjectEtas,
+      K = K, N = N,
+      data_per_subject = data_per_subject, times_union = times_union)
+  }
+
+  fit <- focei_run(model_cb = model, err_cb = errmodel,
+                        joint_cb = joint, init = init,
+                        subject_meta = subject_meta,
+                        fixed = fixed, control = control_cpp,
+                        correction_mode = "eager",
+                        correction_cb = correction_cb)
+
+  L_omega <- if (all(omegaSpec$cholPars %in% names(fit$argument)))
+    omegaSpec$buildL(fit$argument[omegaSpec$cholPars]) else NULL
+  Omega <- if (!is.null(L_omega)) tcrossprod(L_omega) else NULL
+  etaModes <- fit$etaModes
+  rownames(etaModes) <- subjects
+  colnames(etaModes) <- omegaSpec$eta
+  emDiag <- list(etaStar = etaModes, logdet = fit$log_det_H,
+                 sum_logdetH = fit$sum_logdetH, trace = fit$trace,
+                 backend = "cpp", HInvList = fit$H_inv)
+  nlmeFit_make(argument = fit$argument, value = fit$value,
+               gradient = fit$gradient, hessian = fit$hessian,
+               omega = Omega, etaModes = etaModes,
+               converged = isTRUE(fit$converged),
+               iterations = fit$iterations, emDiag = emDiag,
+               method = methodLabel,
+               model = model, data = data,
+               omegaSpec = omegaSpec, errmodel = errmodel)
+}
+
+
+# Internal: run ECM (E-step / CM-1 / CM-2) polish on a quadrature-method
+# emObjfn, package as nlmeFit.
+.runQuadratureEcm <- function(em, init, fixed = NULL, foceiStart = NULL,
+                              epsQuadLevels = NULL, epsEcm = 1e-4,
+                              epsOfvRel = 1e-5, maxEcmPerStage = 5L,
+                              maxCm1Iter = 30L, cm1Control = list(),
+                              methodLabel = "quadrature", verbose = TRUE) {
+  om <- attr(em, "omegaSpec")
+  K  <- om$K
+  chol_pars <- om$cholPars
+  if (is.null(epsQuadLevels)) epsQuadLevels <- K + 1:3
+  cm1 <- modifyList(list(rinit = 1, rmax = 10,
+                         fterm = 1e-6, mterm = 1e-6), cm1Control)
+  psi <- init
+  if (!all(chol_pars %in% names(psi)))
+    stop("nlmeFit: `init` is missing omegaSpec$cholPars (",
+         paste(setdiff(chol_pars, names(psi)), collapse = ", "), ").")
+  structural_names <- setdiff(names(psi), chol_pars)
+  rebuild <- attr(em, "rebuildQuadrature")
+  stage_rows <- list(); prev_psi <- psi; prev_ofv <- NA_real_
+
+  for (stage in seq_along(epsQuadLevels)) {
+    level <- epsQuadLevels[stage]
+    if (verbose) message(sprintf("nlmeFit(%s): stage %d / %d (level = %d)",
+                                 methodLabel, stage,
+                                 length(epsQuadLevels), level))
+    e_info <- rebuild(psi, level_new = level, fixed = fixed,
+                      eta_init = if (!is.null(foceiStart))
+                                   foceiStart$emDiag$etaStar else NULL)
+    for (ecmIter in seq_len(maxEcmPerStage)) {
+      if (ecmIter > 1L)
+        e_info <- rebuild(psi, level_new = level, fixed = fixed,
+                          eta_init = e_info$etaModes)
+      cm1_fit <- suppressMessages(trust(
+        em, parinit = psi[structural_names], fixed = fixed,
+        rinit = cm1$rinit, rmax = cm1$rmax,
+        iterlim = maxCm1Iter,
+        fterm = cm1$fterm, mterm = cm1$mterm, on_step = NULL))
+      psi[structural_names] <- cm1_fit$argument
+      out_after_cm1 <- em(psi[structural_names], fixed = fixed, deriv = FALSE)
+      diag_after    <- attr(out_after_cm1, "emDiag")
+      psi[chol_pars] <- updateOmegaChol(diag_after$MHatList, om)
+      ofv         <- out_after_cm1$value
+      deltaPsi    <- max(abs(psi - prev_psi))
+      deltaOfvRel <- if (is.na(prev_ofv) || abs(prev_ofv) < .Machine$double.eps)
+                       Inf else abs(ofv - prev_ofv) / abs(prev_ofv)
+      stage_rows[[length(stage_rows) + 1L]] <- data.frame(
+        stage = stage, ecmIter = ecmIter, level = level,
+        OFV = ofv, deltaPsi = deltaPsi, deltaOfvRel = deltaOfvRel,
+        maxSoftmax = max(diag_after$maxSoftmax),
+        nEffMin = min(diag_after$n_eff),
+        cm1TrustIter = cm1_fit$iterations)
+      if (verbose) message(sprintf(
+        "  ecm %d : OFV=%.6f  |dpsi|=%.2e  |dOFV/OFV|=%.2e  max_smax=%.3f  nEffMin=%.1f",
+        ecmIter, ofv, deltaPsi, deltaOfvRel,
+        max(diag_after$maxSoftmax), min(diag_after$n_eff)))
+      prev_psi <- psi; prev_ofv <- ofv
+      if (deltaPsi < epsEcm || deltaOfvRel < epsOfvRel) break
+    }
+  }
+
+  rebuild(psi, fixed = fixed,
+          eta_init = if (length(stage_rows))
+                       attr(em(psi[structural_names], deriv = FALSE),
+                            "emDiag")$etaModes else NULL)
+  final_out  <- em(psi[structural_names], fixed = fixed)
+  final_diag <- attr(final_out, "emDiag")
+  L_omega    <- om$buildL(psi[chol_pars])
+  Omega      <- tcrossprod(L_omega)
+  conv       <- length(stage_rows) > 0L && {
+    last <- tail(stage_rows, 1)[[1]]
+    last$deltaPsi < epsEcm || last$deltaOfvRel < epsOfvRel
+  }
+  nlmeFit_make(argument   = psi,
+               value      = final_out$value,
+               gradient   = final_out$gradient,
+               hessian    = final_out$hessian,
+               omega      = Omega,
+               etaModes   = final_diag$etaModes,
+               converged  = conv,
+               iterations = length(stage_rows),
+               emDiag     = final_diag,
+               method     = methodLabel,
+               foceiStart = foceiStart,
+               stageTrace = do.call(rbind, stage_rows),
+               model      = attr(em, "model"),
+               data       = attr(em, "data"),
+               omegaSpec  = attr(em, "omegaSpec"),
+               errmodel   = attr(em, "errmodel"))
+}
+
+
+#' Fit a nonlinear mixed-effects model
+#'
+#' Builds the marginal-likelihood objective via [emObjfn] and runs the
+#' selected estimator. Returns an `nlmeFit` S3 object consumable by the
+#' diagnostic helpers ([predict.nlmeFit], [plot.nlmeFit], [plotIndivs] etc.).
+#'
+#' @param joint An \code{objfn} of the form
+#'   `normL2(data, model, errmodel = err) + constraintL2(mu = 0, Omega = om)`.
+#' @param omegaSpec An [omega] spec with subject expansion.
+#' @param init Named numeric starting parameter vector. Must contain all
+#'   structural parameters and all `omegaSpec$cholPars`.
+#' @param model The prediction function `g * x * p` used to build `joint`.
+#'   Required.
+#' @param data The [datalist] used for `joint`. Required.
+#' @param errmodel Optional obsfn defining a parameter-dependent error model.
+#' @param fixed Optional named-numeric of fixed parameters.
+#' @param method Estimator. \code{"focei"} runs the C++ FOCEI kernel
+#'   (Laplace + trust + eager Stage-2 correction); \code{"quadrature"} runs
+#'   adaptive sparse-grid Gauss-Hermite + ECM with a cold start;
+#'   \code{"foceiQuadrature"} runs FOCEI first and uses the converged
+#'   structural pars and modes as warmstart for the quadrature polish.
+#' @param control Nested list of method-specific knobs. Entries:
+#'   \describe{
+#'     \item{`$focei`}{Recognised keys: `innerControl`, `trustControl`.}
+#'     \item{`$quadrature`}{Passed to the quadrature [emObjfn] and ECM solver.
+#'       Recognised keys: `level`, `cores`, `epsQuadLevels`, `epsEcm`,
+#'       `epsOfvRel`, `maxEcmPerStage`, `maxCm1Iter`, `cm1Control`.}
+#'   }
+#' @param verbose Logical. If TRUE prints solver progress.
+#'
+#' @return An `nlmeFit` S3 list with fields `argument`, `value`, `gradient`,
+#'   `hessian`, `omega`, `etaModes`, `converged`, `iterations`, `emDiag`,
+#'   `method`, `foceiStart`, `stageTrace`, `model`, `data`, `omegaSpec`,
+#'   `errmodel`.
+#'
+#' @seealso [emObjfn], [omega], [predict.nlmeFit]
+#' @export
+nlmeFit <- function(joint, omegaSpec, init,
+                    model    = NULL,
+                    data     = NULL,
+                    errmodel = NULL,
+                    fixed    = NULL,
+                    method   = c("focei", "quadrature", "foceiQuadrature"),
+                    control  = list(),
+                    verbose  = TRUE) {
+  method <- match.arg(method)
+  fc <- control$focei      %||% list()
+  qc <- control$quadrature %||% list()
+
+  if (method == "focei") {
+    return(.runFoceiCpp(joint, omegaSpec, init,
+                        model = model, data = data, errmodel = errmodel,
+                        fixed = fixed,
+                        innerControl = fc$innerControl %||% list(),
+                        trustControl = fc$trustControl %||% list(),
+                        methodLabel  = "focei"))
+  }
+
+  if (method == "quadrature") {
+    em <- emObjfn(joint, omegaSpec, model = model, data = data,
+                  errmodel = errmodel, control = qc)
+    return(.runQuadratureEcm(em, init, fixed = fixed,
+                             foceiStart     = NULL,
+                             epsQuadLevels  = qc$epsQuadLevels,
+                             epsEcm         = qc$epsEcm         %||% 1e-4,
+                             epsOfvRel      = qc$epsOfvRel      %||% 1e-5,
+                             maxEcmPerStage = qc$maxEcmPerStage %||% 5L,
+                             maxCm1Iter     = qc$maxCm1Iter     %||% 30L,
+                             cm1Control     = qc$cm1Control     %||% list(),
+                             methodLabel    = "quadrature",
+                             verbose        = verbose))
+  }
+
+  # foceiQuadrature: FOCEI warmstart + quadrature polish.
+  if (verbose) message("nlmeFit: running FOCEI warmstart ...")
+  foceiStart <- .runFoceiCpp(joint, omegaSpec, init,
+                             model = model, data = data, errmodel = errmodel,
+                             fixed = fixed,
+                             innerControl = fc$innerControl %||% list(),
+                             trustControl = fc$trustControl %||% list(),
+                             methodLabel  = "focei")
+  if (verbose) message(sprintf("  warmstart OFV = %.6f", foceiStart$value))
+  em_qd <- emObjfn(joint, omegaSpec, model = model, data = data,
+                   errmodel = errmodel, control = qc)
+  .runQuadratureEcm(em_qd, foceiStart$argument, fixed = fixed,
+                    foceiStart     = foceiStart,
+                    epsQuadLevels  = qc$epsQuadLevels,
+                    epsEcm         = qc$epsEcm         %||% 1e-4,
+                    epsOfvRel      = qc$epsOfvRel      %||% 1e-5,
+                    maxEcmPerStage = qc$maxEcmPerStage %||% 5L,
+                    maxCm1Iter     = qc$maxCm1Iter     %||% 30L,
+                    cm1Control     = qc$cm1Control     %||% list(),
+                    methodLabel    = "foceiQuadrature",
+                    verbose        = verbose)
+}
+
+
+#' Print an nlmeFit object
+#'
+#' @param x An `nlmeFit` object (see [nlmeFit]).
+#' @param ... Ignored.
+#' @return `x` invisibly.
+#' @export
+print.nlmeFit <- function(x, ...) {
+  cat("nlmeFit (method = ", x$method, ")\n", sep = "")
+  cat(sprintf("  OFV (-2 log L): %.6f\n", x$value))
+  cat(sprintf("  converged    : %s   iterations: %s\n",
+              x$converged, format(x$iterations %||% NA_integer_)))
+  cat("  argument     :\n")
+  print(x$argument)
+  if (!is.null(x$omega)) {
+    cat("  Omega        :\n")
+    print(round(x$omega, 4))
+  }
+  if (!is.null(x$etaModes) && !is.null(x$etaSE)) {
+    cat("  eta (mode +/- SE, shrinkage):\n")
+    print(.formatEtaTable(x$etaModes, x$etaSE, x$shrinkage))
+  }
+  invisible(x)
+}
+
+# Build a numeric data.frame with one column per quantity (mode, SE,
+# optional shrinkage) per eta. Relies on print.data.frame for alignment.
+.formatEtaTable <- function(etaModes, etaSE, shrinkage) {
+  K <- ncol(etaModes)
+  eta_names <- colnames(etaModes)
+  cols <- c(rbind(eta_names, paste0("SE.", eta_names)))
+  vals <- cbind(etaModes, etaSE)[, c(rbind(seq_len(K), seq_len(K) + K)),
+                                 drop = FALSE]
+  colnames(vals) <- cols
+
+  if (!is.null(shrinkage)) {
+    shr <- shrinkage
+    colnames(shr) <- paste0("shrink.", eta_names)
+    vals <- cbind(vals, shr)
+  }
+  round(as.data.frame(vals), 3)
+}
+
+
+
+#' Per-subject adaptive-quadrature marginal-likelihood evaluator
+#'
+#' @description
+#' Evaluates the per-subject marginal likelihood
+#' \eqn{\hat L_i = \int p(y_i \mid \eta) \, N(\eta \mid 0, \Omega)\, d\eta}
+#' via sparse-grid Gauss-Hermite quadrature at a precomputed set of nodes
+#' (output of [makeSubjectNodes]). Returns the log-likelihood, posterior
+#' first and second moments of \eqn{\eta_i}, plus (optionally) the gradient
+#' and Hessian of \eqn{-2 \log \hat L_i} with respect to a chosen subset of
+#' outer (population) parameters.
+#'
+#' This helper bypasses [normL2] / [constraintL2] entirely: the data
+#' likelihood contribution comes from the lifted [evalConditionResidual]
+#' (one prediction call per node, single-condition), the MVN prior on the
+#' subject's \eqn{\eta_b} is added in closed form via `omegaSpec$buildL`.
+#' Avoids the multi-condition parameter rebinding and full-population MVN
+#' contribution that calling `joint(..., conditions = subjects[i])` per node
+#' would incur.
+#'
+#' @param subjIdx Integer in `1..N` selecting the subject.
+#' @param psiFull Named numeric, the full outer parameter vector at which to
+#'   evaluate (structural + chol_pars; chol_pars are frozen during CM-1).
+#' @param etaModes N x K matrix of all subjects' eta values; the row at
+#'   `subjIdx` is ignored. Other rows are passed through to the prediction
+#'   call (required for parameter completeness in joint models).
+#' @param omegaSpec An [omega] spec object with subject expansion.
+#' @param nodesSubj Output of `makeSubjectNodes(eta_hat_i, H_i, level)` for
+#'   the active subject.
+#' @param xPred The prediction function (e.g. `g * x * p`).
+#' @param datalist The [datalist] used for the joint objective.
+#' @param errmodel Optional obsfn (passed through to
+#'   [evalConditionResidual]).
+#' @param fixed Optional fixed-parameter vector.
+#' @param outerActiveNames Character vector of parameter names to track
+#'   gradient/Hessian for. Defaults to `names(psiFull)`. For CM-1 with frozen
+#'   chol_pars, pass just the structural names.
+#' @param mode `"moments_only"` (no gradient/Hessian, cheap) or
+#'   `"with_grad"` (gradient + Hessian of `-2 log L_i`).
+#'
+#' @return A list with components:
+#' \describe{
+#'   \item{`logLhat`}{`log L_i` (scalar).}
+#'   \item{`m_hat`}{Length-K named numeric, posterior mean of \eqn{\eta_i}.}
+#'   \item{`M_hat`}{K x K named matrix, posterior 2nd moment
+#'     \eqn{\hat E[\eta_i \eta_i^T \mid y_i]}.}
+#'   \item{`maxSoftmax`}{Max |softmax weight| across nodes; diagnostic of
+#'     grid concentration.}
+#'   \item{`n_eff`}{Effective node count, 1/sum(softmax^2); diagnostic.}
+#'   \item{`gradient`, `hessian`}{When `mode = "with_grad"`: gradient and
+#'     Hessian of `-2 log L_i` w.r.t. `outerActiveNames`. NULL otherwise.}
+#' }
+#'
+#' @seealso [makeSubjectNodes], [evalConditionResidual]
+#' @keywords internal
+ecmEvaluateSubject <- function(subjIdx, psiFull, etaModes,
+                                 omegaSpec, nodesSubj,
+                                 xPred, datalist,
+                                 errmodel           = NULL,
+                                 fixed              = NULL,
+                                 outerActiveNames = NULL,
+                                 mode               = c("moments_only", "with_grad")) {
+  mode <- match.arg(mode)
+  with_grad <- (mode == "with_grad")
+
+  K            <- omegaSpec$K
+  subject_etas <- omegaSpec$subjectEtas
+  subjects     <- rownames(subject_etas)
+  cn           <- subjects[subjIdx]
+  eta_i_names  <- subject_etas[subjIdx, ]
+  chol_pars    <- omegaSpec$cholPars
+
+  if (is.null(outerActiveNames)) outerActiveNames <- names(psiFull)
+  if (!all(chol_pars %in% names(psiFull)))
+    stop("ecmEvaluateSubject: `psiFull` must contain all omegaSpec$cholPars.")
+
+  # Build closed-form prior log-normalisation: log N(eta_b|0,Omega)
+  # = -K/2 log(2 pi) - log|L_omega| - 0.5 * z^T z, z = L_omega^{-1} eta_b.
+  L_omega         <- omegaSpec$buildL(psiFull[chol_pars])
+  log_det_L_omega <- sum(log(diag(L_omega)))
+  log_norm_prior  <- -K / 2 * log(2 * pi) - log_det_L_omega
+
+  # Other subjects' eta values, named with their per-subject eta names.
+  if (nrow(etaModes) != length(subjects))
+    stop("ecmEvaluateSubject: `etaModes` must have one row per subject.")
+  other_eta_nm   <- as.vector(subject_etas[-subjIdx, , drop = FALSE])
+  other_eta_vals <- as.vector(etaModes[-subjIdx, , drop = FALSE])
+  names(other_eta_vals) <- other_eta_nm
+
+  dataI  <- datalist[[cn]]
+  times_i <- dataI$time
+
+  B           <- nrow(nodesSubj$etaNodes)
+  Q           <- length(outerActiveNames)
+  log_int     <- numeric(B)
+  sign_int    <- nodesSubj$weightSigns
+  per_node_gr <- if (with_grad) matrix(0, B, Q,
+                                       dimnames = list(NULL, outerActiveNames))
+                 else NULL
+  per_node_he <- if (with_grad) array(0, c(B, Q, Q),
+                                       dimnames = list(NULL, outerActiveNames,
+                                                       outerActiveNames))
+                 else NULL
+
+  for (b in seq_len(B)) {
+    eta_b     <- setNames(nodesSubj$etaNodes[b, ], eta_i_names)
+    full_pars <- c(psiFull, eta_b, other_eta_vals)
+
+    pred_b <- xPred(times = times_i, pars = full_pars, fixed = fixed,
+                     deriv = with_grad, conditions = cn)
+    res_b  <- evalConditionResidual(
+      dataI        = dataI,
+      predictionI  = pred_b[[cn]],
+      pars          = full_pars,
+      errmodel      = errmodel,
+      fixed         = fixed,
+      cn            = cn,
+      eCondNames  = NULL,
+      bessel        = 1,
+      deriv         = with_grad,
+      deriv2        = FALSE)
+
+    # Closed-form log-prior on eta_b alone.
+    z_prior     <- forwardsolve(L_omega, eta_b)
+    log_prior_b <- log_norm_prior - 0.5 * sum(z_prior^2)
+
+    # log integrand = log|W_b| + log p(y|eta_b) + log p(eta_b|Omega).
+    # log p(y|eta_b) = -0.5 * res_b$value (the value carries -2 log p form).
+    log_int[b] <- nodesSubj$logAbsWeights[b] - 0.5 * res_b$value + log_prior_b
+
+    if (with_grad) {
+      gr <- res_b$gradient[outerActiveNames]
+      gr[is.na(gr)] <- 0
+      per_node_gr[b, ] <- -0.5 * gr
+      he <- res_b$hessian[outerActiveNames, outerActiveNames, drop = FALSE]
+      he[is.na(he)] <- 0
+      per_node_he[b, , ] <- -0.5 * he
+    }
+  }
+
+  # Signed log-sum-exp: log(sum_b sign_b * exp(log_int[b])).
+  M       <- max(log_int)
+  shifted <- sign_int * exp(log_int - M)
+  s       <- sum(shifted)
+  if (!is.finite(s) || s <= 0) {
+    warning(sprintf(paste0("ecmEvaluateSubject(subjIdx=%d): signed-LSE ",
+                           "sum = %.3e; grid is under-resolved (raise `level`)."),
+                    subjIdx, s))
+    logLhat <- -Inf
+    softmax <- numeric(B)
+  } else {
+    logLhat <- M + log(s)
+    softmax <- sign_int * exp(log_int - logLhat)
+  }
+
+  m_hat <- as.numeric(softmax %*% nodesSubj$etaNodes)
+  M_hat <- crossprod(nodesSubj$etaNodes,
+                     softmax * nodesSubj$etaNodes)
+  names(m_hat) <- omegaSpec$eta
+  dimnames(M_hat) <- list(omegaSpec$eta, omegaSpec$eta)
+
+  out <- list(logLhat     = logLhat,
+              m_hat       = m_hat,
+              M_hat       = M_hat,
+              maxSoftmax = max(abs(softmax)),
+              n_eff       = if (any(softmax != 0)) 1 / sum(softmax^2) else 0)
+
+  if (with_grad) {
+    # Gradient of log L_i: sum_b softmax_b * (d log integrand_b / d theta).
+    gr_lse <- as.numeric(softmax %*% per_node_gr)
+    names(gr_lse) <- outerActiveNames
+
+    # Hessian of LSE = sum softmax_b H_b + Cov_softmax(grad_b).
+    # Cov = E[gg^T] - E[g] E[g]^T (with signed softmax this is an algebraic identity).
+    H_avg <- matrix(0, Q, Q, dimnames = list(outerActiveNames, outerActiveNames))
+    for (b in seq_len(B)) H_avg <- H_avg + softmax[b] * per_node_he[b, , ]
+    Eggt   <- crossprod(per_node_gr, softmax * per_node_gr)
+    cov_g  <- Eggt - tcrossprod(gr_lse)
+    H_lse  <- H_avg + cov_g
+
+    out$gradient <- -2 * gr_lse
+    out$hessian  <- -2 * H_lse
+  }
+  out
+}
+

@@ -5,38 +5,38 @@ test_that("diagonal omega returns K Cholesky parameters", {
   om <- omega(eta = c("eta_Cl", "eta_V"))
   expect_equal(om$K, 2L)
   expect_equal(om$structure, "diag")
-  expect_setequal(om$chol_pars, c("omega_Cl_Cl", "omega_V_V"))
-  expect_true(all(om$is_diag))
-  expect_null(om$subject_etas)
+  expect_setequal(om$cholPars, c("omega_Cl_Cl", "omega_V_V"))
+  expect_true(all(om$isDiag))
+  expect_null(om$subjectEtas)
 })
 
 
 test_that("full omega returns K(K+1)/2 Cholesky parameters", {
   om <- omega(eta = c("eta_Cl", "eta_V", "eta_Ka"), structure = "full")
   expect_equal(om$K, 3L)
-  expect_equal(length(om$chol_pars), 6L)
-  expect_setequal(om$chol_pars,
+  expect_equal(length(om$cholPars), 6L)
+  expect_setequal(om$cholPars,
                   c("omega_Cl_Cl", "omega_V_V", "omega_Ka_Ka",
                     "omega_V_Cl", "omega_Ka_Cl", "omega_Ka_V"))
-  expect_equal(sum(om$is_diag), 3L)
+  expect_equal(sum(om$isDiag), 3L)
 })
 
 
 test_that("selective correlation adds exactly one off-diagonal", {
   om <- omega(eta = c("eta_Cl", "eta_V", "eta_Ka"),
               correlate = list(c("eta_Cl", "eta_V")))
-  expect_equal(length(om$chol_pars), 4L)
-  expect_true("omega_V_Cl" %in% om$chol_pars)
-  expect_false("omega_Ka_Cl" %in% om$chol_pars)
+  expect_equal(length(om$cholPars), 4L)
+  expect_true("omega_V_Cl" %in% om$cholPars)
+  expect_false("omega_Ka_Cl" %in% om$cholPars)
 })
 
 
 test_that("subject expansion produces N x K name matrix", {
   subjects <- paste0("subj", 1:4)
   om <- omega(eta = c("eta_Cl", "eta_V"), subjects = subjects)
-  expect_equal(dim(om$subject_etas), c(4L, 2L))
-  expect_equal(om$subject_etas[1, "eta_Cl"], "eta_Cl_subj1")
-  expect_equal(om$subject_etas[3, "eta_V"],  "eta_V_subj3")
+  expect_equal(dim(om$subjectEtas), c(4L, 2L))
+  expect_equal(om$subjectEtas[1, "eta_Cl"], "eta_Cl_subj1")
+  expect_equal(om$subjectEtas[3, "eta_V"],  "eta_V_subj3")
 })
 
 
@@ -44,7 +44,7 @@ test_that("build_L returns lower-triangular matrix with exp(diag)", {
   om <- omega(eta = c("eta_Cl", "eta_V"), structure = "full")
   chol_vec <- c(omega_Cl_Cl = log(0.3), omega_V_V = log(0.2),
                 omega_V_Cl  = 0.05)
-  L <- om$build_L(chol_vec)
+  L <- om$buildL(chol_vec)
   expect_equal(dim(L), c(2L, 2L))
   expect_equal(L[1, 1], 0.3)
   expect_equal(L[2, 2], 0.2)
@@ -58,7 +58,7 @@ test_that("Omega = L L^T is symmetric positive definite", {
   om <- omega(eta = c("eta_a", "eta_b", "eta_c"), structure = "full")
   chol_vec <- c(omega_a_a = log(0.3), omega_b_b = log(0.4), omega_c_c = log(0.2),
                 omega_b_a = 0.1, omega_c_a = -0.05, omega_c_b = 0.07)
-  L <- om$build_L(chol_vec)
+  L <- om$buildL(chol_vec)
   Omega_mat <- L %*% t(L)
   expect_equal(Omega_mat, t(Omega_mat))
   ev <- eigen(Omega_mat, symmetric = TRUE, only.values = TRUE)$values
@@ -68,7 +68,7 @@ test_that("Omega = L L^T is symmetric positive definite", {
 
 test_that("missing Cholesky parameter raises an error", {
   om <- omega(eta = c("eta_Cl", "eta_V"))
-  expect_error(om$build_L(c(omega_Cl_Cl = 0)), "missing Cholesky")
+  expect_error(om$buildL(c(omega_Cl_Cl = 0)), "missing Cholesky")
 })
 
 

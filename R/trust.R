@@ -52,7 +52,11 @@ norm <- function(x) sqrt(crossprod(x))
 #'   value and parameters are written there.
 #' @param on_step Optional callback `function(rho, accepted, iter, r)`
 #'   invoked once per step decision; return value is ignored. Used by
-#'   [focei()] to invalidate cached corrections on rejected steps.
+#'   [nlmeFit()] to invalidate cached FOCEI corrections on rejected steps.
+#' @param engine Character. `"R"` (default) uses the historical R implementation;
+#'   `"cpp"` dispatches to the compiled outer-loop kernel when the problem
+#'   matches its supported shape (no `parscale`, no bounds, no callbacks).
+#'   The function silently falls back to `"R"` for unsupported cases.
 #'
 #' @param ... additional argument to objfun
 #' 
@@ -107,17 +111,52 @@ norm <- function(x) sqrt(crossprod(x))
 trust <- function(objfun, parinit, rinit, rmax, parscale, iterlim = 100,
                   fterm = 1e-6, mterm = 1e-6, minimize = TRUE, blather = FALSE,
                   parupper = Inf, parlower = -Inf, printIter = FALSE, traceFile = NULL,
-                  on_step = NULL, ...)
+                  on_step = NULL, engine = c("R", "cpp"), ...)
 {
-  
-  
-  
+  engine <- match.arg(engine)
+
+  # The C++ engine implements only the basic outer loop. Fall back to R if
+  # any of the advanced features are used (parscale, bounds, callbacks).
+  if (engine == "cpp") {
+    cpp_ok <- missing(parscale) &&
+              !is.finite(parupper[1]) && !is.finite(parlower[1]) ||
+              (is.null(names(parupper)) &&
+               (all(!is.finite(parupper)) || all(parupper == Inf)) &&
+               (all(!is.finite(parlower)) || all(parlower == -Inf)))
+    cpp_ok <- cpp_ok && missing(parscale) &&
+              isTRUE(minimize) &&
+              !isTRUE(blather) && !isTRUE(printIter) &&
+              is.null(traceFile) && is.null(on_step)
+    if (cpp_ok) {
+      sanePars <- sanitizePars(parinit, list(...)$fixed)
+      pi_clean <- sanePars$pars
+      objfun_wrap <- function(x) objfun(x, ...)
+      kr <- trust_kernel(
+        objfun  = objfun_wrap,
+        parinit = pi_clean,
+        rinit   = rinit,
+        rmax    = rmax,
+        iterlim = as.integer(iterlim),
+        fterm   = fterm,
+        mterm   = mterm)
+      return(list(
+        argument   = kr$argument,
+        value      = kr$value,
+        gradient   = kr$gradient,
+        hessian    = kr$hessian,
+        iterations = kr$iterations,
+        converged  = kr$converged,
+        r          = kr$r))
+    }
+    # Else: fall through to R path.
+  }
+
   # Verbose Initialization and new obfun to be consistent with df optimizers
-  objfun.orig <- objfun 
+  objfun.orig <- objfun
   iterations <- 0
   deltait <- 1
   if (printIter) cat("\n")
-  
+
   par <- parinit
   objfun <- function(x, ...) {
     out <- objfun.orig(x, ...)
@@ -207,21 +246,10 @@ trust <- function(objfun, parinit, rinit, rmax, parscale, iterlim = 100,
   }
   if (!is.finite(out$value))  {
     error <- try(stop("parinit not feasible: value is not finite"))
-    return(c(as.list(out), error = error, list(argument = theta), converged = FALSE, 
+    return(c(as.list(out), error = error, list(argument = theta), converged = FALSE,
              iterations = 0))
   }
-    
-  
-  #remove boundary elements from gradient and hessian
-  # g_boundary <- c(upper[which(out$gradient[upper] < 0)], lower[which(out$gradient[lower] > 0)])
-  # g_noboundary <- setdiff(1:d, g_boundary)
-  # n_boundary <- length(g_boundary)
-  # if (n_boundary > 0) {
-  #   out$gradient <- out$gradient[-g_boundary]
-  #   out$hessian <- out$hessian[-g_boundary, , drop = FALSE]
-  #   out$hessian <- out$hessian[, -g_boundary, drop = FALSE]
-  # }
-  
+
   accept <- TRUE
   if (blather) {
     theta.blather <- NULL

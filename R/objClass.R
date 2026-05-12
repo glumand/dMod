@@ -26,23 +26,18 @@ as.objlist <- function(p) {
 
 
 #' Compute a differentiable box prior
-#' 
+#'
 #' @param p Named numeric, the parameter value
 #' @param mu Named numeric, the prior values, means of boxes
 #' @param sigma Named numeric, half box width
 #' @param k Named numeric, shape of box; if 0 a quadratic prior is obtained, the higher k the more box shape, gradient at border of the box (-sigma, sigma) is equal to sigma*k
 #' @param fixed Named numeric with fixed parameter values (contribute to the prior value but not to gradient and Hessian)
-#' @return list with entries: value (numeric, the weighted residual sum of squares), 
-#' gradient (numeric, gradient) and 
+#' @return list with entries: value (numeric, the weighted residual sum of squares),
+#' gradient (numeric, gradient) and
 #' hessian (matrix of type numeric). Object of class \code{objlist}.
+#' @keywords internal
+#' @noRd
 constraintExp2 <- function(p, mu, sigma = 1, k = 0.05, fixed=NULL) {
-  
-  
-  ##
-  ## This function need to be extended according to constraintL2()
-  ## The parameters sigma and k need to be replaced by more
-  ## meaningful parameters.
-  ##
   
   kmin <- 1e-5
   
@@ -92,6 +87,61 @@ constraintExp2 <- function(p, mu, sigma = 1, k = 0.05, fixed=NULL) {
 }
 
 
+#' Per-condition residual contribution to an L2 objective
+#'
+#' @description
+#' Computes the negative-log-likelihood residual contribution of a single
+#' condition (with optional error model). Lifted out of [normL2] so the ECM
+#' per-subject node-loop in [nlmeFit] / `emObjfn(method="quadrature")` can reuse
+#' the exact contract without re-routing through normL2's multi-condition
+#' machinery and parameter-name binding for every quadrature node.
+#'
+#' Behavior matches the inner closure that previously lived inside `normL2`
+#' verbatim; `normL2` now calls this helper.
+#'
+#' @param dataI datalist entry for one condition (data.frame with
+#'   `name`, `time`, `value`, `sigma` columns).
+#' @param predictionI prdframe for that condition (typically `prediction[[cn]]`
+#'   from a prdfn call).
+#' @param pars Named numeric parameter vector at which to evaluate.
+#' @param errmodel Optional obsfn defining a parameter-dependent error model.
+#' @param fixed Optional fixed-parameter vector (passed through to errmodel).
+#' @param cn Character condition name. Required when `errmodel` is set, used
+#'   for errmodel condition routing.
+#' @param eCondNames Optional character vector of condition names that have
+#'   an errmodel mapping. NULL means `errmodel` applies to all.
+#' @param bessel Bessel correction factor (default 1, matching the
+#'   `use.bessel = FALSE` branch of `normL2`).
+#' @param deriv,deriv2 Logical. Whether to return gradient/Hessian.
+#'
+#' @return An [objlist] for the single condition's contribution.
+#' @export
+evalConditionResidual <- function(dataI, predictionI, pars,
+                                  errmodel   = NULL,
+                                  fixed      = NULL,
+                                  cn         = NULL,
+                                  eCondNames = NULL,
+                                  bessel     = 1,
+                                  deriv      = TRUE,
+                                  deriv2     = FALSE) {
+  err_cn <- NULL
+  if (!is.null(errmodel) && (is.null(eCondNames) || cn %in% eCondNames)) {
+    if (is.null(cn))
+      stop("evalConditionResidual: `cn` must be supplied when `errmodel` is set.")
+    pinner     <- getParameters(predictionI)
+    fixedinner <- pinner[attr(pinner, "fixed")]
+    pinner     <- as.parvec(pinner[setdiff(names(pinner), names(fixed))])
+    fixedinner <- as.parvec(fixedinner, deriv = FALSE, deriv2 = FALSE)
+    err_cn <- errmodel(out = predictionI, pars = pinner,
+                       fixed = fixedinner, conditions = cn)[[cn]]
+  }
+  nll(res(dataI, predictionI, err_cn),
+      pars = pars, deriv = deriv, deriv2 = deriv2,
+      bessel.correction = bessel)
+}
+
+
+
 #' L2 norm between data and model prediction
 #'
 #' @description
@@ -115,6 +165,9 @@ constraintExp2 <- function(p, mu, sigma = 1, k = 0.05, fixed=NULL) {
 #' @param cores Integer. Number of CPU cores used for parallel evaluation over
 #'   conditions. Must be >= 1. Parallelization is configured once when the
 #'   objective function is created.
+#' @param threads Integer. Per-call OpenMP threads passed to the C++ residual
+#'   kernel (used when the `dMod.objfn.cpp` path is active). Capped by
+#'   `getOption("dMod.objfn.threads")`. Default 1.
 #'
 #' @return
 #' An object of class `objfn`, i.e. a function
@@ -129,19 +182,21 @@ constraintExp2 <- function(p, mu, sigma = 1, k = 0.05, fixed=NULL) {
 #' @example inst/examples/normL2.R
 #' @export
 normL2 <- function(data, x, errmodel = NULL, times = NULL,
-                   attr.name = "data", use.bessel = !is.null(errmodel), cores = 1L) {
-  
+                   attr.name = "data", use.bessel = !is.null(errmodel),
+                   cores = 1L, threads = 1L) {
+
   stopifnot(cores >= 1L)
-  
+  stopifnot(threads >= 1L)
+
   timesD <- sort(unique(c(0, unlist(lapply(data, `[[`, "time")), times)))
-  
+
   x.cond <- names(attr(x, "mappings"))
   d.cond <- names(data)
   stopifnot(all(d.cond %in% x.cond))
-  
+
   e.cond <- if (!is.null(errmodel)) names(attr(errmodel, "mappings")) else NULL
   conditions <- intersect(x.cond, d.cond)
-  
+
   # Precompute Bessel correction
   bessel <- 1
   if (use.bessel && !is.null(errmodel)) {
@@ -151,30 +206,18 @@ normL2 <- function(data, x, errmodel = NULL, times = NULL,
                      names(unlist(getEquations(errmodel))))
     bessel <- sqrt(n / (n - length(p.all) + length(p.err)))
   }
-  
+
   # Force early binding
   force(errmodel); force(bessel); force(conditions); force(timesD)
-  
-  # Core evaluation function
-  eval_condition <- function(cn, prediction, pars, deriv, deriv2 = FALSE) {
-    err_cn <- NULL
-    if (!is.null(errmodel) && (is.null(e.cond) || cn %in% e.cond)) {
+  force(threads)
 
-      pinner <- getParameters(prediction[[cn]])
-      fixedinner <- pinner[attr(pinner, "fixed")]
-      pinner  <- as.parvec(pinner[setdiff(names(pinner), names(fixed))])
-      fixedinner <- as.parvec(fixedinner, deriv = FALSE, deriv2 = FALSE)
-
-      # Note: error model is currently always called with deriv2 = FALSE.
-      # Sigma-theta cross terms in the exact Hessian are dropped (kept GN);
-      # adding them requires error-model second-derivatives and a more careful
-      # contraction in nll_ALOQ — slated for a follow-up PR.
-      err_cn <- errmodel(out = prediction[[cn]], pars = pinner,
-                         fixed = fixedinner, conditions = cn)[[cn]]
-    }
-    nll(res(data[[cn]], prediction[[cn]], err_cn), pars = pars, deriv = deriv,
-        deriv2 = deriv2, bessel.correction = bessel)
-  }
+  # Lazy meta cache for the C++ kernel path. Built on first call; rebuilt
+  # if the deriv column set changes (e.g. when `fixed` toggles between
+  # calls — uncommon, but cheap to detect via length+name compare).
+  .meta_cache <- new.env(parent = emptyenv())
+  .meta_cache$meta_list        <- NULL
+  .meta_cache$par_names_global <- NULL
+  .meta_cache$signature        <- NULL  # used to invalidate on shape change
 
   myfn <- function(..., fixed = NULL, deriv = TRUE, deriv2 = FALSE, env = NULL) {
     pars <- ..1
@@ -183,27 +226,154 @@ normL2 <- function(data, x, errmodel = NULL, times = NULL,
     prediction <- x(times = timesD, pars = pars, fixed = fixed,
                     deriv = deriv, deriv2 = deriv2, conditions = conditions)
 
+    use_cpp <- isTRUE(getOption("dMod.objfn.cpp", FALSE)) && deriv
+
+    if (use_cpp) {
+      # Build errmodel output per condition (if any).
+      err_list <- NULL
+      if (!is.null(errmodel)) {
+        err_list <- lapply(conditions, function(cn) {
+          if (!is.null(e.cond) && !(cn %in% e.cond)) return(NULL)
+          pinner     <- getParameters(prediction[[cn]])
+          fixedinner <- pinner[attr(pinner, "fixed")]
+          pinner     <- as.parvec(pinner[setdiff(names(pinner), names(fixed))])
+          fixedinner <- as.parvec(fixedinner, deriv = FALSE, deriv2 = FALSE)
+          errmodel(out = prediction[[cn]], pars = pinner,
+                   fixed = fixedinner, conditions = cn)[[cn]]
+        })
+      }
+
+      # Determine current deriv signature (per-condition local par names).
+      cur_sig <- lapply(prediction, function(pr) dimnames(attr(pr, "deriv"))[[3]])
+      if (is.null(.meta_cache$meta_list) ||
+          !identical(.meta_cache$signature, cur_sig)) {
+        .meta_cache$par_names_global <- unique(unlist(cur_sig))
+        .meta_cache$meta_list <- .build_normL2_meta(
+          data, prediction, err_list, conditions, e.cond)
+        .meta_cache$signature <- cur_sig
+      }
+
+      eff_threads <- max(
+        1L, min(as.integer(threads),
+                as.integer(getOption("dMod.objfn.threads", threads))))
+
+      kr <- normL2_kernel(
+        prediction       = prediction,
+        err_list_opt     = err_list,
+        meta_list        = .meta_cache$meta_list,
+        par_names_global = .meta_cache$par_names_global,
+        bessel           = bessel,
+        deriv2_requested = isTRUE(deriv2),
+        threads          = eff_threads
+      )
+      out <- objlist(value    = kr$value,
+                     gradient = kr$gradient,
+                     hessian  = kr$hessian)
+      attr(out, attr.name) <- out$value
+      env$prediction <- prediction
+      attr(out, "env") <- env
+      return(out)
+    }
+
+    # ---- R fallback path (existing behaviour) ----
+    one <- function(cn) {
+      evalConditionResidual(dataI = data[[cn]], predictionI = prediction[[cn]],
+                            pars = pars, errmodel = errmodel, fixed = fixed,
+                            cn = cn, eCondNames = e.cond, bessel = bessel,
+                            deriv = deriv, deriv2 = deriv2)
+    }
     out <- if (cores == 1L) {
-      Reduce(`+`, lapply(conditions, eval_condition, prediction, pars, deriv, deriv2))
+      Reduce(`+`, lapply(conditions, one))
     } else if (.Platform$OS.type == "windows") {
       cl <- parallel::makeCluster(cores)
       on.exit(parallel::stopCluster(cl))
-      Reduce(`+`, parallel::parLapply(cl, conditions, eval_condition, prediction, pars, deriv, deriv2))
+      Reduce(`+`, parallel::parLapply(cl, conditions, one))
     } else {
-      Reduce(`+`, parallel::mclapply(conditions, eval_condition, prediction, pars, deriv, deriv2, mc.cores = cores))
+      Reduce(`+`, parallel::mclapply(conditions, one, mc.cores = cores))
     }
-    
+
     attr(out, attr.name) <- out$value
     env$prediction <- prediction
     attr(out, "env") <- env
     out
   }
-  
+
   class(myfn) <- c("objfn", "fn")
   attr(myfn, "conditions") <- d.cond
-  attr(myfn, "parameters") <- attr(x, "parameters")
+  # Expose union of prediction-fn parameters and errmodel parameters so
+  # downstream estimators (focei / ecmFit) see sigma_* in their joint_pars
+  # and route them through outer_input correctly. Without this the errmodel
+  # parameters would be silently dropped from full_pars on the inner solver.
+  err_pars <- if (!is.null(errmodel)) attr(errmodel, "parameters") else character(0)
+  attr(myfn, "parameters") <- union(attr(x, "parameters"), err_pars)
   attr(myfn, "modelname") <- modelname(x, errmodel)
   myfn
+}
+
+
+# Build per-condition metadata for the C++ normL2_kernel. Indexes data rows
+# into prediction/errmodel matrices, encodes ALOQ/BLOQ partition, and stores
+# the LOQ-substituted y values (matching res()'s `pmax(value, lloq)`).
+.build_normL2_meta <- function(data, prediction, err_list, conditions, e_cond) {
+  err_list_named <- if (!is.null(err_list)) {
+    setNames(err_list, conditions)
+  } else {
+    NULL
+  }
+  lapply(conditions, function(cn) {
+    dataI <- data[[cn]]
+    dataI$name <- as.character(dataI$name)
+    prdfI <- prediction[[cn]]
+    pcols <- colnames(prdfI)
+    d_dn  <- dimnames(attr(prdfI, "deriv"))
+
+    t_idx_in_pred  <- match(dataI$time, prdfI[, "time"])
+    o_idx_in_pred  <- match(dataI$name, pcols)
+    o_idx_in_deriv <- match(dataI$name, d_dn[[2]])
+
+    if (anyNA(t_idx_in_pred) || anyNA(o_idx_in_pred) || anyNA(o_idx_in_deriv)) {
+      stop(".build_normL2_meta: data point not found in prediction for condition '",
+           cn, "'.", call. = FALSE)
+    }
+
+    sig <- if (!is.null(dataI$sigma)) dataI$sigma else rep(NA_real_, nrow(dataI))
+    sigma_is_na <- is.na(sig)
+    sigma_fixed <- ifelse(sigma_is_na, 0, sig)
+
+    t_idx_in_err <- rep(0L, nrow(dataI))
+    o_idx_in_err <- rep(0L, nrow(dataI))
+    o_idx_in_err_deriv <- rep(0L, nrow(dataI))
+    if (any(sigma_is_na) && !is.null(err_list_named)) {
+      erm <- err_list_named[[cn]]
+      if (!is.null(erm)) {
+        t_idx_in_err <- match(dataI$time, erm[, "time"])
+        o_idx_in_err <- match(dataI$name, colnames(erm))
+        e_dn <- dimnames(attr(erm, "deriv"))
+        if (!is.null(e_dn)) {
+          o_idx_in_err_deriv <- match(dataI$name, e_dn[[2]])
+          o_idx_in_err_deriv[is.na(o_idx_in_err_deriv)] <- 0L
+        }
+      }
+    }
+
+    lloq <- if (!is.null(dataI$lloq)) dataI$lloq else rep(-Inf, nrow(dataI))
+    val  <- pmax(dataI$value, lloq)
+    bloq_mask <- as.integer(val <= lloq)
+
+    list(
+      t_idx_in_pred       = as.integer(t_idx_in_pred),
+      o_idx_in_pred       = as.integer(o_idx_in_pred),
+      o_idx_in_deriv      = as.integer(o_idx_in_deriv),
+      t_idx_in_err        = as.integer(t_idx_in_err),
+      o_idx_in_err        = as.integer(o_idx_in_err),
+      o_idx_in_err_deriv  = as.integer(o_idx_in_err_deriv),
+      sigma_is_na         = as.integer(sigma_is_na),
+      sigma_fixed         = as.numeric(sigma_fixed),
+      y_data              = as.numeric(val),
+      lloq                = as.numeric(lloq),
+      bloq_mask           = bloq_mask
+    )
+  })
 }
 
 
@@ -221,6 +391,8 @@ normL2 <- function(data, x, errmodel = NULL, times = NULL,
 #'   the MVN path and ignores `sigma`.
 #' @param attr.name Character. Name of the attribute storing the constraint value.
 #' @param condition Optional character vector of conditions.
+#' @param threads Integer. Per-call OpenMP threads passed to the C++ constraint
+#'   kernel. Default 1.
 #'
 #' @details
 #' Computes, depending on which path is selected,
@@ -234,31 +406,61 @@ normL2 <- function(data, x, errmodel = NULL, times = NULL,
 #' over subject-level random effects \eqn{\eta_i}, where \eqn{\Omega = L L^T}
 #' with \eqn{L} lower-triangular and log-parametrised on the diagonal. The
 #' parameter vector at evaluation time must contain all subject-level eta
-#' parameters listed in `Omega$subject_etas` and all Cholesky parameters in
-#' `Omega$chol_pars`.
+#' parameters listed in `Omega$subjectEtas` and all Cholesky parameters in
+#' `Omega$cholPars`.
 #'
 #' @return Object of class \code{objfn}.
 #' @export
 constraintL2 <- function(mu, sigma = 1, Omega = NULL,
-                         attr.name = "prior", condition = NULL) {
+                         attr.name = "prior", condition = NULL,
+                         threads = 1L) {
 
   if (!is.null(Omega)) {
     if (missing(mu)) mu <- 0
     return(constraintL2_mvn(mu = mu, Omega = Omega,
-                            attr.name = attr.name, condition = condition))
+                            attr.name = attr.name, condition = condition,
+                            threads = threads))
   }
 
   est <- is.character(sigma)
   if (length(sigma) == 1) sigma <- setNames(rep(sigma, length(mu)), names(mu))
   if (is.null(names(sigma))) names(sigma) <- names(mu)
   sigma <- sigma[names(mu)]
-  
+  force(threads)
+
   myfn <- function(..., fixed = NULL, deriv = TRUE, deriv2 = FALSE, conditions = condition, env = NULL) {
 
     p <- list(...)[[match.fnargs(list(...), "pars")]]
     dP <- attr(p, "deriv", exact = TRUE)
     dP2 <- if (deriv2) attr(p, "deriv2", exact = TRUE) else NULL
 
+    use_cpp <- isTRUE(getOption("dMod.objfn.cpp", FALSE)) && deriv
+
+    if (use_cpp) {
+      inner_par_names <- names(p)
+      # Build sigma_par names (only meaningful if est==TRUE)
+      sigma_pars <- if (est) sigma[names(mu)] else rep("", length(mu))
+      sigma_vec  <- if (est) rep(0.0, length(mu)) else as.numeric(sigma[names(mu)])
+      kr <- constraintL2_scalar_kernel(
+        pars = p,
+        dP_opt = if (!is.null(dP)) dP else NULL,
+        dP2_opt = if (!is.null(dP2)) dP2 else NULL,
+        inner_par_names = inner_par_names,
+        fixed_opt = fixed,
+        mu_names = names(mu),
+        mu = as.numeric(mu),
+        sigma = sigma_vec,
+        sigma_pars = as.character(sigma_pars),
+        est = est
+      )
+      out <- objlist(value = kr$value, gradient = kr$gradient,
+                     hessian = kr$hessian)
+      attr(out, attr.name) <- out$value
+      attr(out, "env") <- env
+      return(out)
+    }
+
+    # ---- R fallback (existing path) ----
     allp <- c(p, fixed)
     avail <- intersect(names(mu), names(allp))
     if (!length(avail))
@@ -316,7 +518,7 @@ constraintL2 <- function(mu, sigma = 1, Omega = NULL,
     attr(out, "env") <- env
     out
   }
-  
+
   class(myfn) <- c("objfn", "fn")
   attr(myfn, "conditions") <- condition
   attr(myfn, "parameters") <- names(mu)
@@ -330,20 +532,21 @@ constraintL2 <- function(mu, sigma = 1, Omega = NULL,
 # Returns sum_i (eta_i - mu)^T Omega^-1 (eta_i - mu) + N log|Omega| with exact
 # value/gradient and Gauss-Newton Hessian (block-diagonal in eta, exact crosses
 # to the Cholesky parameters; sandwich via dP for chain rule).
-constraintL2_mvn <- function(mu, Omega, attr.name = "prior", condition = NULL) {
+constraintL2_mvn <- function(mu, Omega, attr.name = "prior", condition = NULL,
+                              threads = 1L) {
 
   if (!inherits(Omega, "omegaSpec"))
     stop("`Omega` must be an omegaSpec object built by omega().")
-  if (is.null(Omega$subject_etas))
+  if (is.null(Omega$subjectEtas))
     stop("`Omega` must have subject expansion. Call omega(..., subjects = ...).")
 
   K            <- Omega$K
-  subject_etas <- Omega$subject_etas
+  subject_etas <- Omega$subjectEtas
   N            <- nrow(subject_etas)
-  chol_pars    <- Omega$chol_pars
-  is_diag      <- Omega$is_diag
-  chol_loc     <- Omega$chol_loc
-  build_L      <- Omega$build_L
+  chol_pars    <- Omega$cholPars
+  is_diag      <- Omega$isDiag
+  chol_loc     <- Omega$cholLoc
+  build_L      <- Omega$buildL
 
   if (length(mu) == 1L) mu <- rep(mu, K)
   if (length(mu) != K)
@@ -370,6 +573,33 @@ constraintL2_mvn <- function(mu, Omega, attr.name = "prior", condition = NULL) {
     # --- value -------------------------------------------------------------
     chol_vec <- allp[chol_pars]
     L        <- build_L(chol_vec)
+
+    use_cpp <- isTRUE(getOption("dMod.objfn.cpp", FALSE)) && deriv
+    # The C++ path is correct only when the chol params are HELD FIXED (i.e.
+    # none of `chol_pars` is in `names(p)` as a free parameter). When the
+    # caller is estimating chol params (ECM workflow), fall back to R.
+    if (use_cpp && length(intersect(chol_pars, names(p))) > 0L) use_cpp <- FALSE
+
+    if (use_cpp) {
+      kr <- constraintL2_mvn_kernel(
+        pars                = p,
+        fixed_opt           = fixed,
+        dP_opt              = if (!is.null(dP)) dP else NULL,
+        dP2_opt             = if (!is.null(dP2)) dP2 else NULL,
+        inner_par_names     = names(p),
+        K                   = K,
+        N                   = N,
+        all_eta_names       = all_eta_names,
+        mu                  = as.numeric(mu),
+        L_lower             = L,
+        include_chol_block  = FALSE
+      )
+      out <- objlist(value = kr$value, gradient = kr$gradient,
+                     hessian = kr$hessian)
+      attr(out, attr.name) <- kr$value
+      attr(out, "env") <- env
+      return(out)
+    }
 
     eta_mat  <- matrix(allp[all_eta_names], nrow = N, ncol = K,
                        dimnames = dimnames(subject_etas))
@@ -512,6 +742,7 @@ constraintL2_mvn <- function(mu, Omega, attr.name = "prior", condition = NULL) {
 #' @param attr.name character. The constraint value is additionally returned in an 
 #' attributed with this name
 #' @param condition character, the condition for which the prediction is made.
+#' @param threads Integer. Per-call OpenMP threads passed to the C++ kernel. Default 1.
 #' @return List of class \code{objlist}, i.e. objective value, gradient and Hessian as list.
 #' @seealso [normL2], [constraintL2]
 #' @details Computes the constraint value 
@@ -526,14 +757,16 @@ constraintL2_mvn <- function(mu, Omega, attr.name = "prior", condition = NULL) {
 #' vali <- datapointL2(name = "A", time = 0, value = "newpoint", sigma = 1, condition = "a")
 #' vali(pars = c(p0, newpoint = 1), env = .GlobalEnv)
 #' @export
-datapointL2 <- function(name, time, value, sigma = 1, attr.name = "validation", condition) {
-  
+datapointL2 <- function(name, time, value, sigma = 1, attr.name = "validation", condition,
+                         threads = 1L) {
+
   controls <- list(
     mu        = structure(name, names = value)[1], # only one data point is allowed
     time      = time[1],
     sigma     = sigma[1],
     attr.name = attr.name
   )
+  force(threads)
   
   myfn <- function(..., fixed = NULL, deriv = TRUE, deriv2 = FALSE, conditions = NULL, env = NULL) {
     mu        <- controls$mu
@@ -561,6 +794,31 @@ datapointL2 <- function(name, time, value, sigma = 1, attr.name = "validation", 
     if (!length(time.index))
       stop("datapointL2() requests time point for which no prediction is available. Please add missing time point by the times argument in normL2()")
     withDeriv <- !is.null(attr(prediction[[condition]], "deriv"))
+
+    use_cpp <- isTRUE(getOption("dMod.objfn.cpp", FALSE)) && withDeriv && deriv
+    if (use_cpp) {
+      prdf <- prediction[[condition]]
+      dpred_attr  <- attr(prdf, "deriv")
+      d2pred_attr <- if (deriv2) attr(prdf, "deriv2") else NULL
+      kr <- datapointL2_kernel(
+        pouter           = pouter,
+        fixed_opt        = fixed,
+        prdf             = prdf,
+        dpred_attr_opt   = dpred_attr,
+        d2pred_attr_opt  = d2pred_attr,
+        obs_name         = as.character(mu),
+        t                = as.numeric(t),
+        sigma            = as.numeric(sigma),
+        value_par        = names(mu)[1]
+      )
+      out <- objlist(value = kr$value, gradient = kr$gradient,
+                     hessian = kr$hessian)
+      attr(out, attr.name)    <- out$value
+      attr(out, "prediction") <- kr$prediction
+      attr(out, "env")        <- env
+      class(out) <- NULL
+      return(out)
+    }
 
     pred  <- prediction[[condition]][time.index, ][mu]
     deriv <- NULL
@@ -891,15 +1149,24 @@ nll_ALOQ <- function(nout, derivs, derivs.err,
       }
     }
     
-    # Compute derivatives
-    dwrdp <- inv_s * dxdp - (wr * inv_s) * dsdp
-    dw0dp <- inv_s * dxdp - (w0 * inv_s) * dsdp
-    dlogsdp <- inv_s * dsdp
-    
+    # Compute derivatives of the (possibly bessel-scaled) weighted residual.
+    # We want d wr_scaled / d theta where wr_scaled = bessel * wr_orig:
+    #   d wr_scaled / d theta = bessel * (inv_s * dxdp - wr_orig * inv_s * dsdp)
+    #                         = bessel * inv_s * dxdp - (wr_scaled * inv_s) * dsdp
+    # `wr` carries the SCALED value at this point (see use_bessel block above),
+    # so the dsdp term is correct as is; only the dxdp term needs the bessel
+    # factor. The earlier implementation multiplied the ENTIRE dwrdp by bessel
+    # AFTER the wr-was-scaled formula, which double-applied bessel to the dsdp
+    # term and broke the gradient for parameters that affect sigma (e.g.
+    # `sigma_add` in an additive errmodel). Same fix for dw0dp / BLOQ.
     if (use_bessel) {
-      dwrdp <- dwrdp * bessel.correction
-      dw0dp <- dw0dp * bessel.correction
+      dwrdp <- bessel.correction * inv_s * dxdp - (wr * inv_s) * dsdp
+      dw0dp <- bessel.correction * inv_s * dxdp - (w0 * inv_s) * dsdp
+    } else {
+      dwrdp <- inv_s * dxdp - (wr * inv_s) * dsdp
+      dw0dp <- inv_s * dxdp - (w0 * inv_s) * dsdp
     }
+    dlogsdp <- inv_s * dsdp
     
     # Local gradient
     grad_local <- 2 * (colSums(wr * dwrdp) + colSums(dlogsdp))

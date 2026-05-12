@@ -10,7 +10,23 @@
 #'
 #' @keywords internal
 #' @importFrom reticulate py_require
+#' @importFrom stats setNames predict density median
+#' @importFrom utils globalVariables
 #' @noRd
 .onLoad <- function(libname, pkgname) {
   reticulate::py_require(c("python-libsbml", "sympy", "scipy", "numpy"))
+
+  # C++/OpenMP objective-function defaults.
+  #   dMod.objfn.cpp     TRUE  -> normL2 / constraintL2 / datapointL2 use the
+  #                              C++ kernels by default. Flip to FALSE to fall
+  #                              back to the R reference path.
+  #   dMod.objfn.threads 1     -> per-call OpenMP thread count for the C++
+  #                              kernels. Multistart / profile orchestrators
+  #                              (mstrust, profile) set this to 1 before fork
+  #                              to avoid oversubscription; user can opt into
+  #                              inner threading by overriding it.
+  if (is.null(getOption("dMod.objfn.cpp")))
+    options(dMod.objfn.cpp = TRUE)
+  if (is.null(getOption("dMod.objfn.threads")))
+    options(dMod.objfn.threads = 1L)
 }

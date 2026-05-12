@@ -13,3 +13,51 @@ bmm_bb <- function(A, B, Bn, M, K, N) {
     .Call(`_dMod_bmm_bb`, A, B, Bn, M, K, N)
 }
 
+constraintL2_scalar_kernel <- function(pars, dP_opt, dP2_opt, inner_par_names, fixed_opt, mu_names, mu, sigma, sigma_pars, est) {
+    .Call(`_dMod_constraintL2_scalar_kernel`, pars, dP_opt, dP2_opt, inner_par_names, fixed_opt, mu_names, mu, sigma, sigma_pars, est)
+}
+
+datapointL2_kernel <- function(pouter, fixed_opt, prdf, dpred_attr_opt, d2pred_attr_opt, obs_name, t, sigma, value_par) {
+    .Call(`_dMod_datapointL2_kernel`, pouter, fixed_opt, prdf, dpred_attr_opt, d2pred_attr_opt, obs_name, t, sigma, value_par)
+}
+
+constraintL2_mvn_kernel <- function(pars, fixed_opt, dP_opt, dP2_opt, inner_par_names, K, N, all_eta_names, mu, L_lower, include_chol_block) {
+    .Call(`_dMod_constraintL2_mvn_kernel`, pars, fixed_opt, dP_opt, dP2_opt, inner_par_names, K, N, all_eta_names, mu, L_lower, include_chol_block)
+}
+
+focei_kernel_ping <- function(joint_cb, pars, fixed, conditions) {
+    .Call(`_dMod_focei_kernel_ping`, joint_cb, pars, fixed, conditions)
+}
+
+focei_inner_trust <- function(model_cb, err_cb, pars_full, eta_warmstart, subject_meta, Omega_inv_mat, Omega_log_det, fixed, control) {
+    .Call(`_dMod_focei_inner_trust`, model_cb, err_cb, pars_full, eta_warmstart, subject_meta, Omega_inv_mat, Omega_log_det, fixed, control)
+}
+
+focei_outer_objfn <- function(model_cb, err_cb, joint_cb, outer_pars, eta_warmstart, subject_meta, Omega_inv_mat, Omega_log_det, fixed, inner_ctrl, correction_mode = "none", correction_cb_opt = NULL) {
+    .Call(`_dMod_focei_outer_objfn`, model_cb, err_cb, joint_cb, outer_pars, eta_warmstart, subject_meta, Omega_inv_mat, Omega_log_det, fixed, inner_ctrl, correction_mode, correction_cb_opt)
+}
+
+focei_run <- function(model_cb, err_cb, joint_cb, init, subject_meta, fixed, control, correction_mode = "none", correction_cb = NULL) {
+    .Call(`_dMod_focei_run`, model_cb, err_cb, joint_cb, init, subject_meta, fixed, control, correction_mode, correction_cb)
+}
+
+normL2_kernel <- function(prediction, err_list_opt, meta_list, par_names_global, bessel, deriv2_requested, threads) {
+    .Call(`_dMod_normL2_kernel`, prediction, err_list_opt, meta_list, par_names_global, bessel, deriv2_requested, threads)
+}
+
+sparse_grid_gh <- function(K, level, deriv_mode = 0L) {
+    .Call(`_dMod_sparse_grid_gh`, K, level, deriv_mode)
+}
+
+residual_kernel_aloq <- function(pred, dpred, d2pred, y_data, sigma, dsigma, lloq, opts) {
+    .Call(`_dMod_residual_kernel_aloq`, pred, dpred, d2pred, y_data, sigma, dsigma, lloq, opts)
+}
+
+residual_kernel_bloq <- function(pred, dpred, d2pred, y_data, sigma, dsigma, lloq, opts) {
+    .Call(`_dMod_residual_kernel_bloq`, pred, dpred, d2pred, y_data, sigma, dsigma, lloq, opts)
+}
+
+trust_kernel <- function(objfun, parinit, rinit, rmax, iterlim, fterm, mterm) {
+    .Call(`_dMod_trust_kernel`, objfun, parinit, rinit, rmax, iterlim, fterm, mterm)
+}
+

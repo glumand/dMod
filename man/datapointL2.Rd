@@ -4,7 +4,15 @@
 \alias{datapointL2}
 \title{L2 objective function for validation data point}
 \usage{
-datapointL2(name, time, value, sigma = 1, attr.name = "validation", condition)
+datapointL2(
+  name,
+  time,
+  value,
+  sigma = 1,
+  attr.name = "validation",
+  condition,
+  threads = 1L
+)
 }
 \arguments{
 \item{name}{character, the name of the prediction, e.g. a state name.}
@@ -20,6 +28,8 @@ prediction value.}
 attributed with this name}
 
 \item{condition}{character, the condition for which the prediction is made.}
+
+\item{threads}{Integer. Per-call OpenMP threads passed to the C++ kernel. Default 1.}
 }
 \value{
 List of class \code{objlist}, i.e. objective value, gradient and Hessian as list.

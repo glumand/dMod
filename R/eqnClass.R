@@ -167,9 +167,7 @@ getReactions <- function(eqnlist) {
     
     numbers <- v[which(!is.na(v))]
     educts <- -numbers[numbers < 0]
-    #educts[which(educts == 1)] <- " "
     products <- numbers[numbers > 0]
-    #products[which(products == 1)] <- 
     educts <- paste(paste(educts, names(educts), sep = "*"), collapse=" + ")
     products <- paste(paste(products, names(products), sep = "*"), collapse=" + ")
     educts <- gsub("1*", "", educts, fixed = TRUE)
@@ -1011,94 +1009,6 @@ getLinVars <- function(eqnvec) {
   variables[linear_vars]
 }
 
-#' Log-transform variables in an equation vector using SymPy
-#'
-#' @param eqnvec An object of class `eqnvec`, representing a set of equations.
-#' @param whichVar A character vector specifying the variables to be log-transformed.
-#' @details Replaces each `var` in `whichVar` with `exp(log_var)` and rewrites
-#'   the corresponding ODE for `log_var = log(var)`. Output equations are
-#'   simplified via SymPy.
-#'
-#' @return An updated `eqnvec` object with transformed equations.
-#'
-#' @examples
-#' eqnvec <- as.eqnvec(
-#'   c("-k1*A + k2*B", "k1*A - k2*B"),
-#'   names = c("A", "B")
-#' )
-#' log_transformed_eqns <- x2logx(eqnvec, c("A", "B"))
-#'
-#' @importFrom reticulate import
-#' @export
-x2logx <- function(eqnvec, whichVar) {
-  if (!inherits(eqnvec, "eqnvec")) {
-    stop("Input 'eqnvec' must be of class 'eqnvec'.")
-  }
-  
-  if (!all(whichVar %in% names(eqnvec))) {
-    stop("All variables in whichVar must be present in eqnvec names.")
-  }
-
-  # Import SymPy
-  sympy <- reticulate::import("sympy")
-  
-  # Create symbolic variables for all variables in eqnvec
-  variables <- names(eqnvec)
-  sympy_vars <- lapply(variables, sympy$Symbol)
-  names(sympy_vars) <- variables
-  
-  # Create log-transformed symbolic variables
-  log_vars <- paste0("log_", whichVar)
-  sympy_log_vars <- lapply(log_vars, sympy$Symbol)
-  names(sympy_log_vars) <- log_vars
-  
-  # Convert equations to SymPy expressions
-  sympy_eqns <- lapply(as.character(eqnvec), sympy$simplify)
-  names(sympy_eqns) <- variables
-  
-  # Create substitution list for exp(log(x)) -> x
-  subs_list <- lapply(whichVar, function(var) {
-    list(
-      sympy_vars[[var]], 
-      sympy$exp(sympy_log_vars[[paste0("log_", var)]])
-    )
-  })
-  
-  # Transform equations
-  new_eqns <- list()
-  
-  # Process non-transformed variables
-  for (var in setdiff(variables, whichVar)) {
-    expr <- sympy_eqns[[var]]
-    # Substitute exp(log(x)) for each transformed variable
-    for (sub in subs_list) {
-      expr <- sympy$simplify(expr$subs(sub[[1]], sub[[2]]))
-    }
-    new_eqns[[var]] <- as.character(expr)
-  }
-  
-  # Process transformed variables
-  for (var in whichVar) {
-    log_var <- paste0("log_", var)
-    expr <- sympy_eqns[[var]]
-    
-    # Apply chain rule: d/dt log(x) = (1/x) * dx/dt
-    # First substitute all other transformations
-    for (sub in subs_list) {
-      expr <- sympy$simplify(expr$subs(sub[[1]], sub[[2]]))
-    }
-    
-    # Then apply the chain rule
-    expr <- sympy$simplify(expr / sympy$exp(sympy_log_vars[[log_var]]))
-    new_eqns[[log_var]] <- as.character(expr)
-  }
-  
-  # Create new eqnvec with transformed equations
-  result_names <- c(setdiff(variables, whichVar), paste0("log_", whichVar))
-  result_eqns <- unlist(new_eqns[result_names])
-  
-  as.eqnvec(result_eqns, result_names)
-}
 
 
 
