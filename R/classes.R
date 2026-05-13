@@ -908,8 +908,10 @@ datalist <- function(...) {
 #' @return Object of class `objlist`
 #' @export
 #' 
-#' @examples 
-#' # objlist(1, c(a = 1, b = 2), matrix(2, nrow = 2, ncol = 2, dimnames = list(c("a", "b"),c("a", "b"))))
+#' @examples
+#' # objlist(1, c(a = 1, b = 2),
+#' #         matrix(2, nrow = 2, ncol = 2,
+#' #                dimnames = list(c("a", "b"), c("a", "b"))))
 objlist <- function(value, gradient, hessian) {
 
   out <- list(value = value, gradient = gradient, hessian = hessian)
@@ -2019,27 +2021,26 @@ getEquations <- function(x, ...) {
 
 #' Extract the parameters of an object
 #'
-#' @param ... objects from which the parameters should be extracted
+#' @param x object from which the parameters are extracted
+#' @param ... further objects; when supplied, parameters of all objects
+#'   are unioned (each dispatched separately).
 #' @param conditions character vector specifying the conditions to
-#' which `getParameters` is restricted
+#'   which `getParameters` is restricted (only honored by methods that
+#'   carry per-condition parameter mappings).
 #' @return The parameters in a format that depends on the class of `x`.
 #' @export
-getParameters <- function(..., conditions = NULL) {
-
-
-  Reduce("union", lapply(list(...), function(x) {
-    UseMethod("getParameters", x)
-  }))
-
-
+getParameters <- function(x, ..., conditions = NULL) {
+  if (...length() > 0L) {
+    return(Reduce("union", lapply(list(x, ...), getParameters, conditions = conditions)))
+  }
+  UseMethod("getParameters")
 }
 
 
 
 #' @export
 #' @rdname getParameters
-#' @param x object from which the parameters are extracted
-getParameters.odemodel <- function(x, conditions = NULL) {
+getParameters.odemodel <- function(x, ..., conditions = NULL) {
 
   parameters <- c(
     attr(x$func, "variables"),
@@ -2053,7 +2054,7 @@ getParameters.odemodel <- function(x, conditions = NULL) {
 
 #' @export
 #' @rdname getParameters
-getParameters.fn <- function(x, conditions = NULL) {
+getParameters.fn <- function(x, ..., conditions = NULL) {
 
   if (is.null(conditions)) {
     parameters <- attr(x, "parameters")
@@ -2070,7 +2071,7 @@ getParameters.fn <- function(x, conditions = NULL) {
 }
 #' @export
 #' @rdname getParameters
-getParameters.parvec <- function(x, conditions = NULL) {
+getParameters.parvec <- function(x, ..., conditions = NULL) {
 
   names(x)
 
@@ -2078,7 +2079,7 @@ getParameters.parvec <- function(x, conditions = NULL) {
 
 #' @export
 #' @rdname getParameters
-getParameters.prdframe <- function(x, conditions = NULL) {
+getParameters.prdframe <- function(x, ..., conditions = NULL) {
 
   attr(x, "parameters")
 
@@ -2086,7 +2087,7 @@ getParameters.prdframe <- function(x, conditions = NULL) {
 
 #' @export
 #' @rdname getParameters
-getParameters.prdlist <- function(x, conditions = NULL) {
+getParameters.prdlist <- function(x, ..., conditions = NULL) {
 
   select <- 1:length(x)
   if (!is.null(conditions)) select <- intersect(names(x), conditions)
@@ -2096,7 +2097,7 @@ getParameters.prdlist <- function(x, conditions = NULL) {
 
 #' @export
 #' @rdname getParameters
-getParameters.eqnlist <- function(x) {
+getParameters.eqnlist <- function(x, ..., conditions = NULL) {
   comp_exprs <- character(0)
   if (!is.null(x$compartments)) {
     comp_exprs <- c(
@@ -2110,7 +2111,7 @@ getParameters.eqnlist <- function(x) {
 
 #' @export
 #' @rdname getParameters
-getParameters.eventlist <- function(x) {
+getParameters.eventlist <- function(x, ..., conditions = NULL) {
   idx <- match(c("time", "value", "root"), names(x))
   idx[!is.na(idx)]
   Reduce(union, lapply(x[idx], getSymbols))
@@ -2118,7 +2119,7 @@ getParameters.eventlist <- function(x) {
 
 #' @export
 #' @rdname getParameters
-getParameters.eqnvec <- function(x) {
+getParameters.eqnvec <- function(x, ..., conditions = NULL) {
   getSymbols(x)
 }
 

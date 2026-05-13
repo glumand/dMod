@@ -12,7 +12,8 @@ normL2(
   attr.name = "data",
   use.bessel = !is.null(errmodel),
   cores = 1L,
-  threads = 1L
+  threads = 1L,
+  opt.BLOQ = c("M3", "M1", "M4NM", "M4BEAL")
 )
 }
 \arguments{
@@ -41,6 +42,12 @@ objective function is created.}
 \item{threads}{Integer. Per-call OpenMP threads passed to the C++ residual
 kernel (used when the \code{dMod.objfn.cpp} path is active). Capped by
 \code{getOption("dMod.objfn.threads")}. Default 1.}
+
+\item{opt.BLOQ}{Character. NONMEM-style treatment of below-LOQ rows
+(those with \code{value <= lloq} in the data). One of \code{"M1"} (drop BLOQ rows
+from the objective), \code{"M3"} (censored log-likelihood, default), \code{"M4NM"}
+or \code{"M4BEAL"} (truncated variants; require non-negative LOQ). Forwarded
+to \code{\link[=nll]{nll()}} for the R path and to the C++ kernel.}
 }
 \value{
 An object of class \code{objfn}, i.e. a function

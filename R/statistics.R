@@ -18,7 +18,9 @@
 #' See \link{trust} for more details.
 #' @param verbose Logical, print verbose messages.
 #' @param cores number of cores used when computing profiles for several
-#' parameters.
+#' parameters. Multiplies with the inner OpenMP threads of the C++ objective
+#' kernels (`getOption("dMod.objfn.threads")`); keep
+#' `cores * dMod.objfn.threads` below your core count.
 #' @param cautiousMode Logical, write every step to disk and don't delete intermediate results
 #' @param side either, "left", "right" or "both": determines the side of the profile which is calculated (usefeull for parallelization). default is "both"
 #' @param ... Arguments going to obj()
@@ -742,7 +744,10 @@ vcov <- function(fit, parupper = NULL, parlower = NULL) {
 #' @param rinit Starting trust-region radius, see [trust()].
 #' @param rmax Maximum trust-region radius, see [trust()].
 #' @param fits Number of fits.
-#' @param cores Number of parallel workers.
+#' @param cores Number of parallel workers. Multiplies with the inner OpenMP
+#'   threads of the C++ objective kernels
+#'   (`getOption("dMod.objfn.threads")`); keep
+#'   `cores * dMod.objfn.threads` below your core count.
 #' @param optmethod Character. Name of the optimiser function to call via
 #'   `do.call(optmethod, ...)`. Default `"trust"`.
 #' @param start1stfromCenter Logical. If `TRUE`, the first fit starts exactly

@@ -37,18 +37,18 @@ inline double G_by_Phi(double w1, double w2) {
   return std::exp(phi_log(w1) - Phi_log(w2));
 }
 
-// Symmetric add y += A^T x where A is the d2pred matrix viewed as
-// row-major [n_obs, n_par*n_par], i.e. col-major [n_par*n_par, n_obs].
-// Result `tmp` (size n_par*n_par) is unpacked into the col-major
-// hess_acc[k1 + k2*n_par]. Since d2pred is symmetric in (k1, k2), the
-// row-major (k1, k2) index aligns with col-major hess by symmetry.
+// Symmetric add y += A^T x where A is a per-row [n_par, n_par] block stored
+// row-major (i.e. col-major [n_par*n_par, n_obs] when viewed as a flat array).
+// `W` is the per-row weight; the contracted result is added into col-major
+// hess_acc[k1 + k2*n_par]. Since the per-row block is symmetric in (k1, k2),
+// the row-major (k1, k2) index aligns with col-major hess by symmetry.
 //
 // Uses dgemv when n_obs * n_par * n_par is large enough to pay the BLAS
 // dispatch cost (~32 doubles); otherwise a plain loop is faster and avoids
-// the workspace allocation.
-void contract_d2pred(int n_obs, int n_par,
-                     const double* d2pred, const double* W,
-                     double* hess_acc, std::vector<double>& scratch) {
+// the workspace allocation. Reused for both d2pred and d2sigma contractions.
+void contract_d2_block(int n_obs, int n_par,
+                       const double* d2_block, const double* W,
+                       double* hess_acc, std::vector<double>& scratch) {
   const int N2 = n_par * n_par;
   if (N2 == 0 || n_obs == 0) return;
   scratch.assign(N2, 0.0);
@@ -58,12 +58,12 @@ void contract_d2pred(int n_obs, int n_par,
     const int incx = 1;
     const double alpha = 1.0, beta = 0.0;
     dgemv_("N", &N2, &n_obs, &alpha,
-           d2pred, &N2, W, &incx, &beta, scratch.data(), &incx);
+           d2_block, &N2, W, &incx, &beta, scratch.data(), &incx);
   } else {
     for (int i = 0; i < n_obs; ++i) {
       const double w = W[i];
       if (w == 0.0) continue;
-      const double* row = d2pred + i * N2;
+      const double* row = d2_block + i * N2;
       for (int j = 0; j < N2; ++j) scratch[j] += w * row[j];
     }
   }
@@ -97,9 +97,9 @@ void accumulate_aloq_residual(
   if (n_obs == 0) return;
   if (n_par <= 0) throw std::runtime_error("accumulate_aloq: n_par must be > 0");
 
-  (void) d2sigma;  // reserved for a future fully-exact extension
-
   const bool   has_dsig    = (dsigma != nullptr) && opts.sigma_depends_on_par;
+  const bool   has_d2sig   = opts.use_deriv2_exact && has_dsig
+                             && (d2sigma != nullptr);
   const bool   m4beal_aloq = (opts.bloq_mode == BloqMode::M4BEAL);
   const double bessel      = opts.bessel;
   const double LOG_2PI     = std::log(2.0 * M_PI);
@@ -110,6 +110,7 @@ void accumulate_aloq_residual(
 
   // Per-row deriv2-exact weights (accumulated across rows).
   std::vector<double> W_d2(opts.use_deriv2_exact ? n_obs : 0, 0.0);
+  std::vector<double> W_d2sig(has_d2sig ? n_obs : 0, 0.0);
   std::vector<double> scratch_d2;
 
   for (int i = 0; i < n_obs; ++i) {
@@ -234,10 +235,20 @@ void accumulate_aloq_residual(
     if (opts.use_deriv2_exact) {
       W_d2[i] = 2.0 * wr * inv_s;
     }
+    // d2sigma weight: derived from 2*wr*d2wr (contributes -2 wr^2 / sigma)
+    // plus 2*d2(log sigma) (contributes +2/sigma). Net: (2/sigma)(1 - wr^2).
+    // M4BEAL ALOQ correction (+2 log Phi(w0)) is excluded for parity with R.
+    if (has_d2sig) {
+      W_d2sig[i] = 2.0 * inv_s * (1.0 - wr * wr);
+    }
   }  // for each row
 
   if (opts.use_deriv2_exact && d2pred != nullptr) {
-    contract_d2pred(n_obs, n_par, d2pred, W_d2.data(), hess_acc, scratch_d2);
+    contract_d2_block(n_obs, n_par, d2pred, W_d2.data(), hess_acc, scratch_d2);
+  }
+  if (has_d2sig) {
+    contract_d2_block(n_obs, n_par, d2sigma, W_d2sig.data(), hess_acc,
+                      scratch_d2);
   }
 }
 
@@ -257,8 +268,6 @@ void accumulate_bloq_residual(
     double& value_acc,
     double* grad_acc,
     double* hess_acc) {
-
-  (void) d2sigma;
 
   if (n_obs == 0) return;
   if (opts.bloq_mode == BloqMode::NONE || opts.bloq_mode == BloqMode::M1) {
@@ -282,14 +291,17 @@ void accumulate_bloq_residual(
     }
   }
 
-  const bool   has_dsig = (dsigma != nullptr) && opts.sigma_depends_on_par;
-  const bool   is_m3    = (opts.bloq_mode == BloqMode::M3);
-  const double bessel   = opts.bessel;
+  const bool   has_dsig  = (dsigma != nullptr) && opts.sigma_depends_on_par;
+  const bool   has_d2sig = opts.use_deriv2_exact && has_dsig
+                           && (d2sigma != nullptr);
+  const bool   is_m3     = (opts.bloq_mode == BloqMode::M3);
+  const double bessel    = opts.bessel;
 
   std::vector<double> dwr(n_par), dw0(n_par);
 
   // Per-row deriv2-exact weights, computed alongside the per-row math.
   std::vector<double> W_d2(opts.use_deriv2_exact ? n_obs : 0, 0.0);
+  std::vector<double> W_d2sig(has_d2sig ? n_obs : 0, 0.0);
   std::vector<double> scratch_d2;
 
   for (int i = 0; i < n_obs; ++i) {
@@ -348,12 +360,17 @@ void accumulate_bloq_residual(
     //        c2 = phi(w0) / (Phi(w0) - Phi(wr))
     //        c3 = G(w0, w0)
     double w_deriv2 = 0.0;  // per-row weight for the d2pred exact contribution
+    double w_deriv2_sig = 0.0;  // per-row weight for the d2sigma exact contribution
     if (is_m3) {
       const double G_neg_wr = G_by_Phi(-wr, -wr);
       for (int k = 0; k < n_par; ++k) {
         grad_acc[k] += 2.0 * G_neg_wr * dwr[k];
       }
-      if (opts.use_deriv2_exact) w_deriv2 = 2.0 * G_neg_wr * inv_s;
+      if (opts.use_deriv2_exact) {
+        w_deriv2 = 2.0 * G_neg_wr * inv_s;
+        // d2sigma weight: 2*G(-wr) * d2wr propagates -wr/sigma onto d2sigma.
+        if (has_d2sig) w_deriv2_sig = -2.0 * wr * G_neg_wr * inv_s;
+      }
     } else {
       // c1 = 1 / (1/G(wr,w0) - 1/G(wr,wr))
       // c2 = 1 / (1/G(w0,w0) - 1/G(w0,wr))
@@ -374,6 +391,12 @@ void accumulate_bloq_residual(
         // Both dwr and dw0 contribute inv_s * dpred to their d2pred-via-d2wr term;
         // sum the coefficients accordingly: c1 + (c3 - c2).
         w_deriv2 = 2.0 * inv_s * (c1 + c3 - c2);
+        // d2sigma weight: 2*(c1*d2wr + (c3-c2)*d2w0) propagates -wr/sigma and
+        // -w0/sigma respectively onto d2sigma. Net coefficient on d2sigma:
+        // -2/sigma * (c1*wr + (c3 - c2)*w0).
+        if (has_d2sig) {
+          w_deriv2_sig = -2.0 * inv_s * (c1 * wr + (c3 - c2) * w0);
+        }
       }
     }
 
@@ -493,10 +516,15 @@ void accumulate_bloq_residual(
     }
 
     if (opts.use_deriv2_exact) W_d2[i] = w_deriv2;
+    if (has_d2sig) W_d2sig[i] = w_deriv2_sig;
   }  // for each BLOQ row
 
   if (opts.use_deriv2_exact && d2pred != nullptr) {
-    contract_d2pred(n_obs, n_par, d2pred, W_d2.data(), hess_acc, scratch_d2);
+    contract_d2_block(n_obs, n_par, d2pred, W_d2.data(), hess_acc, scratch_d2);
+  }
+  if (has_d2sig) {
+    contract_d2_block(n_obs, n_par, d2sigma, W_d2sig.data(), hess_acc,
+                      scratch_d2);
   }
 }
 

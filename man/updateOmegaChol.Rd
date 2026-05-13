@@ -2,18 +2,18 @@
 % Please edit documentation in R/omegaClass.R
 \name{updateOmegaChol}
 \alias{updateOmegaChol}
-\title{ECM closed-form update for the omegaSpec Cholesky parameters}
+\title{ECM closed-form update for the omega Cholesky parameters}
 \usage{
-updateOmegaChol(MHatList, omegaSpec)
+updateOmegaChol(MHatList, omega)
 }
 \arguments{
 \item{MHatList}{Length-N list of K x K positive-semidefinite matrices
 (subject posterior second moments).}
 
-\item{omegaSpec}{An \link{omega} spec object.}
+\item{omega}{An \link{omega} spec object.}
 }
 \value{
-Named numeric vector matching \code{omegaSpec$cholPars} (log-diagonal
+Named numeric vector matching \code{omega$cholPars} (log-diagonal
 on diagonals, free real on off-diagonals).
 }
 \description{

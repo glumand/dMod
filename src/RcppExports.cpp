@@ -193,8 +193,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // normL2_kernel
-List normL2_kernel(List prediction, Nullable<List> err_list_opt, List meta_list, CharacterVector par_names_global, double bessel, bool deriv2_requested, int threads);
-RcppExport SEXP _dMod_normL2_kernel(SEXP predictionSEXP, SEXP err_list_optSEXP, SEXP meta_listSEXP, SEXP par_names_globalSEXP, SEXP besselSEXP, SEXP deriv2_requestedSEXP, SEXP threadsSEXP) {
+List normL2_kernel(List prediction, Nullable<List> err_list_opt, List meta_list, CharacterVector par_names_global, double bessel, bool deriv2_requested, int threads, std::string bloq_mode);
+RcppExport SEXP _dMod_normL2_kernel(SEXP predictionSEXP, SEXP err_list_optSEXP, SEXP meta_listSEXP, SEXP par_names_globalSEXP, SEXP besselSEXP, SEXP deriv2_requestedSEXP, SEXP threadsSEXP, SEXP bloq_modeSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -205,7 +205,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type bessel(besselSEXP);
     Rcpp::traits::input_parameter< bool >::type deriv2_requested(deriv2_requestedSEXP);
     Rcpp::traits::input_parameter< int >::type threads(threadsSEXP);
-    rcpp_result_gen = Rcpp::wrap(normL2_kernel(prediction, err_list_opt, meta_list, par_names_global, bessel, deriv2_requested, threads));
+    Rcpp::traits::input_parameter< std::string >::type bloq_mode(bloq_modeSEXP);
+    rcpp_result_gen = Rcpp::wrap(normL2_kernel(prediction, err_list_opt, meta_list, par_names_global, bessel, deriv2_requested, threads, bloq_mode));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -223,8 +224,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // residual_kernel_aloq
-List residual_kernel_aloq(NumericVector pred, NumericMatrix dpred, Nullable<NumericVector> d2pred, NumericVector y_data, NumericVector sigma, Nullable<NumericMatrix> dsigma, Nullable<NumericVector> lloq, List opts);
-RcppExport SEXP _dMod_residual_kernel_aloq(SEXP predSEXP, SEXP dpredSEXP, SEXP d2predSEXP, SEXP y_dataSEXP, SEXP sigmaSEXP, SEXP dsigmaSEXP, SEXP lloqSEXP, SEXP optsSEXP) {
+List residual_kernel_aloq(NumericVector pred, NumericMatrix dpred, Nullable<NumericVector> d2pred, NumericVector y_data, NumericVector sigma, Nullable<NumericMatrix> dsigma, Nullable<NumericVector> d2sigma, Nullable<NumericVector> lloq, List opts);
+RcppExport SEXP _dMod_residual_kernel_aloq(SEXP predSEXP, SEXP dpredSEXP, SEXP d2predSEXP, SEXP y_dataSEXP, SEXP sigmaSEXP, SEXP dsigmaSEXP, SEXP d2sigmaSEXP, SEXP lloqSEXP, SEXP optsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -234,15 +235,16 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< NumericVector >::type y_data(y_dataSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type sigma(sigmaSEXP);
     Rcpp::traits::input_parameter< Nullable<NumericMatrix> >::type dsigma(dsigmaSEXP);
+    Rcpp::traits::input_parameter< Nullable<NumericVector> >::type d2sigma(d2sigmaSEXP);
     Rcpp::traits::input_parameter< Nullable<NumericVector> >::type lloq(lloqSEXP);
     Rcpp::traits::input_parameter< List >::type opts(optsSEXP);
-    rcpp_result_gen = Rcpp::wrap(residual_kernel_aloq(pred, dpred, d2pred, y_data, sigma, dsigma, lloq, opts));
+    rcpp_result_gen = Rcpp::wrap(residual_kernel_aloq(pred, dpred, d2pred, y_data, sigma, dsigma, d2sigma, lloq, opts));
     return rcpp_result_gen;
 END_RCPP
 }
 // residual_kernel_bloq
-List residual_kernel_bloq(NumericVector pred, NumericMatrix dpred, Nullable<NumericVector> d2pred, NumericVector y_data, NumericVector sigma, Nullable<NumericMatrix> dsigma, Nullable<NumericVector> lloq, List opts);
-RcppExport SEXP _dMod_residual_kernel_bloq(SEXP predSEXP, SEXP dpredSEXP, SEXP d2predSEXP, SEXP y_dataSEXP, SEXP sigmaSEXP, SEXP dsigmaSEXP, SEXP lloqSEXP, SEXP optsSEXP) {
+List residual_kernel_bloq(NumericVector pred, NumericMatrix dpred, Nullable<NumericVector> d2pred, NumericVector y_data, NumericVector sigma, Nullable<NumericMatrix> dsigma, Nullable<NumericVector> d2sigma, Nullable<NumericVector> lloq, List opts);
+RcppExport SEXP _dMod_residual_kernel_bloq(SEXP predSEXP, SEXP dpredSEXP, SEXP d2predSEXP, SEXP y_dataSEXP, SEXP sigmaSEXP, SEXP dsigmaSEXP, SEXP d2sigmaSEXP, SEXP lloqSEXP, SEXP optsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -252,9 +254,10 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< NumericVector >::type y_data(y_dataSEXP);
     Rcpp::traits::input_parameter< NumericVector >::type sigma(sigmaSEXP);
     Rcpp::traits::input_parameter< Nullable<NumericMatrix> >::type dsigma(dsigmaSEXP);
+    Rcpp::traits::input_parameter< Nullable<NumericVector> >::type d2sigma(d2sigmaSEXP);
     Rcpp::traits::input_parameter< Nullable<NumericVector> >::type lloq(lloqSEXP);
     Rcpp::traits::input_parameter< List >::type opts(optsSEXP);
-    rcpp_result_gen = Rcpp::wrap(residual_kernel_bloq(pred, dpred, d2pred, y_data, sigma, dsigma, lloq, opts));
+    rcpp_result_gen = Rcpp::wrap(residual_kernel_bloq(pred, dpred, d2pred, y_data, sigma, dsigma, d2sigma, lloq, opts));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -287,10 +290,10 @@ static const R_CallMethodDef CallEntries[] = {
     {"_dMod_focei_inner_trust", (DL_FUNC) &_dMod_focei_inner_trust, 9},
     {"_dMod_focei_outer_objfn", (DL_FUNC) &_dMod_focei_outer_objfn, 12},
     {"_dMod_focei_run", (DL_FUNC) &_dMod_focei_run, 9},
-    {"_dMod_normL2_kernel", (DL_FUNC) &_dMod_normL2_kernel, 7},
+    {"_dMod_normL2_kernel", (DL_FUNC) &_dMod_normL2_kernel, 8},
     {"_dMod_sparse_grid_gh", (DL_FUNC) &_dMod_sparse_grid_gh, 3},
-    {"_dMod_residual_kernel_aloq", (DL_FUNC) &_dMod_residual_kernel_aloq, 8},
-    {"_dMod_residual_kernel_bloq", (DL_FUNC) &_dMod_residual_kernel_bloq, 8},
+    {"_dMod_residual_kernel_aloq", (DL_FUNC) &_dMod_residual_kernel_aloq, 9},
+    {"_dMod_residual_kernel_bloq", (DL_FUNC) &_dMod_residual_kernel_bloq, 9},
     {"_dMod_trust_kernel", (DL_FUNC) &_dMod_trust_kernel, 7},
     {NULL, NULL, 0}
 };

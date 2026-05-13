@@ -80,6 +80,7 @@ List run_kernel(bool aloq,
                 Nullable<NumericVector> d2pred_in,
                 NumericVector y_data, NumericVector sigma,
                 Nullable<NumericMatrix> dsigma_in,
+                Nullable<NumericVector> d2sigma_in,
                 Nullable<NumericVector> lloq_in,
                 List opts_list) {
   const int n_obs = pred.size();
@@ -109,6 +110,15 @@ List run_kernel(bool aloq,
     dsigma_ptr = dsigma_rm.data();
   }
 
+  std::vector<double> d2sigma_rm;
+  const double* d2sigma_ptr = nullptr;
+  if (d2sigma_in.isNotNull()) {
+    NumericVector d2s_in(d2sigma_in.get());
+    d2sigma_rm = repack_d2pred(d2s_in, n_obs, n_par);
+    d2sigma_ptr = d2sigma_rm.data();
+    opts.d2sigma_present = true;
+  }
+
   std::vector<double> lloq;
   const double* lloq_ptr = nullptr;
   if (lloq_in.isNotNull()) {
@@ -129,14 +139,14 @@ List run_kernel(bool aloq,
         n_obs, n_par,
         pred.begin(), dpred_rm.data(), d2pred_ptr,
         y_data.begin(), sigma.begin(),
-        dsigma_ptr, /*d2sigma=*/ nullptr, lloq_ptr,
+        dsigma_ptr, d2sigma_ptr, lloq_ptr,
         opts, value, grad.data(), hess.data());
   } else {
     dmod::accumulate_bloq_residual(
         n_obs, n_par,
         pred.begin(), dpred_rm.data(), d2pred_ptr,
         y_data.begin(), sigma.begin(),
-        dsigma_ptr, /*d2sigma=*/ nullptr, lloq_ptr,
+        dsigma_ptr, d2sigma_ptr, lloq_ptr,
         opts, value, grad.data(), hess.data());
   }
 
@@ -158,11 +168,12 @@ List residual_kernel_aloq(NumericVector pred, NumericMatrix dpred,
                           Nullable<NumericVector> d2pred,
                           NumericVector y_data, NumericVector sigma,
                           Nullable<NumericMatrix> dsigma,
+                          Nullable<NumericVector> d2sigma,
                           Nullable<NumericVector> lloq,
                           List opts) {
   return run_kernel(/*aloq=*/ true,
                     pred, dpred, d2pred, y_data, sigma,
-                    dsigma, lloq, opts);
+                    dsigma, d2sigma, lloq, opts);
 }
 
 // [[Rcpp::export]]
@@ -170,9 +181,10 @@ List residual_kernel_bloq(NumericVector pred, NumericMatrix dpred,
                           Nullable<NumericVector> d2pred,
                           NumericVector y_data, NumericVector sigma,
                           Nullable<NumericMatrix> dsigma,
+                          Nullable<NumericVector> d2sigma,
                           Nullable<NumericVector> lloq,
                           List opts) {
   return run_kernel(/*aloq=*/ false,
                     pred, dpred, d2pred, y_data, sigma,
-                    dsigma, lloq, opts);
+                    dsigma, d2sigma, lloq, opts);
 }

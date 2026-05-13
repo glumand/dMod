@@ -11,7 +11,8 @@
 # Helper: build a randomized residual-kernel test problem with quadratic
 # pred/sigma dependence so d2pred is non-trivial and FD-Hessian tests make
 # sense. theta0 is the evaluation point. n_obs ALOQ rows + n_bloq BLOQ rows.
-make_setup <- function(n_obs, n_par, sigma_dep, n_bloq = 0, seed = 1L) {
+make_setup <- function(n_obs, n_par, sigma_dep, n_bloq = 0, seed = 1L,
+                       sigma_curved = FALSE) {
   set.seed(seed)
   n_total <- n_obs + n_bloq
   par_names <- paste0("p", seq_len(n_par))
@@ -34,6 +35,17 @@ make_setup <- function(n_obs, n_par, sigma_dep, n_bloq = 0, seed = 1L) {
            dimnames = list(NULL, par_names))
   else
     matrix(0.0, n_total, n_par, dimnames = list(NULL, par_names))
+  # Optional symmetric quadratic sigma term so d2sigma is non-zero. Kept
+  # small so sigma(theta) stays strictly positive in a neighbourhood of
+  # theta0 (Richardson FD perturbs theta by ~1e-2).
+  Q_sigma <- array(0.0, dim = c(n_total, n_par, n_par),
+                   dimnames = list(NULL, par_names, par_names))
+  if (sigma_curved && sigma_dep) {
+    for (i in seq_len(n_total)) {
+      M <- matrix(runif(n_par * n_par, -0.02, 0.02), n_par, n_par)
+      Q_sigma[i, , ] <- 0.5 * (M + t(M))
+    }
+  }
 
   # y_data: ALOQ rows random with some signal; BLOQ rows < lloq.
   lloq <- rep(-Inf, n_total)
@@ -56,20 +68,23 @@ make_setup <- function(n_obs, n_par, sigma_dep, n_bloq = 0, seed = 1L) {
     sigma0      = sigma0,
     dsigma0     = dsigma0,
     Q           = Q,
+    Q_sigma     = Q_sigma,
     y_data      = y_data,
     lloq        = lloq
   )
 }
 
 # Predicts pred(theta), sigma(theta) under the quadratic model used by
-# make_setup. Used for FD-Hessian checks.
+# make_setup. Used for FD-Hessian checks. Both pred and sigma can have a
+# symmetric quadratic theta-dependence (Q, Q_sigma).
 eval_model <- function(setup, theta) {
   dt <- theta - setup$theta0
   pred  <- setup$pred0  + setup$dpred0  %*% dt
   sigma <- setup$sigma0 + setup$dsigma0 %*% dt
-  # Quadratic contribution: 0.5 * dt^T Q[i] dt per row
+  # Quadratic contribution: 0.5 * dt^T Q[i] dt per row (pred and sigma).
   for (i in seq_len(setup$n_obs)) {
-    pred[i, 1] <- pred[i, 1] + 0.5 * sum(dt * (setup$Q[i, , ] %*% dt))
+    pred[i, 1]  <- pred[i, 1]  + 0.5 * sum(dt * (setup$Q[i, , ]       %*% dt))
+    sigma[i, 1] <- sigma[i, 1] + 0.5 * sum(dt * (setup$Q_sigma[i, , ] %*% dt))
   }
   list(pred = as.numeric(pred), sigma = as.numeric(sigma))
 }
@@ -130,7 +145,7 @@ test_that("ALOQ kernel matches R nll_ALOQ across (sigma_dep, deriv2, M4BEAL)", {
         cpp <- dMod:::residual_kernel_aloq(
           pred = pred, dpred = dpred, d2pred = d2pred,
           y_data = y_data, sigma = sigma,
-          dsigma = dsigma, lloq = NULL, opts = opts
+          dsigma = dsigma, d2sigma = NULL, lloq = NULL, opts = opts
         )
 
         label <- sprintf("ALOQ sigma_dep=%s use_d2=%s bloq=%s",
@@ -186,7 +201,7 @@ test_that("BLOQ kernel matches R nll_BLOQ across modes and sigma dependence", {
       cpp <- dMod:::residual_kernel_bloq(
         pred = pred, dpred = dpred, d2pred = NULL,
         y_data = y_data, sigma = sigma,
-        dsigma = dsigma, lloq = lloq, opts = opts
+        dsigma = dsigma, d2sigma = NULL, lloq = lloq, opts = opts
       )
 
       label <- sprintf("BLOQ sigma_dep=%s bloq=%s", sigma_dep, bloq_mode)
@@ -230,7 +245,7 @@ test_that("ALOQ kernel matches R nll_ALOQ under bessel correction", {
   cpp <- dMod:::residual_kernel_aloq(
     pred = setup$pred0, dpred = setup$dpred0, d2pred = NULL,
     y_data = setup$y_data, sigma = setup$sigma0,
-    dsigma = setup$dsigma0, lloq = NULL, opts = opts
+    dsigma = setup$dsigma0, d2sigma = NULL, lloq = NULL, opts = opts
   )
   expect_equal(cpp$value, R_ref$value, tolerance = 1e-10)
   expect_equal(unname(cpp$gradient), unname(R_ref$gradient),
@@ -241,12 +256,15 @@ test_that("ALOQ kernel matches R nll_ALOQ under bessel correction", {
 
 
 # ---- BLOQ-deriv2-exact: FD validation (new functionality) ----
+# With BOTH d2pred and d2sigma propagated, the kernel produces the analytical
+# Hessian and matches FD to Richardson order for both the sigma-independent
+# and sigma-dependent (curved sigma) cases.
 test_that("BLOQ M3 + use_deriv2_exact Hessian matches finite-difference Hessian", {
   skip_if_not_installed("numDeriv")
   for (sigma_dep in c(FALSE, TRUE)) {
     setup <- make_setup(n_obs = 0, n_par = 3, sigma_dep = sigma_dep,
-                        n_bloq = 8, seed = 7L)
-    # M3 BLOQ objective as a function of theta.
+                        n_bloq = 8, seed = 7L,
+                        sigma_curved = sigma_dep)
     obj_fn <- function(theta) {
       m  <- eval_model(setup, theta)
       wr <- (m$pred - setup$y_data) / m$sigma
@@ -261,17 +279,12 @@ test_that("BLOQ M3 + use_deriv2_exact Hessian matches finite-difference Hessian"
     cpp <- dMod:::residual_kernel_bloq(
       pred = setup$pred0, dpred = setup$dpred0, d2pred = setup$Q,
       y_data = setup$y_data, sigma = setup$sigma0,
-      dsigma = if (sigma_dep) setup$dsigma0 else NULL,
+      dsigma  = if (sigma_dep) setup$dsigma0 else NULL,
+      d2sigma = if (sigma_dep) setup$Q_sigma else NULL,
       lloq = setup$lloq, opts = opts
     )
-
-    # Without sigma_dep, full Hessian = FD Hessian to ~1e-5 (Richardson order).
-    # With sigma_dep, kernel keeps GN approximation on the sigma cross terms,
-    # so we only check that the d2pred contribution is in the right ballpark
-    # (and that the symmetry is preserved); the bulk should still be close.
-    tol <- if (sigma_dep) 5e-2 else 1e-4
     label <- sprintf("M3 deriv2 FD-Hess sigma_dep=%s", sigma_dep)
-    expect_lt(max(abs(cpp$hessian - H_fd)), tol, label = label)
+    expect_lt(max(abs(cpp$hessian - H_fd)), 1e-4, label = label)
     expect_lt(max(abs(cpp$hessian - t(cpp$hessian))), 1e-12,
               label = paste0(label, " symmetry"))
   }
@@ -297,13 +310,13 @@ test_that("BLOQ M4NM + use_deriv2_exact: kernel adds d2pred contribution", {
   cpp_gn <- dMod:::residual_kernel_bloq(
     pred = setup$pred0, dpred = setup$dpred0, d2pred = NULL,
     y_data = setup$y_data, sigma = setup$sigma0,
-    dsigma = NULL, lloq = setup$lloq, opts = opts
+    dsigma = NULL, d2sigma = NULL, lloq = setup$lloq, opts = opts
   )
   opts$use_deriv2_exact <- TRUE
   cpp_ex <- dMod:::residual_kernel_bloq(
     pred = setup$pred0, dpred = setup$dpred0, d2pred = setup$Q,
     y_data = setup$y_data, sigma = setup$sigma0,
-    dsigma = NULL, lloq = setup$lloq, opts = opts
+    dsigma = NULL, d2sigma = NULL, lloq = setup$lloq, opts = opts
   )
   # The d2 path must change the Hessian (else the code path is dead).
   expect_gt(max(abs(cpp_ex$hessian - cpp_gn$hessian)), 1e-6,
@@ -314,6 +327,115 @@ test_that("BLOQ M4NM + use_deriv2_exact: kernel adds d2pred contribution", {
 })
 
 
+# ---- ALOQ d2sigma-exact: R/C++ parity ----
+# When derivs2.err is supplied, nll_ALOQ adds (2/sigma)(1 - wr^2) * d2sigma to
+# its Hessian. Verify the C++ kernel matches that R reference.
+test_that("ALOQ kernel matches R nll_ALOQ when d2sigma is propagated", {
+  for (use_d2 in c(FALSE, TRUE)) {
+    setup <- make_setup(n_obs = 10, n_par = 4, sigma_dep = TRUE,
+                        n_bloq = 0, seed = 11L, sigma_curved = TRUE)
+    nout <- data.table::data.table(
+      weighted.residual = (setup$pred0 - setup$y_data) / setup$sigma0,
+      weighted.0        = setup$pred0 / setup$sigma0,
+      sigma             = setup$sigma0
+    )
+    R_ref <- dMod:::nll_ALOQ(
+      nout            = nout,
+      derivs          = setup$dpred0,
+      derivs.err      = setup$dsigma0,
+      derivs2         = if (use_d2) setup$Q else NULL,
+      derivs2.err     = setup$Q_sigma,
+      par_names       = setup$par_names,
+      opt.BLOQ        = "M3",
+      opt.hessian     = c(ALOQ_part1 = TRUE, ALOQ_part2 = TRUE,
+                          ALOQ_part3 = TRUE,
+                          BLOQ_part1 = TRUE, BLOQ_part2 = TRUE,
+                          BLOQ_part3 = TRUE),
+      bessel.correction = 1
+    )
+    opts <- default_opts()
+    opts$use_deriv2_exact     <- TRUE  # d2sigma path is gated by this flag
+    opts$bloq_mode            <- "M3"
+    opts$sigma_depends_on_par <- TRUE
+    opts$d2sigma_present      <- TRUE
+    cpp <- dMod:::residual_kernel_aloq(
+      pred = setup$pred0, dpred = setup$dpred0,
+      d2pred = if (use_d2) setup$Q else NULL,
+      y_data = setup$y_data, sigma = setup$sigma0,
+      dsigma = setup$dsigma0, d2sigma = setup$Q_sigma,
+      lloq = NULL, opts = opts
+    )
+    label <- sprintf("ALOQ d2sigma use_d2=%s", use_d2)
+    expect_equal(cpp$value,           R_ref$value,           tolerance = 1e-10,
+                 info = label)
+    expect_equal(unname(cpp$gradient), unname(R_ref$gradient), tolerance = 1e-10,
+                 info = label)
+    expect_equal(unname(cpp$hessian),  unname(R_ref$hessian),  tolerance = 1e-10,
+                 info = label)
+  }
+})
+
+
+# ---- ALOQ d2sigma-exact: FD validation ----
+# Verify against the true Hessian of the ALOQ objective when both pred and
+# sigma are quadratic in theta.
+test_that("ALOQ d2sigma + d2pred Hessian matches finite-difference Hessian", {
+  skip_if_not_installed("numDeriv")
+  setup <- make_setup(n_obs = 10, n_par = 3, sigma_dep = TRUE,
+                      n_bloq = 0, seed = 13L, sigma_curved = TRUE)
+  obj_fn <- function(theta) {
+    m  <- eval_model(setup, theta)
+    wr <- (m$pred - setup$y_data) / m$sigma
+    sum(wr^2 + log(2 * pi * m$sigma^2))
+  }
+  H_fd <- numDeriv::hessian(obj_fn, setup$theta0, method = "Richardson")
+
+  opts <- default_opts()
+  opts$use_deriv2_exact     <- TRUE
+  opts$bloq_mode            <- "M3"
+  opts$sigma_depends_on_par <- TRUE
+  opts$d2sigma_present      <- TRUE
+  cpp <- dMod:::residual_kernel_aloq(
+    pred = setup$pred0, dpred = setup$dpred0, d2pred = setup$Q,
+    y_data = setup$y_data, sigma = setup$sigma0,
+    dsigma = setup$dsigma0, d2sigma = setup$Q_sigma,
+    lloq = NULL, opts = opts
+  )
+  expect_lt(max(abs(cpp$hessian - H_fd)), 1e-4, label = "ALOQ d2 FD-Hess")
+  expect_lt(max(abs(cpp$hessian - t(cpp$hessian))), 1e-12,
+            label = "ALOQ d2 symmetry")
+})
+
+
+# ---- BLOQ M4NM d2sigma smoke ----
+# Confirms the d2sigma code path is wired up for M4 modes and produces a
+# different Hessian than the d2sigma-free run.
+test_that("BLOQ M4NM d2sigma path changes the Hessian", {
+  setup <- make_setup(n_obs = 0, n_par = 3, sigma_dep = TRUE,
+                      n_bloq = 8, seed = 17L, sigma_curved = TRUE)
+  opts <- default_opts()
+  opts$bloq_mode            <- "M4NM"
+  opts$use_deriv2_exact     <- TRUE
+  opts$sigma_depends_on_par <- TRUE
+  cpp_nosig <- dMod:::residual_kernel_bloq(
+    pred = setup$pred0, dpred = setup$dpred0, d2pred = setup$Q,
+    y_data = setup$y_data, sigma = setup$sigma0,
+    dsigma = setup$dsigma0, d2sigma = NULL,
+    lloq = setup$lloq, opts = opts
+  )
+  cpp_sig <- dMod:::residual_kernel_bloq(
+    pred = setup$pred0, dpred = setup$dpred0, d2pred = setup$Q,
+    y_data = setup$y_data, sigma = setup$sigma0,
+    dsigma = setup$dsigma0, d2sigma = setup$Q_sigma,
+    lloq = setup$lloq, opts = opts
+  )
+  expect_gt(max(abs(cpp_sig$hessian - cpp_nosig$hessian)), 1e-6,
+            label = "M4NM d2sigma changes Hessian")
+  expect_lt(max(abs(cpp_sig$hessian - t(cpp_sig$hessian))), 1e-12,
+            label = "M4NM d2sigma symmetry")
+})
+
+
 # ---- Edge case: zero rows ----
 test_that("kernels are no-ops on zero-row inputs", {
   opts <- default_opts()
@@ -321,12 +443,12 @@ test_that("kernels are no-ops on zero-row inputs", {
   cpp_aloq <- dMod:::residual_kernel_aloq(
     pred = numeric(0), dpred = matrix(0, 0, 3),
     d2pred = NULL, y_data = numeric(0), sigma = numeric(0),
-    dsigma = NULL, lloq = NULL, opts = default_opts()
+    dsigma = NULL, d2sigma = NULL, lloq = NULL, opts = default_opts()
   )
   cpp_bloq <- dMod:::residual_kernel_bloq(
     pred = numeric(0), dpred = matrix(0, 0, 3),
     d2pred = NULL, y_data = numeric(0), sigma = numeric(0),
-    dsigma = NULL, lloq = NULL, opts = opts
+    dsigma = NULL, d2sigma = NULL, lloq = NULL, opts = opts
   )
   expect_equal(cpp_aloq$value, 0)
   expect_equal(sum(abs(cpp_aloq$gradient)), 0)

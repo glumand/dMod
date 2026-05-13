@@ -2,7 +2,7 @@
 % Please edit documentation in R/omegaClass.R
 \name{parnames.omegaSpec}
 \alias{parnames.omegaSpec}
-\title{All random-effect parameter names of an omegaSpec}
+\title{All random-effect parameter names of an omega}
 \usage{
 parnames.omegaSpec(x, what = c("all", "eta", "chol"))
 }

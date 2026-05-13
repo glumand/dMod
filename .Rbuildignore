@@ -33,5 +33,5 @@
 ^README\.html$
 ^README_files$
 ^notes$
-^testing$
+^bench$
 ^todo\.txt$

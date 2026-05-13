@@ -37,7 +37,10 @@ Use \code{\link[=msParframe]{msParframe()}} for reproducible random starts.}
 
 \item{fits}{Number of fits.}
 
-\item{cores}{Number of parallel workers.}
+\item{cores}{Number of parallel workers. Multiplies with the inner OpenMP
+threads of the C++ objective kernels
+(\code{getOption("dMod.objfn.threads")}); keep
+\code{cores * dMod.objfn.threads} below your core count.}
 
 \item{optmethod}{Character. Name of the optimiser function to call via
 \code{do.call(optmethod, ...)}. Default \code{"trust"}.}

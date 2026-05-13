@@ -20,21 +20,21 @@ build_one_eta_for_ecm <- function(seed = 1L, N = 4L) {
                                  value = y_obs, condition = subjects,
                                  stringsAsFactors = FALSE))
   om <- omega(eta = "eta", subjects = subjects)
-  joint <- normL2(data, g * x * p) + constraintL2(mu = 0, Omega = om)
-  list(joint = joint, om = om, model = g * x * p, data = data,
+  obj <- normL2(data, g * x * p) + constraintL2(mu = 0, Omega = om)
+  list(obj = obj, om = om, prdfn = g * x * p, data = data,
        subjects = subjects, true_mu = true_mu, true_om = true_om,
        y_obs = y_obs)
 }
 
 
-test_that("nlmeFit(method='foceiQuadrature') runs end-to-end on one-eta model", {
+test_that("nlmeFit(method='foceiQuadrature') runs end-to-end on one-eta prdfn", {
   oldwd <- setwd(tempdir())
   on.exit(setwd(oldwd))
   s <- build_one_eta_for_ecm(1L)
   init <- c(mu_pop = 2.0, omega_eta_eta = log(0.3))
 
   fit <- suppressMessages(nlmeFit(
-    s$joint, s$om, init, model = s$model, data = s$data,
+    s$obj, s$om, init, prdfn = s$prdfn, data = s$data,
     method = "foceiQuadrature",
     control = list(quadrature = list(level = 4L,
                                      epsQuadLevels = c(3L, 4L),
@@ -58,7 +58,7 @@ test_that("nlmeFit(method='quadrature') runs cold without a FOCEI prelude", {
   init <- c(mu_pop = 2.0, omega_eta_eta = log(0.3))
 
   fit <- suppressMessages(nlmeFit(
-    s$joint, s$om, init, model = s$model, data = s$data,
+    s$obj, s$om, init, prdfn = s$prdfn, data = s$data,
     method = "quadrature",
     control = list(quadrature = list(level = 4L,
                                      epsQuadLevels = c(3L, 4L),
@@ -78,7 +78,7 @@ test_that("nlmeFit emits etaSE + shrinkage from Laplace inverse Hessian", {
   init <- c(mu_pop = 2.0, omega_eta_eta = log(0.3))
 
   fit <- suppressMessages(nlmeFit(
-    s$joint, s$om, init, model = s$model, data = s$data,
+    s$obj, s$om, init, prdfn = s$prdfn, data = s$data,
     method = "focei", verbose = FALSE))
 
   expect_s3_class(fit, "nlmeFit")
@@ -108,7 +108,7 @@ test_that("nlmeFit(method='foceiQuadrature') polishes a FOCEI fit without OFV bl
   init <- c(mu_pop = 2.0, omega_eta_eta = log(0.3))
 
   fit <- suppressMessages(nlmeFit(
-    s$joint, s$om, init, model = s$model, data = s$data,
+    s$obj, s$om, init, prdfn = s$prdfn, data = s$data,
     method = "foceiQuadrature",
     control = list(quadrature = list(level = 4L,
                                      epsQuadLevels = c(4L, 5L),

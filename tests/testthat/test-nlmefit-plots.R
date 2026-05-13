@@ -22,14 +22,14 @@ build_for_plots <- function(seed = 1L) {
   }))
   data <- as.datalist(obs_rows)
   om <- omega(eta = "eta", subjects = subjects)
-  joint <- normL2(data, g * x * p) + constraintL2(mu = 0, Omega = om)
-  list(joint = joint, om = om, model = g * x * p, data = data,
+  obj <- normL2(data, g * x * p) + constraintL2(mu = 0, Omega = om)
+  list(obj = obj, om = om, prdfn = g * x * p, data = data,
        subjects = subjects)
 }
 
 run_focei <- function(s, init = c(mu_pop = 2.0, omega_eta_eta = log(0.3)))
-  suppressMessages(nlmeFit(s$joint, s$om, init,
-                            model = s$model, data = s$data,
+  suppressMessages(nlmeFit(s$obj, s$om, init,
+                            prdfn = s$prdfn, data = s$data,
                             method = "focei", verbose = FALSE))
 
 
@@ -58,6 +58,28 @@ test_that("plot.nlmeFit, plotIndivs, plotResiduals return ggplots", {
 })
 
 
+test_that("plotIndivs paginates when subjectsPerPage is set", {
+  skip_if_not_installed("ggplot2")
+  oldwd <- setwd(tempdir()); on.exit(setwd(oldwd))
+  fit <- run_focei(build_for_plots(2L))  # 4 subjects
+  # Two pages of 2 subjects each.
+  pages <- plotIndivs(fit, subjectsPerPage = 2L)
+  expect_type(pages, "list")
+  expect_length(pages, 2L)
+  lapply(pages, expect_s3_class, "ggplot")
+  expect_match(pages[[1]]$labels$title, "page 1/2", fixed = TRUE)
+  expect_match(pages[[2]]$labels$title, "page 2/2", fixed = TRUE)
+  # Single page still returns a length-1 list when subjectsPerPage is set.
+  one <- plotIndivs(fit, subjectsPerPage = 10L)
+  expect_type(one, "list")
+  expect_length(one, 1L)
+  expect_s3_class(one[[1]], "ggplot")
+  # Invalid input.
+  expect_error(plotIndivs(fit, subjectsPerPage = 0L), "positive integer")
+  expect_error(plotIndivs(fit, subjectsPerPage = c(2L, 3L)), "positive integer")
+})
+
+
 test_that("plotHistIndivs returns either a ggplot (cowplot) or a list of two", {
   skip_if_not_installed("ggplot2")
   oldwd <- setwd(tempdir()); on.exit(setwd(oldwd))
@@ -77,13 +99,13 @@ test_that("plotTrace errors on focei fit, works on foceiQuadrature fit", {
   oldwd <- setwd(tempdir()); on.exit(setwd(oldwd))
   s <- build_for_plots(4L)
   init <- c(mu_pop = 2.0, omega_eta_eta = log(0.3))
-  fit_lap <- suppressMessages(nlmeFit(s$joint, s$om, init,
-                                       model = s$model, data = s$data,
+  fit_lap <- suppressMessages(nlmeFit(s$obj, s$om, init,
+                                       prdfn = s$prdfn, data = s$data,
                                        method = "focei", verbose = FALSE))
   expect_error(plotTrace(fit_lap), "requires.*quadrature")
 
-  fit_qd <- suppressMessages(nlmeFit(s$joint, s$om, init,
-                                      model = s$model, data = s$data,
+  fit_qd <- suppressMessages(nlmeFit(s$obj, s$om, init,
+                                      prdfn = s$prdfn, data = s$data,
                                       method = "foceiQuadrature",
                                       control = list(quadrature = list(
                                         level = 4L,

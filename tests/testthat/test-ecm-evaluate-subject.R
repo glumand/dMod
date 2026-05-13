@@ -8,7 +8,7 @@ context("ecmEvaluateSubject: per-subject quadrature evaluator")
 # and is rejected as cost/benefit unfavourable; numDeriv stays.
 
 
-test_that("logLhat at level L recovers the 1D-integrate truth for a one-eta model", {
+test_that("logLhat at level L recovers the 1D-integrate truth for a one-eta prdfn", {
   set.seed(1)
   oldwd <- setwd(tempdir())
   on.exit(setwd(oldwd))
@@ -66,13 +66,13 @@ test_that("logLhat at level L recovers the 1D-integrate truth for a one-eta mode
         subjIdx           = i,
         psiFull           = psi,
         etaModes          = etaModes,
-        omegaSpec          = om,
+        omega          = om,
         nodesSubj         = nodes,
         xPred             = xPred,
         datalist           = data,
         outerActiveNames = "mu_pop",
         mode               = "moments_only")
-      # 5-place tolerance at level >= 4 for this simple model.
+      # 5-place tolerance at level >= 4 for this simple prdfn.
       tol <- switch(as.character(level), `3` = 1e-2, `4` = 1e-3, `5` = 1e-4)
       expect_equal(out$logLhat, truth, tolerance = tol,
                    info = sprintf("subject %d, level %d", i, level))
@@ -81,7 +81,7 @@ test_that("logLhat at level L recovers the 1D-integrate truth for a one-eta mode
 })
 
 
-test_that("gradient at outer params matches numDeriv on the one-eta model", {
+test_that("gradient at outer params matches numDeriv on the one-eta prdfn", {
   skip_if_not_installed("numDeriv")
   set.seed(2)
   oldwd <- setwd(tempdir())

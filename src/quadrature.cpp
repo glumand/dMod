@@ -113,6 +113,18 @@ static void enumerate_compositions(int K, int q,
 // For non-nested 1D rules (GH is non-nested), Smolyak weights are mixed-sign.
 // Dedup merges weights at coincident nodes; remaining sign mixture is handled
 // downstream via signed log-sum-exp in the per-subject evaluator.
+//' @name sparse_grid_gh
+//' @title Sparse-grid Gauss-Hermite quadrature nodes (Smolyak rule)
+//' @description Builds the K-dimensional Smolyak sparse grid for physicists'
+//'   Gauss-Hermite at depth `level`. Returns nodes `[B, K]` in z-space and
+//'   signed weights (length `B`).
+//' @param K Integer >= 1, problem dimension.
+//' @param level Integer >= K, Smolyak depth (K+1..K+3 is the useful range).
+//' @param deriv_mode Reserved for future Genz-Keister / adaptive refinement;
+//'   currently ignored.
+//' @return A list with `nodes` (B x K, batch-first), `weights` (length B,
+//'   signed), and `K`, `level`.
+//' @export
 // [[Rcpp::export]]
 List sparse_grid_gh(int K, int level, int deriv_mode = 0) {
   (void) deriv_mode;

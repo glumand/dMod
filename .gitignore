@@ -38,6 +38,13 @@ README_files/
 # -------------------------------------------------
 deriv2Tests/wd/
 
+# -------------------------------------------------
+# Bench scratch outputs. Only the immutable pre_rewrite baseline lives
+# in the repo; every other file under bench/baselines/ is transient.
+# -------------------------------------------------
+bench/baselines/*
+!bench/baselines/focei_theoph_pre_rewrite.rds
+
 
 # -------------------------------------------------
 # Temporary / generated files
@@ -55,27 +62,22 @@ deriv2Tests/wd/
 .positai
 
 # -------------------------------------------------
-# Test-time codegen (cOde / CppODE write per-test C/C++ files
-# into tests/testthat/; they're ephemeral and must not be tracked).
-# bloq_*.cpp, obsfn.cpp and expl_parfn_*.cpp are tracked fixtures,
-# so the ignore patterns below stay narrow on purpose.
+# Stray codegen leftovers under tests/testthat/. Tests already
+# setwd(tempdir()) before any cOde/CppODE call, so nothing should
+# land here — these patterns guard against pre-rewrite paths slipping
+# through and leaving artefacts behind. The only tracked non-.R files
+# under tests/testthat/ are helper-*.R, setup.R, fixtures/, and _snaps/.
 # -------------------------------------------------
 tests/testthat/*.c
-tests/testthat/odemodel*.cpp
-tests/testthat/decay_des_*
-tests/testthat/petab_fixture_*
-tests/testthat/rep_trafo_*
-tests/testthat/focei_*
-tests/testthat/bloq_p_*.c
-tests/testthat/reactions_for_Alyssa_model.csv
-# tracked-fixture allowlist (in case * patterns above ever broaden)
-!tests/testthat/bloq_err.cpp
-!tests/testthat/bloq_obs.cpp
-!tests/testthat/bloq_p_C1.cpp
-!tests/testthat/bloq_p_err_C1.cpp
-!tests/testthat/expl_parfn_C1.cpp
-!tests/testthat/expl_parfn_steady.cpp
-!tests/testthat/obsfn.cpp
+tests/testthat/*.cpp
+tests/testthat/*.o
+tests/testthat/*.so
+tests/testthat/*.dll
+tests/testthat/reactions_for_Alyssa*
+# testthat auto-creates _snaps/ on every run, even when no test uses
+# snapshots. If snapshot tests are added later, drop matching un-ignore
+# rules here (e.g. !tests/testthat/_snaps/some-test/).
+tests/testthat/_snaps/
 
 # -------------------------------------------------
 # Python caches (inst/code helpers shelled out via reticulate)

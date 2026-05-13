@@ -43,4 +43,3 @@ physicists' GH rule. Combined: \verb{log W_b = (K/2)*log(2) - log|det L_H| + log
 \seealso{
 \code{sparse_grid_gh} (Rcpp-exported, in \code{src/quadrature.cpp}).
 }
-\keyword{internal}

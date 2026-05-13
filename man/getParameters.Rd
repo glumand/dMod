@@ -12,31 +12,33 @@
 \alias{getParameters.eqnvec}
 \title{Extract the parameters of an object}
 \usage{
-getParameters(..., conditions = NULL)
+getParameters(x, ..., conditions = NULL)
 
-\method{getParameters}{odemodel}(x, conditions = NULL)
+\method{getParameters}{odemodel}(x, ..., conditions = NULL)
 
-\method{getParameters}{fn}(x, conditions = NULL)
+\method{getParameters}{fn}(x, ..., conditions = NULL)
 
-\method{getParameters}{parvec}(x, conditions = NULL)
+\method{getParameters}{parvec}(x, ..., conditions = NULL)
 
-\method{getParameters}{prdframe}(x, conditions = NULL)
+\method{getParameters}{prdframe}(x, ..., conditions = NULL)
 
-\method{getParameters}{prdlist}(x, conditions = NULL)
+\method{getParameters}{prdlist}(x, ..., conditions = NULL)
 
-\method{getParameters}{eqnlist}(x)
+\method{getParameters}{eqnlist}(x, ..., conditions = NULL)
 
-\method{getParameters}{eventlist}(x)
+\method{getParameters}{eventlist}(x, ..., conditions = NULL)
 
-\method{getParameters}{eqnvec}(x)
+\method{getParameters}{eqnvec}(x, ..., conditions = NULL)
 }
 \arguments{
-\item{...}{objects from which the parameters should be extracted}
+\item{x}{object from which the parameters are extracted}
+
+\item{...}{further objects; when supplied, parameters of all objects
+are unioned (each dispatched separately).}
 
 \item{conditions}{character vector specifying the conditions to
-which \code{getParameters} is restricted}
-
-\item{x}{object from which the parameters are extracted}
+which \code{getParameters} is restricted (only honored by methods that
+carry per-condition parameter mappings).}
 }
 \value{
 The parameters in a format that depends on the class of \code{x}.

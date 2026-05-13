@@ -163,13 +163,13 @@ omega <- function(eta,
 
 
 
-#' Print method for omegaSpec
+#' Print method for omega
 #'
 #' @param x An `omegaSpec` object.
 #' @param ... Ignored.
 #' @export
 print.omegaSpec <- function(x, ...) {
-  cat("omegaSpec\n")
+  cat("omega\n")
   cat(sprintf("  K           : %d\n", x$K))
   cat(sprintf("  eta         : %s\n", paste(x$eta, collapse = ", ")))
   cat(sprintf("  structure   : %s\n", x$structure))
@@ -189,7 +189,7 @@ print.omegaSpec <- function(x, ...) {
 
 
 
-#' ECM closed-form update for the omegaSpec Cholesky parameters
+#' ECM closed-form update for the omega Cholesky parameters
 #'
 #' @description
 #' Given a list of per-subject posterior second moments
@@ -206,15 +206,15 @@ print.omegaSpec <- function(x, ...) {
 #'
 #' @param MHatList Length-N list of K x K positive-semidefinite matrices
 #'   (subject posterior second moments).
-#' @param omegaSpec An [omega] spec object.
-#' @return Named numeric vector matching `omegaSpec$cholPars` (log-diagonal
+#' @param omega An [omega] spec object.
+#' @return Named numeric vector matching `omega$cholPars` (log-diagonal
 #'   on diagonals, free real on off-diagonals).
 #' @seealso [omega], [ecmEvaluateSubject]
 #' @export
-updateOmegaChol <- function(MHatList, omegaSpec) {
-  if (!inherits(omegaSpec, "omegaSpec"))
-    stop("`omegaSpec` must be an omegaSpec object.")
-  K <- omegaSpec$K
+updateOmegaChol <- function(MHatList, omega) {
+  if (!inherits(omega, "omegaSpec"))
+    stop("`omega` must be an omegaSpec object (built by omega()).")
+  K <- omega$K
   N <- length(MHatList)
   if (N < 1L) stop("updateOmegaChol: MHatList is empty.")
 
@@ -229,9 +229,9 @@ updateOmegaChol <- function(MHatList, omegaSpec) {
     S <- S + 1e-8 * diag(K)
   }
 
-  chol_pars <- omegaSpec$cholPars
-  chol_loc  <- omegaSpec$cholLoc
-  is_diag   <- omegaSpec$isDiag
+  chol_pars <- omega$cholPars
+  chol_loc  <- omega$cholLoc
+  is_diag   <- omega$isDiag
 
   # Pure diagonal (no off-diag cholPars): omega_kk = log(sqrt(S_kk)).
   if (all(is_diag)) {
@@ -244,7 +244,7 @@ updateOmegaChol <- function(MHatList, omegaSpec) {
   }
 
   # Full lower-triangular Cholesky.
-  if (omegaSpec$structure == "full") {
+  if (omega$structure == "full") {
     L_full <- t(chol(S))
     out <- setNames(numeric(length(chol_pars)), chol_pars)
     for (m in seq_along(chol_pars)) {
@@ -257,7 +257,7 @@ updateOmegaChol <- function(MHatList, omegaSpec) {
   # Selective correlate: minimise Q-function over the constrained cholPars.
   Q_obj <- function(chol_in) {
     v <- setNames(as.numeric(chol_in), chol_pars)
-    L <- omegaSpec$buildL(v)
+    L <- omega$buildL(v)
     Linv      <- forwardsolve(L, diag(K))
     Omega_inv <- crossprod(Linv)
     logdetO   <- 2 * sum(log(diag(L)))
@@ -308,7 +308,7 @@ updateOmegaChol <- function(MHatList, omegaSpec) {
 
 
 
-#' All random-effect parameter names of an omegaSpec
+#' All random-effect parameter names of an omega
 #'
 #' @description
 #' Returns the union of `cholPars` and all subject-level eta names in a single

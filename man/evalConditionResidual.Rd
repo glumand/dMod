@@ -8,13 +8,14 @@ evalConditionResidual(
   dataI,
   predictionI,
   pars,
-  errmodel = NULL,
+  errfn = NULL,
   fixed = NULL,
   cn = NULL,
   eCondNames = NULL,
   bessel = 1,
   deriv = TRUE,
-  deriv2 = FALSE
+  deriv2 = FALSE,
+  opt.BLOQ = c("M3", "M1", "M4NM", "M4BEAL")
 )
 }
 \arguments{
@@ -26,20 +27,23 @@ from a prdfn call).}
 
 \item{pars}{Named numeric parameter vector at which to evaluate.}
 
-\item{errmodel}{Optional obsfn defining a parameter-dependent error model.}
+\item{errfn}{Optional obsfn defining a parameter-dependent error model.}
 
-\item{fixed}{Optional fixed-parameter vector (passed through to errmodel).}
+\item{fixed}{Optional fixed-parameter vector (passed through to \code{errfn}).}
 
-\item{cn}{Character condition name. Required when \code{errmodel} is set, used
+\item{cn}{Character condition name. Required when \code{errfn} is set, used
 for errmodel condition routing.}
 
 \item{eCondNames}{Optional character vector of condition names that have
-an errmodel mapping. NULL means \code{errmodel} applies to all.}
+an errmodel mapping. NULL means \code{errfn} applies to all.}
 
 \item{bessel}{Bessel correction factor (default 1, matching the
 \code{use.bessel = FALSE} branch of \code{normL2}).}
 
 \item{deriv, deriv2}{Logical. Whether to return gradient/Hessian.}
+
+\item{opt.BLOQ}{Character. BLOQ likelihood treatment forwarded to \code{\link[=nll]{nll()}}.
+One of \code{"M1"}, \code{"M3"} (default), \code{"M4NM"}, \code{"M4BEAL"}.}
 }
 \value{
 An \link{objlist} for the single condition's contribution.

@@ -1,7 +1,7 @@
 context("nlmeFit(method='focei') orchestrator end-to-end")
 
 
-test_that("nlmeFit(method='focei') runs on a minimal one-eta NLME model", {
+test_that("nlmeFit(method='focei') runs on a minimal one-eta NLME prdfn", {
   set.seed(1)
 
   oldwd <- setwd(tempdir())
@@ -30,13 +30,13 @@ test_that("nlmeFit(method='focei') runs on a minimal one-eta NLME model", {
     stringsAsFactors = FALSE))
 
   om <- omega(eta = "eta", subjects = subjects)
-  joint <- normL2(data, g * x * p) + constraintL2(mu = 0, Omega = om)
+  obj <- normL2(data, g * x * p) + constraintL2(mu = 0, Omega = om)
 
   outer_init <- c(mu_pop = 2.0, omega_eta_eta = log(0.3))
 
   fit <- suppressMessages(nlmeFit(
-    joint, om, outer_init,
-    model = g * x * p, data = data,
+    obj, om, outer_init,
+    prdfn = g * x * p, data = data,
     method = "focei",
     control = list(focei = list(
       trustControl = list(rinit = 1, rmax = 10, iterlim = 50,
@@ -46,8 +46,8 @@ test_that("nlmeFit(method='focei') runs on a minimal one-eta NLME model", {
   expect_true(fit$converged)
   expect_true(is.finite(fit$value))
   expect_true(abs(fit$argument["mu_pop"] - mean(y_obs)) < 0.5)
-  expect_true(!is.null(fit$omega))
-  expect_equal(dim(fit$omega), c(1L, 1L))
+  expect_true(!is.null(fit$Omega))
+  expect_equal(dim(fit$Omega), c(1L, 1L))
   expect_equal(dim(fit$etaModes), c(length(subjects), 1L))
 })
 
@@ -82,7 +82,7 @@ test_that("trust on_step hook fires on every step decision", {
 
 
 test_that("nlmeFit() rejects unknown method via match.arg", {
-  expect_error(nlmeFit(joint = NULL, omegaSpec = NULL, init = c(p = 1),
+  expect_error(nlmeFit(obj = NULL, omega = NULL, init = c(p = 1),
                        method = "doesNotExist"),
                "'arg' should be one of")
 })

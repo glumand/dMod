@@ -25,9 +25,9 @@ build_one_eta_setup <- function(seed = 1L) {
                                  value = y_obs, condition = subjects,
                                  stringsAsFactors = FALSE))
   om <- omega(eta = "eta", subjects = subjects)
-  joint <- normL2(data, g * x * p) + constraintL2(mu = 0, Omega = om)
-  list(g = g, x = x, p = p, data = data, om = om, joint = joint,
-       model = g * x * p, subjects = subjects)
+  obj <- normL2(data, g * x * p) + constraintL2(mu = 0, Omega = om)
+  list(g = g, x = x, p = p, data = data, om = om, obj = obj,
+       prdfn = g * x * p, subjects = subjects)
 }
 
 
@@ -36,8 +36,8 @@ test_that("emObjfn quadrature constructs and exposes rebuildQuadrature", {
   on.exit(setwd(oldwd))
   s <- build_one_eta_setup(1L)
 
-  em <- emObjfn(s$joint, s$om,
-                model = s$model, data = s$data,
+  em <- emObjfn(s$obj, s$om,
+                prdfn = s$prdfn, data = s$data,
                 method = "quadrature", control = list(level = 4L))
   expect_s3_class(em, "emObjfn")
   expect_equal(attr(em, "method"), "quadrature")
@@ -53,8 +53,8 @@ test_that("rebuildQuadrature populates nodes, modes, and frozen state", {
   on.exit(setwd(oldwd))
   s <- build_one_eta_setup(2L)
 
-  em <- emObjfn(s$joint, s$om,
-                model = s$model, data = s$data,
+  em <- emObjfn(s$obj, s$om,
+                prdfn = s$prdfn, data = s$data,
                 method = "quadrature", control = list(level = 4L))
   psi <- c(mu_pop = 2.0, setNames(log(0.3), s$om$cholPars))
   refresh <- attr(em, "rebuildQuadrature")(psi)
@@ -76,8 +76,8 @@ test_that("frozen-node invariance: em(pars1) and em(pars2) reuse the same nodes"
   on.exit(setwd(oldwd))
   s <- build_one_eta_setup(3L)
 
-  em <- emObjfn(s$joint, s$om,
-                model = s$model, data = s$data,
+  em <- emObjfn(s$obj, s$om,
+                prdfn = s$prdfn, data = s$data,
                 method = "quadrature", control = list(level = 4L))
   psi <- c(mu_pop = 2.0, setNames(log(0.3), s$om$cholPars))
   attr(em, "rebuildQuadrature")(psi)
@@ -92,14 +92,14 @@ test_that("frozen-node invariance: em(pars1) and em(pars2) reuse the same nodes"
 })
 
 
-test_that("quadrature gradient matches numDeriv on the one-eta model", {
+test_that("quadrature gradient matches numDeriv on the one-eta prdfn", {
   skip_if_not_installed("numDeriv")
   oldwd <- setwd(tempdir())
   on.exit(setwd(oldwd))
   s <- build_one_eta_setup(4L)
 
-  em <- emObjfn(s$joint, s$om,
-                model = s$model, data = s$data,
+  em <- emObjfn(s$obj, s$om,
+                prdfn = s$prdfn, data = s$data,
                 method = "quadrature", control = list(level = 5L))
   psi <- c(mu_pop = 2.0, setNames(log(0.3), s$om$cholPars))
   attr(em, "rebuildQuadrature")(psi)

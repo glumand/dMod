@@ -55,7 +55,16 @@ detectFreeCores <- function(machine = NULL) {
     attr(freeCores, "ncores") <- res$nCores
     attr(freeCores, "used") <- res$occupied
   }
-  
+
+  # CRAN policy: R CMD check sets _R_CHECK_LIMIT_CORES_ and parallel forbids
+  # mc.cores > 2 in that mode. Cap before returning so all mclapply callsites
+  # (P, normL2, nlme, compile) stay legal under check without each having to
+  # know about the env var.
+  chk <- tolower(Sys.getenv("_R_CHECK_LIMIT_CORES_", ""))
+  if (nzchar(chk) && chk != "false") {
+    if (length(freeCores) > 0L) freeCores[] <- pmin(freeCores, 2L)
+  }
+
   freeCores
 }
 

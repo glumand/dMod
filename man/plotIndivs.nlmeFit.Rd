@@ -4,22 +4,46 @@
 \alias{plotIndivs.nlmeFit}
 \title{Per-subject individual fits for an nlmeFit}
 \usage{
-\method{plotIndivs}{nlmeFit}(x, times = NULL, ncol = 4L, showPred = TRUE, ...)
+\method{plotIndivs}{nlmeFit}(
+  x,
+  times = NULL,
+  ncol = 4L,
+  showPred = TRUE,
+  showBand = TRUE,
+  subjectsPerPage = NULL,
+  ...
+)
 }
 \arguments{
 \item{x}{An \link{nlmeFit}.}
 
 \item{times}{Optional grid of additional times for the smooth IPRED/PRED.}
 
-\item{ncol}{Facet column count (default 4).}
+\item{ncol}{Facet column count for the single-observable
+\code{facet_wrap(~ condition)} layout (default 4). Ignored in
+\code{facet_grid(name ~ condition)} mode.}
 
 \item{showPred}{Logical; overlay population PRED dashed (default TRUE).}
+
+\item{showBand}{Logical; draw the IPRED ± sigma ribbon if the fit carries
+an errfn (default TRUE).}
+
+\item{subjectsPerPage}{Optional integer. If set, subjects are split into
+pages of at most \code{subjectsPerPage} each and the function returns a list
+of ggplots (one per page, page index appended to the title). \code{NULL}
+(default) keeps the single-plot behaviour.}
 
 \item{...}{Ignored.}
 }
 \value{
-A ggplot.
+A ggplot, or a list of ggplots when \code{subjectsPerPage} is set.
 }
 \description{
-Per-subject individual fits for an nlmeFit
+Per-subject IPRED curve with an IPRED ± sigma ribbon derived
+from the fit's attached errfn, optional population PRED overlay dashed,
+and observed values as points. When the fit has a single observable the
+layout is \code{facet_wrap(~ condition)}; with multiple observables it switches
+to \code{facet_grid(name ~ condition)} (observables in rows, subjects in
+columns). Use \code{subjectsPerPage} to split very large cohorts into several
+plots.
 }

@@ -15,6 +15,8 @@
 A ggplot.
 }
 \description{
-S3 plot method for \link{nlmeFit}. Two-panel scatter: DV vs IPRED on
-the left, DV vs PRED on the right, identity line shown dashed.
+S3 plot method for \link{nlmeFit}. Two-panel scatter: DV vs IPRED
+on the left, DV vs PRED on the right, identity line shown dashed. With a
+multi-observable fit the observable becomes a faceting row
+(\code{name ~ panel}); otherwise one row with \code{facet_wrap(~ panel)}.
 }

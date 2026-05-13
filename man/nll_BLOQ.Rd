@@ -8,6 +8,8 @@ nll_BLOQ(
   nout.bloq,
   derivs.bloq,
   derivs.err.bloq,
+  derivs2 = NULL,
+  derivs2.err = NULL,
   par_names,
   opt.BLOQ = c("M3", "M4NM", "M4BEAL", "M1"),
   opt.hessian = c(BLOQ_part1 = TRUE, BLOQ_part2 = TRUE, BLOQ_part3 = TRUE)
@@ -17,6 +19,11 @@ nll_BLOQ(
 \item{nout.bloq}{The bloq output of \code{\link[=res]{res()}}}
 
 \item{derivs.bloq, derivs.err.bloq}{matrix of first derivatives}
+
+\item{derivs2, derivs2.err}{Optional 3D arrays of second prediction and
+error-model derivatives over the BLOQ rows. When non-\code{NULL}, the exact
+d^2 pred / d^2 sigma contributions to the Hessian are added on top of
+the Gauss-Newton-plus-Parts form.}
 
 \item{par_names}{Character vector of ALL parameter names (full set)}
 

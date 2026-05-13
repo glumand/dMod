@@ -12,16 +12,19 @@
 //     hess  += 2 * outer(dwr/dtheta, dwr/dtheta)              -- Part0 (GN)
 //            + ALOQ_part1 + ALOQ_part2 + ALOQ_part3            -- toggleable
 //            + (if use_deriv2_exact) 2 * wr/sigma * d2pred/dtheta^2
+//            +                       (2/sigma) (1 - wr^2) * d2sigma/dtheta^2
 //
 //   For BLOQ rows (val <= lloq):
 //     M3:   obj  += -2 log Phi(-wr)
 //           grad += 2 G(-wr) dwr/dtheta
 //           hess += 2 (-wr*G(-wr) + G(-wr)^2) outer(dwr, dwr) + parts2+3
 //                + (if use_deriv2_exact) 2 G(-wr)/sigma * d2pred/dtheta^2
+//                +                       -2 wr * G(-wr) / sigma * d2sigma/dtheta^2
 //     M4*:  obj  += -2 log(1 - Phi(wr)/Phi(w0))               (with stability)
 //           grad += 2 (c1 dwr - c2 dw0 + c3 dw0)
 //           hess += corresponding 3-part GN form (see nll_BLOQ)
 //                + (if use_deriv2_exact) 2 (c1-c2+c3)/sigma * d2pred/dtheta^2
+//                +                       -2/sigma (c1*wr + (c3-c2)*w0) * d2sigma/dtheta^2
 //
 //   M4BEAL additionally adds an ALOQ-side correction:
 //     obj  += 2 log Phi(w0)
@@ -60,10 +63,14 @@ enum class BloqMode {
 };
 
 struct AccumOpts {
-  // If true, adds the exact second-order pred contribution to the Hessian:
-  //   H += sum_i w_i * d^2 pred_i / d theta^2
-  // where w_i depends on the row partition (see math reference above).
-  // Sigma-theta cross terms remain GN-approximated.
+  // If true, adds the exact second-order pred and sigma contributions to the
+  // Hessian:
+  //   H += sum_i w_pred_i * d^2 pred_i / d theta^2
+  //     +  sum_i w_sig_i  * d^2 sigma_i / d theta^2     (if d2sigma != nullptr)
+  // where the per-row weights depend on the row partition (see math reference
+  // above). The d2sigma term requires sigma_depends_on_par = true and a
+  // non-null d2sigma buffer; otherwise it is skipped (and is mathematically
+  // zero anyway).
   bool use_deriv2_exact = false;
 
   // Selects BLOQ likelihood treatment. Has no effect on accumulate_aloq.
@@ -74,9 +81,9 @@ struct AccumOpts {
   // dependence on parameters in gradient and Hessian (Parts 1/2/3).
   bool sigma_depends_on_par = false;
 
-  // If true, d2sigma must be non-null. Currently unused (d2sigma exact term
-  // is not implemented; nll_ALOQ does not have it either). Reserved for a
-  // future fully-exact extension.
+  // If true, d2sigma must be non-null. Activates the d2sigma exact-Hessian
+  // term in accumulate_aloq / accumulate_bloq (gated also by use_deriv2_exact
+  // and sigma_depends_on_par).
   bool d2sigma_present = false;
 
   // Bessel correction factor applied to wr and w0 before any downstream math.

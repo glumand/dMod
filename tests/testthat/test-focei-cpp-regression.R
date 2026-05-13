@@ -61,16 +61,16 @@ test_that("nlmeFit(method='focei') matches the pre-rewrite Theoph baseline", {
   trafos <- branch(trafo, table = subj_table, apply = "insert")
   p <- P(trafos, method = "explicit", compile = TRUE,
          modelname = "theoph_cppreg_p", deriv2 = TRUE)
-  model <- g * x * p
+  prdfn <- g * x * p
 
   om <- omega(eta = c("eta_Ka", "eta_V", "eta_Cl"), subjects = subjects)
-  joint <- normL2(dlist, model, errmodel = err, use.bessel = FALSE) +
+  obj <- normL2(dlist, prdfn, errmodel = err, use.bessel = FALSE) +
            constraintL2(mu = 0, Omega = om)
 
-  fit <- nlmeFit(joint, om, ref$init,
-                 model    = model,
+  fit <- nlmeFit(obj, om, ref$init,
+                 prdfn    = prdfn,
                  data     = dlist,
-                 errmodel = err,
+                 errfn = err,
                  method   = "focei",
                  control  = list(focei = list(
                    innerControl = list(rtol = 1e-7, maxit = 30),

@@ -50,7 +50,9 @@ See \link{trust} for more details.}
 \item{verbose}{Logical, print verbose messages.}
 
 \item{cores}{number of cores used when computing profiles for several
-parameters.}
+parameters. Multiplies with the inner OpenMP threads of the C++ objective
+kernels (\code{getOption("dMod.objfn.threads")}); keep
+\code{cores * dMod.objfn.threads} below your core count.}
 
 \item{cautiousMode}{Logical, write every step to disk and don't delete intermediate results}
 

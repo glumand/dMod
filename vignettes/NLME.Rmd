@@ -7,6 +7,7 @@ output:
     toc: false
     number_sections: true
     keep_tex: false
+    latex_engine: xelatex
 header-includes:
   - \usepackage{amsmath,amssymb}
   - \usepackage{bm}
@@ -85,7 +86,7 @@ dMod composes a fit problem from four named function-objects:
   $\phi_{i,k} = \exp(\theta_k + \eta_{i,k})$ for log-normal random
   effects, with `branch(trafo, table = subj_table, apply = "insert")`
   routing per-subject etas (see `R/parameters.R`).
-* `errmodel` defines the residual variance structure, with
+* `errfn` defines the residual variance structure, with
   $\sigma(\phi_i, t_{ij})$ optionally depending on parameters and time.
 
 The composed prediction function $g \circ x \circ p$ produces, for
@@ -139,7 +140,7 @@ In code, the integrand of \eqref{eq:marginal} is built by composing
 $-2 \log p(y_i \mid \eta_i, \psi)$ summed across subjects, with
 `constraintL2(mu = 0, Omega = om)`, which provides the MVN prior
 $-2 \log p(\eta_i \mid \Omega)$ including the $N \log |\Omega|$
-normalisation. Their sum is the unintegrated joint negative
+normalisation. Their sum is the unintegrated obj negative
 log-density $-2 \log p(y, \eta \mid \psi)$ that both estimators
 consume. The exact call is shown in the example at the end of this
 vignette.
@@ -260,7 +261,7 @@ currently implement a stochastic path.
 
 ## Laplace approximation in the E-step
 
-Fix $\psi$ and define the per-subject negative joint log-density
+Fix $\psi$ and define the per-subject negative obj log-density
 
 $$
 \Phi_i(\eta) \;\equiv\; -\log p\!\left(y_i \mid \eta, \psi\right) -\log p\!\left(\eta \mid \Omega\right).
@@ -350,7 +351,7 @@ objective at $\psi$:
    $$
    \nabla^2_\psi F \;\approx\; 2 \sum_i \left[ H_i^{\psi\psi} - H_i^{\psi\eta} \left(H_i^{\eta\eta}\right)^{-1} \left(H_i^{\psi\eta}\right)^{\!\top} \right],
    $$
-   where the blocks come from a single batched `joint(deriv = TRUE)`
+   where the blocks come from a single batched `obj(deriv = TRUE)`
    call evaluated at every subject's mode.
 
 5. **Outer trust region** (dMod's `trust()`) takes a Newton step on
@@ -492,7 +493,7 @@ $$
 
 with sign tracked separately. `R/quadrature.R::makeSubjectNodes`
 performs this transform. The result is a per-subject grid that puts
-most of its mass where the joint posterior actually lives, recovers
+most of its mass where the obj posterior actually lives, recovers
 exact answers for products of Gaussians with the local approximation
 as a special case, and reduces gracefully to Laplace at level $K$ (a
 single node at the mode).
@@ -620,7 +621,7 @@ S \;=\; \frac{1}{N} \sum_{i=1}^N \hat M_i.
 $$
 
 `R/omegaClass.R::updateOmegaChol` consumes $S$ and re-parameterises
-into the Cholesky entries that `omegaSpec` exposes. Three structural
+into the Cholesky entries that `omega` exposes. Three structural
 cases:
 
 * **Pure diagonal** (`structure = "diag"`):
@@ -677,20 +678,20 @@ oral PK) is `inst/examples/theophylline.R`.
 
 ## Building the objective
 
-The joint negative log-density of \eqref{eq:marginal} is built from
+The obj negative log-density of \eqref{eq:marginal} is built from
 the standard dMod composable function pipeline:
 
-```{r joint-objfn}
+```{r obj-objfn}
 library(dMod)
 
 # x: ODE solution (from odemodel + Xs).
 # g: observation function.
 # p: parameter transformation, with branch(..., apply = "insert") to
 #    route per-subject etas.
-# err: optional error model (errmodel = NULL for fixed sigma in data).
-# om: omegaSpec with subject expansion, built via omega(..., subjects = ...).
+# err: optional error model (errfn = NULL for fixed sigma in data).
+# om: omega with subject expansion, built via omega(..., subjects = ...).
 
-joint <- normL2(dlist, g * x * p, errmodel = err) +
+obj <- normL2(dlist, g * x * p, errmodel = err) +
          constraintL2(mu = 0, Omega = om)
 ```
 
@@ -702,10 +703,10 @@ the Theophylline example for a worked starting vector.
 
 ```{r focei-call}
 fit_focei <- nlmeFit(
-  joint, om, init,
-  model    = model,           # the prdfn g * x * p
+  obj, om, init,
+  prdfn    = g * x * p,
   data     = dlist,
-  errmodel = err,
+  errfn    = err,
   method   = "focei",
   control  = list(focei = list(
     innerControl = list(rtol = 1e-7, maxit = 30),
@@ -730,8 +731,8 @@ estimate with the higher-accuracy quadrature ECM:
 
 ```{r quad-call}
 fit_quad <- nlmeFit(
-  joint, om, init,
-  model    = model, data = dlist, errmodel = err,
+  obj, om, init,
+  prdfn    = g * x * p, data = dlist, errfn = err,
   method   = "foceiQuadrature",
   control  = list(
     quadrature = list(epsQuadLevels  = c(4, 5, 6),

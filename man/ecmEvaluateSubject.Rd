@@ -8,11 +8,11 @@ ecmEvaluateSubject(
   subjIdx,
   psiFull,
   etaModes,
-  omegaSpec,
+  omega,
   nodesSubj,
   xPred,
   datalist,
-  errmodel = NULL,
+  errfn = NULL,
   fixed = NULL,
   outerActiveNames = NULL,
   mode = c("moments_only", "with_grad")
@@ -28,7 +28,7 @@ evaluate (structural + chol_pars; chol_pars are frozen during CM-1).}
 \code{subjIdx} is ignored. Other rows are passed through to the prediction
 call (required for parameter completeness in joint models).}
 
-\item{omegaSpec}{An \link{omega} spec object with subject expansion.}
+\item{omega}{An \link{omega} spec object with subject expansion.}
 
 \item{nodesSubj}{Output of \code{makeSubjectNodes(eta_hat_i, H_i, level)} for
 the active subject.}
@@ -37,7 +37,7 @@ the active subject.}
 
 \item{datalist}{The \link{datalist} used for the joint objective.}
 
-\item{errmodel}{Optional obsfn (passed through to
+\item{errfn}{Optional obsfn (passed through to
 \link{evalConditionResidual}).}
 
 \item{fixed}{Optional fixed-parameter vector.}
@@ -75,9 +75,9 @@ outer (population) parameters.
 This helper bypasses \link{normL2} / \link{constraintL2} entirely: the data
 likelihood contribution comes from the lifted \link{evalConditionResidual}
 (one prediction call per node, single-condition), the MVN prior on the
-subject's \eqn{\eta_b} is added in closed form via \code{omegaSpec$buildL}.
+subject's \eqn{\eta_b} is added in closed form via \code{omega$buildL}.
 Avoids the multi-condition parameter rebinding and full-population MVN
-contribution that calling \code{joint(..., conditions = subjects[i])} per node
+contribution that calling \code{obj(..., conditions = subjects[i])} per node
 would incur.
 }
 \seealso{

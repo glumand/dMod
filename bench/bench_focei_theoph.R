@@ -5,19 +5,21 @@
 ## breakdown, persists a baseline RDS for cross-commit comparison.
 ##
 ## Usage:
-##   Rscript testing/bench_focei_theoph.R
+##   Rscript bench/bench_focei_theoph.R
 ##
 ##   # or, to overwrite the baseline (only do this when introducing a new
 ##   # reference point intentionally):
-##   DMOD_BENCH_RECORD=1 Rscript testing/bench_focei_theoph.R
+##   DMOD_BENCH_RECORD=1 Rscript bench/bench_focei_theoph.R
 ##
-## Outputs (always overwritten):
-##   testing/baselines/focei_theoph_LAST.rds        most recent run
-##   testing/baselines/focei_theoph_Rprof.out       raw Rprof trace
-##   testing/baselines/focei_theoph_Rprof.txt       summaryRprof() dump
+## Outputs (always overwritten, in a transient scratch dir):
+##   <scratch>/focei_theoph_LAST.rds       most recent run
+##   <scratch>/focei_theoph_Rprof.out      raw Rprof trace
+##   <scratch>/focei_theoph_Rprof.txt      summaryRprof() dump
+##
+##   <scratch> defaults to tempdir(); override with env DMOD_BENCH_OUTDIR.
 ##
 ## Outputs (only on DMOD_BENCH_RECORD=1, or if file missing):
-##   testing/baselines/focei_theoph_pre_rewrite.rds   immutable baseline
+##   bench/baselines/focei_theoph_pre_rewrite.rds   immutable baseline
 ## ============================================================================
 
 .dmod_root <- "/home/simon/Documents/Projects/dMod"
@@ -27,11 +29,16 @@ if (requireNamespace("devtools", quietly = TRUE)) {
   library(dMod)
 }
 
-baseline_dir <- file.path(.dmod_root, "testing", "baselines")
+# Transient outputs go to a scratch dir (tempdir() by default). The immutable
+# pre-rewrite baseline is the only thing that lives under bench/baselines/.
+baseline_dir <- file.path(.dmod_root, "bench", "baselines")
 dir.create(baseline_dir, recursive = TRUE, showWarnings = FALSE)
-rprof_out  <- file.path(baseline_dir, "focei_theoph_Rprof.out")
-rprof_txt  <- file.path(baseline_dir, "focei_theoph_Rprof.txt")
-last_rds   <- file.path(baseline_dir, "focei_theoph_LAST.rds")
+scratch_dir  <- Sys.getenv("DMOD_BENCH_OUTDIR",
+                           unset = file.path(tempdir(), "dMod_bench_focei"))
+dir.create(scratch_dir, recursive = TRUE, showWarnings = FALSE)
+rprof_out  <- file.path(scratch_dir,  "focei_theoph_Rprof.out")
+rprof_txt  <- file.path(scratch_dir,  "focei_theoph_Rprof.txt")
+last_rds   <- file.path(scratch_dir,  "focei_theoph_LAST.rds")
 base_rds   <- file.path(baseline_dir, "focei_theoph_pre_rewrite.rds")
 
 wd <- file.path(tempdir(), "focei_bench")
@@ -137,7 +144,7 @@ record <- list(
   argument      = fit$argument,
   iterations    = fit$iterations,
   converged     = fit$converged,
-  omega         = fit$omega,
+  Omega         = fit$Omega,
   etaModes      = fit$etaModes,
   init          = init,
   prof_by_total = head(prof_summary$by.total, 30),

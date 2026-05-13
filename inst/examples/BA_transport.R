@@ -28,7 +28,7 @@ reactions <- eqnlist() %>%
 #             TCA_cell = "k_import * TCA_buffer - k_export_sinus * TCA_cell - k_export_cana * TCA_cell")
 
 # Translate reactions into ODE model object
-mymodel <- odemodel(reactions, modelname = "bamodel", compile = F)
+mymodel <- odemodel(reactions, modelname = "bamodel", compile = F, solver = "CppODE")
 x <- Xs(mymodel)
 
 # Define observables buffer and cellular
@@ -200,11 +200,11 @@ trafo <- eqnvec() %>%
   define("x~y", x = names(mysteadies), y = mysteadies) %>% 
   insert("x~10^y", x = .currentSymbols, y = toupper(.currentSymbols)) %>% 
   branch(conditions = c("closed", "open")) %>% 
-  define("k_reflux~10^3", conditionMatch = "open") %>% 
+  define("k_reflux~10^6", conditionMatch = "open") %>% 
   insert("S~0") # fixed structural non identifiablility
 
 # debugonce(P)
-p <- P(trafo, modelname = "bamodel_final", compile = TRUE)
+p <- P(trafo, modelname = "prdfn_bamodel_final", compile = TRUE)
 
 ## Prediction uncertainty taken from validation profile --------------------------------------------------------------------------
 

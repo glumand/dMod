@@ -1,6 +1,10 @@
 context("SteadyStates")
 test_that("steady_states_are_steady", {
 
+  # Run inside tempdir so steadyStates() (writes reactions_for_Alyssa*) and
+  # the Pexpl + odemodel codegen don't pollute tests/testthat/.
+  withr::local_dir(tempdir())
+
   #-!Start example code
   #-! library(dMod)
   #-! setwd(tempdir())
@@ -37,11 +41,6 @@ test_that("steady_states_are_steady", {
     return(all(steady_conds))
   }
 
-  unlink("*.c")
-  unlink("*.o")
-  unlink("*.so")
-  unlink("_model.csv")
-  
   # Define your expectations here
   expect_length(mysteadies, 3)
   expect_true(is_steady(prediction))

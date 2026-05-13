@@ -1,4 +1,4 @@
-context("updateOmegaChol projection onto omegaSpec structure")
+context("updateOmegaChol projection onto omega structure")
 
 
 # Helper: draw N samples eta_i ~ N(0, Omega_true), build MHatList = eta_i %o% eta_i.

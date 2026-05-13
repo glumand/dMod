@@ -148,7 +148,7 @@ test_that("bessel correction inflates the chi-square term by exactly factor^2", 
   # Reproduce normL2's bessel factor so we can predict the exact inflation.
   n     <- nrow(data_em$C1)
   p_all <- union(getParameters(ec$prd), getParameters(ec$e))
-  p_err <- setdiff(getSymbols(unlist(getEquations(ec$e))),
+  p_err <- setdiff(cOde::getSymbols(unlist(getEquations(ec$e))),
                    names(unlist(getEquations(ec$e))))
   bessel <- sqrt(n / (n - length(p_all) + length(p_err)))
 

@@ -41,20 +41,32 @@ focei_run <- function(model_cb, err_cb, joint_cb, init, subject_meta, fixed, con
     .Call(`_dMod_focei_run`, model_cb, err_cb, joint_cb, init, subject_meta, fixed, control, correction_mode, correction_cb)
 }
 
-normL2_kernel <- function(prediction, err_list_opt, meta_list, par_names_global, bessel, deriv2_requested, threads) {
-    .Call(`_dMod_normL2_kernel`, prediction, err_list_opt, meta_list, par_names_global, bessel, deriv2_requested, threads)
+normL2_kernel <- function(prediction, err_list_opt, meta_list, par_names_global, bessel, deriv2_requested, threads, bloq_mode = "M3") {
+    .Call(`_dMod_normL2_kernel`, prediction, err_list_opt, meta_list, par_names_global, bessel, deriv2_requested, threads, bloq_mode)
 }
 
+#' @name sparse_grid_gh
+#' @title Sparse-grid Gauss-Hermite quadrature nodes (Smolyak rule)
+#' @description Builds the K-dimensional Smolyak sparse grid for physicists'
+#'   Gauss-Hermite at depth `level`. Returns nodes `[B, K]` in z-space and
+#'   signed weights (length `B`).
+#' @param K Integer >= 1, problem dimension.
+#' @param level Integer >= K, Smolyak depth (K+1..K+3 is the useful range).
+#' @param deriv_mode Reserved for future Genz-Keister / adaptive refinement;
+#'   currently ignored.
+#' @return A list with `nodes` (B x K, batch-first), `weights` (length B,
+#'   signed), and `K`, `level`.
+#' @export
 sparse_grid_gh <- function(K, level, deriv_mode = 0L) {
     .Call(`_dMod_sparse_grid_gh`, K, level, deriv_mode)
 }
 
-residual_kernel_aloq <- function(pred, dpred, d2pred, y_data, sigma, dsigma, lloq, opts) {
-    .Call(`_dMod_residual_kernel_aloq`, pred, dpred, d2pred, y_data, sigma, dsigma, lloq, opts)
+residual_kernel_aloq <- function(pred, dpred, d2pred, y_data, sigma, dsigma, d2sigma, lloq, opts) {
+    .Call(`_dMod_residual_kernel_aloq`, pred, dpred, d2pred, y_data, sigma, dsigma, d2sigma, lloq, opts)
 }
 
-residual_kernel_bloq <- function(pred, dpred, d2pred, y_data, sigma, dsigma, lloq, opts) {
-    .Call(`_dMod_residual_kernel_bloq`, pred, dpred, d2pred, y_data, sigma, dsigma, lloq, opts)
+residual_kernel_bloq <- function(pred, dpred, d2pred, y_data, sigma, dsigma, d2sigma, lloq, opts) {
+    .Call(`_dMod_residual_kernel_bloq`, pred, dpred, d2pred, y_data, sigma, dsigma, d2sigma, lloq, opts)
 }
 
 trust_kernel <- function(objfun, parinit, rinit, rmax, iterlim, fterm, mterm) {

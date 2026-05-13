@@ -32,7 +32,7 @@
 #' }
 #'
 #' @seealso `sparse_grid_gh` (Rcpp-exported, in `src/quadrature.cpp`).
-#' @keywords internal
+#' @export
 makeSubjectNodes <- function(etaHat, Hi, level) {
   K <- length(etaHat)
   if (!is.matrix(Hi) || nrow(Hi) != K || ncol(Hi) != K)

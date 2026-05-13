@@ -2,7 +2,7 @@
 % Please edit documentation in R/omegaClass.R
 \name{print.omegaSpec}
 \alias{print.omegaSpec}
-\title{Print method for omegaSpec}
+\title{Print method for omega}
 \usage{
 \method{print}{omegaSpec}(x, ...)
 }
@@ -12,5 +12,5 @@
 \item{...}{Ignored.}
 }
 \description{
-Print method for omegaSpec
+Print method for omega
 }

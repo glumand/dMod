@@ -1,7 +1,7 @@
 context("evalConditionResidual lifted helper")
 
 
-test_that("evalConditionResidual matches the in-normL2 closure (no errmodel)", {
+test_that("evalConditionResidual matches the in-normL2 closure (no errfn)", {
   set.seed(1)
   oldwd <- setwd(tempdir())
   on.exit(setwd(oldwd))
@@ -63,11 +63,11 @@ test_that("normL2 still produces the same OFV after refactor (regression)", {
                                  value = y_obs, condition = subjects,
                                  stringsAsFactors = FALSE))
   om <- omega(eta = "eta", subjects = subjects)
-  joint <- normL2(data, g * x * p) + constraintL2(mu = 0, Omega = om)
+  obj <- normL2(data, g * x * p) + constraintL2(mu = 0, Omega = om)
 
   init <- c(mu_pop = 2.0, omega_eta_eta = log(0.3),
             setNames(rep(0, 4), paste0("eta_", subjects)))
-  res <- joint(init, deriv = TRUE)
+  res <- obj(init, deriv = TRUE)
   # Hand-computed: 4 conditions with eta=0, prediction = mu_pop = 2.0 each.
   # residual = (y - 2.0) / 0.2; obj = sum(r^2) + sum(log(2*pi*0.04)) + prior.
   expect_true(is.finite(res$value))

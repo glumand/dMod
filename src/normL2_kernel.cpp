@@ -38,6 +38,7 @@ struct CondInputs {
   int n_par_local   = 0;
   bool has_dsigma   = false;
   bool has_d2pred   = false;
+  bool has_d2sigma  = false;
   // local par -> global par index (1-based; 0 means not in global, skipped)
   std::vector<int> par_idx_global;
   // ALOQ-first ordering for all arrays; the first n_aloq entries are ALOQ rows,
@@ -49,6 +50,7 @@ struct CondInputs {
   std::vector<double> dpred;    // row-major [n_data, n_par_local]
   std::vector<double> dsigma;   // row-major [n_data, n_par_local], or empty
   std::vector<double> d2pred;   // row-major [n_data, n_par_local^2], or empty
+  std::vector<double> d2sigma;  // row-major [n_data, n_par_local^2], or empty
 };
 
 
@@ -179,7 +181,8 @@ CondInputs gather_one_condition(
     }
   }
 
-  // Gather dsigma if errmodel has deriv (mapped from err-par names to local pars).
+  // Gather dsigma / d2sigma if errmodel has deriv (mapped from err-par names
+  // to local pars).
   if (err_mat_opt.isNotNull()) {
     NumericMatrix em(err_mat_opt.get());
     RObject ed_sexp = em.attr("deriv");
@@ -218,10 +221,68 @@ CondInputs gather_one_condition(
         }
       }
       C.has_dsigma = any;
+
+      // d2sigma: same err-par -> local-par mapping; gather only when caller
+      // requested deriv2 (= want_d2pred) and when errmodel exposes deriv2.
+      if (want_d2pred) {
+        RObject ed2_sexp = em.attr("deriv2");
+        if (!ed2_sexp.isNULL()) {
+          NumericVector ed2_attr(ed2_sexp);
+          IntegerVector ed2_dim = ed2_attr.attr("dim");
+          if (ed2_dim.size() == 4) {
+            const int E0 = ed2_dim[0], E1 = ed2_dim[1], E2 = ed2_dim[2];
+            // Assume dimnames(deriv2)[[3]] == dimnames(deriv2)[[4]] ==
+            // err_par_names (the err deriv parameter order). We reuse the
+            // err_to_local mapping computed above.
+            const std::size_t N2 = (std::size_t) n_par_local
+                                   * (std::size_t) n_par_local;
+            C.d2sigma.assign((std::size_t) n_data * N2, 0.0);
+            bool any2 = false;
+            for (int j = 0; j < n_data; ++j) {
+              const int i = perm[j];
+              if (!sigma_is_na[i]) continue;
+              const int tei = t_idx_err[i] - 1;
+              const int oed_one = o_idx_err_d[i];
+              if (oed_one <= 0) continue;
+              const int oed = oed_one - 1;
+              double* dst = C.d2sigma.data() + (std::size_t) j * N2;
+              for (int p = 0; p < n_err_par; ++p) {
+                const int lp = err_to_local[p];
+                if (lp < 0) continue;
+                for (int q = 0; q < n_err_par; ++q) {
+                  const int lq = err_to_local[q];
+                  if (lq < 0) continue;
+                  const double v = ed2_attr[tei + oed * E0
+                                            + p * E0 * E1
+                                            + q * E0 * E1 * E2];
+                  dst[(std::size_t) lp * n_par_local + lq] = v;
+                  if (v != 0.0) any2 = true;
+                }
+              }
+            }
+            C.has_d2sigma = any2;
+          }
+        }
+      }
     }
   }
 
   return C;
+}
+
+}  // namespace
+
+
+namespace {
+
+dmod::BloqMode parse_normL2_bloq_mode(const std::string& s) {
+  if (s == "M1")     return dmod::BloqMode::M1;
+  if (s == "M3")     return dmod::BloqMode::M3;
+  if (s == "M4NM")   return dmod::BloqMode::M4NM;
+  if (s == "M4BEAL") return dmod::BloqMode::M4BEAL;
+  if (s == "NONE")   return dmod::BloqMode::NONE;
+  throw std::runtime_error("normL2_kernel: unknown bloq_mode '" + s +
+                           "' (expected one of M1, M3, M4NM, M4BEAL).");
 }
 
 }  // namespace
@@ -235,12 +296,15 @@ List normL2_kernel(
     CharacterVector par_names_global,
     double bessel,
     bool deriv2_requested,
-    int threads) {
+    int threads,
+    std::string bloq_mode = "M3") {
 
   const int n_cond = prediction.size();
   if ((int) meta_list.size() != n_cond)
     throw std::runtime_error("normL2_kernel: meta_list size mismatch.");
   const int n_par_global = par_names_global.size();
+
+  const dmod::BloqMode bmode = parse_normL2_bloq_mode(bloq_mode);
 
   List err_list;
   if (err_list_opt.isNotNull()) err_list = err_list_opt.get();
@@ -274,7 +338,7 @@ List normL2_kernel(
 
   dmod::AccumOpts base_opts;
   base_opts.use_deriv2_exact = deriv2_requested;
-  base_opts.bloq_mode        = dmod::BloqMode::M3;
+  base_opts.bloq_mode        = bmode;
   base_opts.bessel           = bessel;
 
 #ifdef _OPENMP
@@ -299,6 +363,7 @@ List normL2_kernel(
 
       dmod::AccumOpts opts = base_opts;
       opts.sigma_depends_on_par = C.has_dsigma;
+      opts.d2sigma_present      = C.has_d2sigma;
 
       // ALOQ rows
       if (C.n_aloq > 0) {
@@ -307,8 +372,8 @@ List normL2_kernel(
             C.pred.data(), C.dpred.data(),
             C.has_d2pred ? C.d2pred.data() : nullptr,
             C.y_data.data(), C.sigma.data(),
-            C.has_dsigma ? C.dsigma.data() : nullptr,
-            nullptr,
+            C.has_dsigma  ? C.dsigma.data()  : nullptr,
+            C.has_d2sigma ? C.d2sigma.data() : nullptr,
             C.lloq.data(),
             opts,
             value_cond, grad_cond.data(), hess_cond.data());
@@ -325,8 +390,8 @@ List normL2_kernel(
             C.has_d2pred ? (C.d2pred.data() + off_n3) : nullptr,
             C.y_data.data() + off_n,
             C.sigma.data()  + off_n,
-            C.has_dsigma ? (C.dsigma.data() + off_n2) : nullptr,
-            nullptr,
+            C.has_dsigma  ? (C.dsigma.data()  + off_n2) : nullptr,
+            C.has_d2sigma ? (C.d2sigma.data() + off_n3) : nullptr,
             C.lloq.data()   + off_n,
             opts,
             value_cond, grad_cond.data(), hess_cond.data());

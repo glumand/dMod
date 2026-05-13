@@ -2,15 +2,15 @@
 % Please edit documentation in R/nlme.R
 \name{nlmeFit}
 \alias{nlmeFit}
-\title{Fit a nonlinear mixed-effects model}
+\title{Fit a nonlinear mixed-effects prdfn}
 \usage{
 nlmeFit(
-  joint,
-  omegaSpec,
+  obj,
+  omega,
   init,
-  model = NULL,
+  prdfn = NULL,
   data = NULL,
-  errmodel = NULL,
+  errfn = NULL,
   fixed = NULL,
   method = c("focei", "quadrature", "foceiQuadrature"),
   control = list(),
@@ -18,20 +18,20 @@ nlmeFit(
 )
 }
 \arguments{
-\item{joint}{An \code{objfn} of the form
-\code{normL2(data, model, errmodel = err) + constraintL2(mu = 0, Omega = om)}.}
+\item{obj}{An \code{objfn} of the form
+\code{normL2(data, prdfn, errmodel = err) + constraintL2(mu = 0, Omega = om)}.}
 
-\item{omegaSpec}{An \link{omega} spec with subject expansion.}
+\item{omega}{An \link{omega} spec with subject expansion.}
 
 \item{init}{Named numeric starting parameter vector. Must contain all
-structural parameters and all \code{omegaSpec$cholPars}.}
+structural parameters and all \code{omega$cholPars}.}
 
-\item{model}{The prediction function \code{g * x * p} used to build \code{joint}.
+\item{prdfn}{The prediction function \code{g * x * p} used to build \code{obj}.
 Required.}
 
-\item{data}{The \link{datalist} used for \code{joint}. Required.}
+\item{data}{The \link{datalist} used for \code{obj}. Required.}
 
-\item{errmodel}{Optional obsfn defining a parameter-dependent error model.}
+\item{errfn}{Optional obsfn defining a parameter-dependent error model.}
 
 \item{fixed}{Optional named-numeric of fixed parameters.}
 
@@ -54,8 +54,8 @@ Recognised keys: \code{level}, \code{cores}, \code{epsQuadLevels}, \code{epsEcm}
 \value{
 An \code{nlmeFit} S3 list with fields \code{argument}, \code{value}, \code{gradient},
 \code{hessian}, \code{omega}, \code{etaModes}, \code{converged}, \code{iterations}, \code{emDiag},
-\code{method}, \code{foceiStart}, \code{stageTrace}, \code{model}, \code{data}, \code{omegaSpec},
-\code{errmodel}.
+\code{method}, \code{foceiStart}, \code{stageTrace}, \code{prdfn}, \code{data}, \code{omega},
+\code{errfn}.
 }
 \description{
 Builds the marginal-likelihood objective via \link{emObjfn} and runs the

@@ -4,21 +4,21 @@
 ##
 ## Math identities: envelope theorem for d/d theta at eta = eta*(theta),
 ## implicit chain via Newton hessian for d eta*/d theta, and the sigma-driven
-## contribution when the errmodel depends on theta or eta.
+## contribution when the errfn depends on theta or eta.
 .computeFoceiCorrection <- function(full_pars, joint_hessian, fixed,
                                     outer_names, H_inv_list,
-                                    model, errmodel, omegaSpec,
+                                    prdfn, errfn, omega,
                                     subjects, subject_etas, K, N,
                                     data_per_subject, times_union,
                                     conv2 = 2) {
   Q <- length(outer_names)
-  pred <- model(times = times_union, pars = full_pars, fixed = fixed,
+  pred <- prdfn(times = times_union, pars = full_pars, fixed = fixed,
                 deriv = TRUE, deriv2 = TRUE, conditions = subjects)
   correction <- setNames(numeric(Q), outer_names)
 
   err_pred <- NULL
   err_par_names <- character()
-  if (!is.null(errmodel)) {
+  if (!is.null(errfn)) {
     err_pred <- vector("list", N); names(err_pred) <- subjects
     for (i_e in seq_len(N)) {
       cn_e   <- subjects[i_e]
@@ -27,7 +27,7 @@
       fixedinner <- pinner[attr(pinner, "fixed")]
       pinner     <- as.parvec(pinner[setdiff(names(pinner), names(fixed))])
       fixedinner <- as.parvec(fixedinner, deriv = FALSE, deriv2 = FALSE)
-      err_pred[[cn_e]] <- errmodel(out = pred_e, pars = pinner,
+      err_pred[[cn_e]] <- errfn(out = pred_e, pars = pinner,
                                    fixed = fixedinner,
                                    conditions = cn_e)[[cn_e]]
     }
@@ -35,21 +35,21 @@
   }
   err_in_outer <- intersect(outer_names, err_par_names)
 
-  chol_in_outer <- intersect(outer_names, omegaSpec$cholPars)
+  chol_in_outer <- intersect(outer_names, omega$cholPars)
   dOmega_inv_dchol <- list()
   if (length(chol_in_outer) > 0L) {
-    chol_vec <- full_pars[omegaSpec$cholPars]
-    L0       <- omegaSpec$buildL(chol_vec)
+    chol_vec <- full_pars[omega$cholPars]
+    L0       <- omega$buildL(chol_vec)
     h_chol   <- sqrt(.Machine$double.eps) * pmax(abs(chol_vec), 1)
     for (cp in chol_in_outer) {
       cv_p <- chol_vec; cv_p[cp] <- cv_p[cp] + h_chol[cp]
       cv_m <- chol_vec; cv_m[cp] <- cv_m[cp] - h_chol[cp]
-      Lp <- omegaSpec$buildL(cv_p); Lm <- omegaSpec$buildL(cv_m)
+      Lp <- omega$buildL(cv_p); Lm <- omega$buildL(cv_m)
       Op_inv <- chol2inv(chol(Lp %*% t(Lp)))
       Om_inv <- chol2inv(chol(Lm %*% t(Lm)))
       dOmega_inv_dchol[[cp]] <- (Op_inv - Om_inv) / (2 * h_chol[cp])
       dimnames(dOmega_inv_dchol[[cp]]) <-
-        list(omegaSpec$eta, omegaSpec$eta)
+        list(omega$eta, omega$eta)
     }
   }
 
@@ -61,7 +61,7 @@
     d_full     <- attr(pred_i, "deriv")
     d2_full    <- attr(pred_i, "deriv2")
     if (is.null(d_full) || is.null(d2_full))
-      stop("`model` did not produce 'deriv'/'deriv2' attributes for ",
+      stop("`prdfn` did not produce 'deriv'/'deriv2' attributes for ",
            "condition '", cn, "'. Did you build it with deriv2-capable ",
            "Xs/Y/P?")
 
@@ -80,14 +80,14 @@
       ti_e   <- match.num(times_i, pt)
       ni_e   <- match(names_i, colnames(err_i))
       if (anyNA(ti_e) || anyNA(ni_e))
-        stop("compute_correction: cannot align data point to errmodel grid.")
+        stop("compute_correction: cannot align data point to errfn grid.")
       sigma_from_err <- err_i[cbind(ti_e, ni_e)]
       sigma_i <- ifelse(is.na(sigma_i), sigma_from_err, sigma_i)
       d_err  <- attr(err_i, "deriv")
       if (!is.null(d_err)) {
         oi_e <- match(names_i, dimnames(d_err)[[2]])
         if (anyNA(oi_e))
-          stop("compute_correction: data name not in errmodel deriv axis.")
+          stop("compute_correction: data name not in errfn deriv axis.")
       }
     }
     time_idx <- match(times_i, times_union)
@@ -127,7 +127,7 @@
 
     if (length(chol_in_outer) > 0L) {
       eta_pos  <- match(eta_avail, eta_i_nm)
-      eta_base <- omegaSpec$eta[eta_pos]
+      eta_base <- omega$eta[eta_pos]
       for (cp in chol_in_outer) {
         dOmega_inv_sub <-
           dOmega_inv_dchol[[cp]][eta_base, eta_base, drop = FALSE]
@@ -208,12 +208,12 @@
 #' `method = "laplace"` has been folded into the C++ FOCEI kernel exposed by
 #' [nlmeFit] with `method = "focei"`. Call `nlmeFit` directly.
 #'
-#' @param joint An \code{objfn}, typically
+#' @param obj An \code{objfn}, typically
 #'   `normL2(data, g*x*p, errmodel = err) + constraintL2(mu = 0, Omega = om)`.
-#' @param omegaSpec An [omega] spec with subject expansion.
-#' @param model A `prdfn` (`g*x*p`). Required.
+#' @param omega An [omega] spec with subject expansion.
+#' @param prdfn A `prdfn` (`g*x*p`). Required.
 #' @param data A [datalist]. Required.
-#' @param errmodel Optional obsfn defining a parameter-dependent error model.
+#' @param errfn Optional obsfn defining a parameter-dependent error model.
 #' @param method Character. Only `"quadrature"` is supported. Retained for
 #'   forward compatibility; the historical `"laplace"` path now lives inside
 #'   the C++ FOCEI kernel reached via [nlmeFit] with `method = "focei"`.
@@ -226,20 +226,20 @@
 #'
 #' @seealso [nlmeFit], [omega]
 #' @export
-emObjfn <- function(joint, omegaSpec,
-                    model    = NULL,
+emObjfn <- function(obj, omega,
+                    prdfn    = NULL,
                     data     = NULL,
-                    errmodel = NULL,
+                    errfn = NULL,
                     method   = "quadrature",
                     control  = list()) {
   if (!identical(method, "quadrature"))
     stop("emObjfn(): only `method = \"quadrature\"` is supported. The Laplace ",
          "approximation was folded into the C++ FOCEI kernel; call ",
          "`nlmeFit(method = \"focei\")` directly.")
-  .emObjfn_quadrature(joint, omegaSpec,
-                      model    = model,
+  .emObjfn_quadrature(obj, omega,
+                      prdfn    = prdfn,
                       data     = data,
-                      errmodel = errmodel,
+                      errfn = errfn,
                       level    = control$level %||% 4L,
                       cores    = control$cores %||% 1L)
 }
@@ -253,28 +253,28 @@ emObjfn <- function(joint, omegaSpec,
 ## orchestrator (nlmeFit) calls attr(em, "rebuildQuadrature")(psiFull, level)
 ## to update the frozen state, then runs trust(em, init = psi_structural) to
 ## step over structural params while the integration grid stays fixed.
-.emObjfn_quadrature <- function(joint, omegaSpec, model, data, errmodel,
+.emObjfn_quadrature <- function(obj, omega, prdfn, data, errfn,
                                 level, cores) {
-  if (!inherits(joint, "objfn"))
-    stop("`joint` must be an objfn.")
-  if (!inherits(omegaSpec, "omegaSpec"))
-    stop("`omegaSpec` must be built by omega().")
-  if (is.null(omegaSpec$subjectEtas))
-    stop("`omegaSpec` must have subject expansion (call omega(..., subjects = ...)).")
-  if (is.null(model))
-    stop("`model` (the prdfn used to build `joint`) is required for ",
+  if (!inherits(obj, "objfn"))
+    stop("`obj` must be an objfn.")
+  if (!inherits(omega, "omegaSpec"))
+    stop("`omega` must be built by omega().")
+  if (is.null(omega$subjectEtas))
+    stop("`omega` must have subject expansion (call omega(..., subjects = ...)).")
+  if (is.null(prdfn))
+    stop("`prdfn` (the prdfn used to build `obj`) is required for ",
          "method = \"quadrature\".")
   if (is.null(data))
-    stop("`data` (the datalist used for joint) is required for ",
+    stop("`data` (the datalist used for obj) is required for ",
          "method = \"quadrature\".")
 
-  K            <- omegaSpec$K
-  subject_etas <- omegaSpec$subjectEtas
+  K            <- omega$K
+  subject_etas <- omega$subjectEtas
   subjects     <- rownames(subject_etas)
   N            <- length(subjects)
   all_eta_nm   <- as.vector(subject_etas)
-  chol_pars    <- omegaSpec$cholPars
-  joint_pars   <- attr(joint, "parameters")
+  chol_pars    <- omega$cholPars
+  joint_pars   <- attr(obj, "parameters")
 
   # Frozen E-step state (mutable via <<- inside rebuildQuadrature only).
   nodes_per_subject <- NULL
@@ -298,7 +298,7 @@ emObjfn <- function(joint, omegaSpec,
 
     inner_objfn <- function(eta_i_in, ...) {
       full_pars <- c(outer_input_with_chol, other_vals, eta_i_in)
-      out <- joint(pars = full_pars, fixed = fixed, deriv = TRUE,
+      out <- obj(pars = full_pars, fixed = fixed, deriv = TRUE,
                    conditions = subjects[subjIdx])
       gr <- out$gradient[eta_i_names]
       hs <- out$hessian[eta_i_names, eta_i_names, drop = FALSE]
@@ -329,7 +329,7 @@ emObjfn <- function(joint, omegaSpec,
                                   eta_init = NULL) {
     if (!is.null(level_new)) current_level <<- as.integer(level_new)
     if (!all(chol_pars %in% names(psiFull)))
-      stop("rebuildQuadrature: `psiFull` is missing omegaSpec$cholPars.")
+      stop("rebuildQuadrature: `psiFull` is missing omega$cholPars.")
     outer_with_chol_names <- intersect(names(psiFull),
                                        setdiff(joint_pars, all_eta_nm))
     outer_with_chol <- psiFull[outer_with_chol_names]
@@ -398,22 +398,22 @@ emObjfn <- function(joint, omegaSpec,
 
     if (cores == 1L) {
       per_subj <- lapply(seq_len(N), function(i) ecmEvaluateSubject(
-        i, psiFull, eta_modes_state, omegaSpec, nodes_per_subject[[i]],
-        xPred = model, datalist = data, errmodel = errmodel,
+        i, psiFull, eta_modes_state, omega, nodes_per_subject[[i]],
+        xPred = prdfn, datalist = data, errfn = errfn,
         fixed = fixed, outerActiveNames = outer_active,
         mode = if (deriv) "with_grad" else "moments_only"))
     } else if (.Platform$OS.type == "windows") {
       cl <- parallel::makeCluster(cores)
       on.exit(parallel::stopCluster(cl))
       per_subj <- parallel::parLapply(cl, seq_len(N), function(i) ecmEvaluateSubject(
-        i, psiFull, eta_modes_state, omegaSpec, nodes_per_subject[[i]],
-        xPred = model, datalist = data, errmodel = errmodel,
+        i, psiFull, eta_modes_state, omega, nodes_per_subject[[i]],
+        xPred = prdfn, datalist = data, errfn = errfn,
         fixed = fixed, outerActiveNames = outer_active,
         mode = if (deriv) "with_grad" else "moments_only"))
     } else {
       per_subj <- parallel::mclapply(seq_len(N), function(i) ecmEvaluateSubject(
-        i, psiFull, eta_modes_state, omegaSpec, nodes_per_subject[[i]],
-        xPred = model, datalist = data, errmodel = errmodel,
+        i, psiFull, eta_modes_state, omega, nodes_per_subject[[i]],
+        xPred = prdfn, datalist = data, errfn = errfn,
         fixed = fixed, outerActiveNames = outer_active,
         mode = if (deriv) "with_grad" else "moments_only"),
         mc.cores = cores)
@@ -462,13 +462,13 @@ emObjfn <- function(joint, omegaSpec,
 
   class(myfn) <- c("emObjfn", "objfn", "fn")
   attr(myfn, "method")     <- "quadrature"
-  attr(myfn, "conditions") <- attr(joint, "conditions")
+  attr(myfn, "conditions") <- attr(obj, "conditions")
   attr(myfn, "parameters") <- setdiff(joint_pars, all_eta_nm)
-  attr(myfn, "omegaSpec")  <- omegaSpec
-  attr(myfn, "joint")      <- joint
-  attr(myfn, "model")      <- model
+  attr(myfn, "omega")  <- omega
+  attr(myfn, "obj")      <- obj
+  attr(myfn, "prdfn")      <- prdfn
   attr(myfn, "data")       <- data
-  attr(myfn, "errmodel")   <- errmodel
+  attr(myfn, "errfn")   <- errfn
   attr(myfn, "rebuildQuadrature") <- rebuildQuadrature
   attr(myfn, "control")    <- list(level = level, cores = cores)
   myfn
@@ -476,20 +476,20 @@ emObjfn <- function(joint, omegaSpec,
 
 
 
-# nlmeFit S3 constructor. Bundles solver output with the model / data /
-# omegaSpec references that predict.nlmeFit and the diagnostic plot
+# nlmeFit S3 constructor. Bundles solver output with the prdfn / data /
+# omega references that predict.nlmeFit and the diagnostic plot
 # helpers (in plots.R) consume.
-nlmeFit_make <- function(argument, value, gradient, hessian, omega, etaModes,
+nlmeFit_make <- function(argument, value, gradient, hessian, Omega, etaModes,
                          converged, iterations, emDiag, method,
                          foceiStart = NULL, stageTrace = NULL,
-                         model = NULL, data = NULL, omegaSpec = NULL,
-                         errmodel = NULL) {
-  etaInfo  <- .computeEtaInfo(emDiag, omega, etaModes, omegaSpec)
+                         prdfn = NULL, data = NULL, omega = NULL,
+                         errfn = NULL) {
+  etaInfo  <- .computeEtaInfo(emDiag, Omega, etaModes)
   out <- list(argument   = argument,
               value      = value,
               gradient   = gradient,
               hessian    = hessian,
-              omega      = omega,
+              Omega      = Omega,
               etaModes   = etaModes,
               etaSE      = etaInfo$etaSE,
               shrinkage  = etaInfo$shrinkage,
@@ -499,10 +499,10 @@ nlmeFit_make <- function(argument, value, gradient, hessian, omega, etaModes,
               method     = method,
               foceiStart = foceiStart,
               stageTrace = stageTrace,
-              model      = model,
+              prdfn      = prdfn,
               data       = data,
-              omegaSpec  = omegaSpec,
-              errmodel   = errmodel)
+              omega      = omega,
+              errfn      = errfn)
   class(out) <- c("nlmeFit", "list")
   out
 }
@@ -511,7 +511,7 @@ nlmeFit_make <- function(argument, value, gradient, hessian, omega, etaModes,
 # random effects. Caller passes the full emDiag (which carries HInvList from
 # either the R or C++ Laplace path); returns NULLs when the inverse Hessian
 # list is unavailable (e.g. quadrature method).
-.computeEtaInfo <- function(emDiag, omega, etaModes, omegaSpec) {
+.computeEtaInfo <- function(emDiag, Omega, etaModes) {
   out <- list(etaSE = NULL, shrinkage = NULL)
   if (is.null(emDiag) || is.null(emDiag$HInvList) || is.null(etaModes))
     return(out)
@@ -532,11 +532,11 @@ nlmeFit_make <- function(argument, value, gradient, hessian, omega, etaModes,
   dimnames(etaSE) <- dimnames(etaModes)
   out$etaSE <- etaSE
 
-  if (!is.null(omega) && all(dim(omega) == c(K, K))) {
-    omega_sd <- sqrt(pmax(diag(omega), 0))
-    sd_mat <- matrix(omega_sd, N, K, byrow = TRUE)
+  if (!is.null(Omega) && all(dim(Omega) == c(K, K))) {
+    Omega_sd <- sqrt(pmax(diag(Omega), 0))
+    sd_mat <- matrix(Omega_sd, N, K, byrow = TRUE)
     shrink <- 1 - etaSE / sd_mat
-    shrink[, omega_sd <= 0] <- NA_real_
+    shrink[, Omega_sd <= 0] <- NA_real_
     dimnames(shrink) <- dimnames(etaModes)
     out$shrinkage <- shrink
   }
@@ -544,7 +544,7 @@ nlmeFit_make <- function(argument, value, gradient, hessian, omega, etaModes,
 }
 
 
-# Synthetic err callable for the case where the user supplied no errmodel
+# Synthetic err callable for the case where the user supplied no errfn
 # and instead set `data$sigma` directly. Returns a prdlist whose matrix has
 # the per-observation sigmas (from the data) padded onto the prediction's
 # time grid. No `deriv` attribute, so the C++ kernel treats `dsigma/deta = 0`.
@@ -564,10 +564,10 @@ nlmeFit_make <- function(argument, value, gradient, hessian, omega, etaModes,
     d <- data_per_subject[[s]]
     if (is.null(d))
       stop(".makeStaticErr: condition '", s,
-           "' missing from data; supply an errmodel.")
+           "' missing from data; supply an errfn.")
     if (anyNA(d$sigma))
       stop(".makeStaticErr: condition '", s,
-           "' has NA in data$sigma; supply an errmodel.")
+           "' has NA in data$sigma; supply an errfn.")
     err_mat <- matrix(NA_real_, length(pred_times), length(obs_names) + 1L)
     colnames(err_mat) <- c("time", obs_names)
     err_mat[, "time"] <- pred_times
@@ -586,8 +586,8 @@ nlmeFit_make <- function(argument, value, gradient, hessian, omega, etaModes,
 # C++ kernel. One row in t_idx_in_pred / o_idx_in_pred / y_data / ... per
 # observed data point of the subject, covering all observables. eta_idx_in_*
 # arrays are length K (one entry per random effect). Values 0 mark "no
-# contribution" (e.g. an eta does not appear in the err model's deriv).
-.buildFastMeta <- function(model, errmodel, data, subjects,
+# contribution" (e.g. an eta does not appear in the err prdfn's deriv).
+.buildFastMeta <- function(prdfn, errfn, data, subjects,
                            eta_names_list, pars_full_names, pars_probe) {
   N <- length(subjects)
   fast_meta <- vector("list", N)
@@ -598,8 +598,8 @@ nlmeFit_make <- function(argument, value, gradient, hessian, omega, etaModes,
     data_i <- data_i[order(data_i$time, data_i$name), , drop = FALSE]
     times_union <- sort(unique(data_i$time))
 
-    # Probe model + err once to learn deriv array structure.
-    pred_probe <- model(times = times_union, pars = pars_probe,
+    # Probe prdfn + err once to learn deriv array structure.
+    pred_probe <- prdfn(times = times_union, pars = pars_probe,
                         deriv = TRUE, conditions = s)
     prdf  <- pred_probe[[1]]
     pcols <- colnames(prdf)
@@ -607,11 +607,11 @@ nlmeFit_make <- function(argument, value, gradient, hessian, omega, etaModes,
     eta_names_i      <- eta_names_list[[i]]
     eta_idx_in_deriv <- match(eta_names_i, d_dn[[3]])
     if (anyNA(eta_idx_in_deriv))
-      stop(".buildFastMeta: eta names not present in model deriv array for ",
+      stop(".buildFastMeta: eta names not present in prdfn deriv array for ",
            "subject ", s, ".")
 
     pinner    <- attr(prdf, "parameters")
-    err_probe <- errmodel(out = prdf, pars = pinner, conditions = s)
+    err_probe <- errfn(out = prdf, pars = pinner, conditions = s)
     erm       <- err_probe[[1]]
     ecols     <- colnames(erm)
     e_attr    <- attr(erm, "deriv")
@@ -628,7 +628,7 @@ nlmeFit_make <- function(argument, value, gradient, hessian, omega, etaModes,
     t_idx_in_pred  <- match(data_i$time, prdf[, "time"])
     o_idx_in_pred  <- match(data_i$name, pcols)
     if (anyNA(o_idx_in_pred))
-      stop(".buildFastMeta: observable(s) not found in model output for ",
+      stop(".buildFastMeta: observable(s) not found in prdfn output for ",
            "subject ", s, ": ",
            paste(setdiff(unique(data_i$name), pcols), collapse = ", "))
     o_idx_in_deriv <- match(data_i$name, d_dn[[2]])
@@ -664,34 +664,34 @@ nlmeFit_make <- function(argument, value, gradient, hessian, omega, etaModes,
 # Used by nlmeFit(method = "focei"). Always uses the fast-inner C++ path
 # with eager Stage-2 correction, calling .computeFoceiCorrection as an
 # Rcpp::Function once per outer iter.
-.runFoceiCpp <- function(joint, omegaSpec, init, model, data, errmodel,
+.runFoceiCpp <- function(obj, omega, init, prdfn, data, errfn,
                          fixed = NULL,
                          innerControl = list(), trustControl = list(),
                          methodLabel = "focei") {
-  if (is.null(model))
-    stop(".runFoceiCpp: `model` (the prdfn) is required.")
+  if (is.null(prdfn))
+    stop(".runFoceiCpp: `prdfn` (the prdfn) is required.")
   if (is.null(data))
     stop(".runFoceiCpp: `data` (the datalist) is required.")
-  if (is.null(omegaSpec$subjectEtas))
-    stop(".runFoceiCpp: omegaSpec has no subject expansion. Call ",
+  if (is.null(omega$subjectEtas))
+    stop(".runFoceiCpp: omega has no subject expansion. Call ",
          "omega(..., subjects = ...).")
 
-  # When the user did not supply an errmodel but recorded sigma in the data
+  # When the user did not supply an errfn but recorded sigma in the data
   # itself, wrap the per-row sigmas into a synthetic obsfn-like callable.
   # The fast-inner kernel treats this as "sigma constant in eta" (no err
   # deriv attribute -> Js = 0).
-  if (is.null(errmodel)) errmodel <- .makeStaticErr(data)
+  if (is.null(errfn)) errfn <- .makeStaticErr(data)
 
-  K        <- omegaSpec$K
-  subjects <- rownames(omegaSpec$subjectEtas)
+  K        <- omega$K
+  subjects <- rownames(omega$subjectEtas)
   N        <- length(subjects)
   outer_names <- names(init)
-  eta_names_all <- as.vector(omegaSpec$subjectEtas)
+  eta_names_all <- as.vector(omega$subjectEtas)
   pars_full_names <- c(outer_names, eta_names_all)
   eta_idx_global <- matrix(0L, N, K)
   eta_names_list <- vector("list", N)
   for (i in seq_len(N)) {
-    nms <- omegaSpec$subjectEtas[i, ]
+    nms <- omega$subjectEtas[i, ]
     eta_names_list[[i]] <- nms
     eta_idx_global[i, ] <- match(nms, pars_full_names)
   }
@@ -718,13 +718,13 @@ nlmeFit_make <- function(argument, value, gradient, hessian, omega, etaModes,
 
   pars_probe <- setNames(numeric(length(pars_full_names)), pars_full_names)
   pars_probe[outer_names] <- init
-  fast_meta <- .buildFastMeta(model, errmodel, data, subjects,
+  fast_meta <- .buildFastMeta(prdfn, errfn, data, subjects,
                               eta_names_list, pars_full_names, pars_probe)
   om_meta <- list(
-    chol_pars = omegaSpec$cholPars,
-    chol_loc  = matrix(as.integer(omegaSpec$cholLoc), ncol = 2,
+    chol_pars = omega$cholPars,
+    chol_loc  = matrix(as.integer(omega$cholLoc), ncol = 2,
                        dimnames = NULL),
-    is_diag   = as.logical(omegaSpec$isDiag))
+    is_diag   = as.logical(omega$isDiag))
   subject_meta$fast_meta  <- fast_meta
   subject_meta$omega_meta <- om_meta
 
@@ -736,36 +736,36 @@ nlmeFit_make <- function(argument, value, gradient, hessian, omega, etaModes,
     .computeFoceiCorrection(
       full_pars = full_pars, joint_hessian = joint_hessian,
       fixed = fixed, outer_names = outer_names, H_inv_list = H_inv_list,
-      model = model, errmodel = errmodel, omegaSpec = omegaSpec,
-      subjects = subjects, subject_etas = omegaSpec$subjectEtas,
+      prdfn = prdfn, errfn = errfn, omega = omega,
+      subjects = subjects, subject_etas = omega$subjectEtas,
       K = K, N = N,
       data_per_subject = data_per_subject, times_union = times_union)
   }
 
-  fit <- focei_run(model_cb = model, err_cb = errmodel,
-                        joint_cb = joint, init = init,
+  fit <- focei_run(model_cb = prdfn, err_cb = errfn,
+                        joint_cb = obj, init = init,
                         subject_meta = subject_meta,
                         fixed = fixed, control = control_cpp,
                         correction_mode = "eager",
                         correction_cb = correction_cb)
 
-  L_omega <- if (all(omegaSpec$cholPars %in% names(fit$argument)))
-    omegaSpec$buildL(fit$argument[omegaSpec$cholPars]) else NULL
+  L_omega <- if (all(omega$cholPars %in% names(fit$argument)))
+    omega$buildL(fit$argument[omega$cholPars]) else NULL
   Omega <- if (!is.null(L_omega)) tcrossprod(L_omega) else NULL
   etaModes <- fit$etaModes
   rownames(etaModes) <- subjects
-  colnames(etaModes) <- omegaSpec$eta
+  colnames(etaModes) <- omega$eta
   emDiag <- list(etaStar = etaModes, logdet = fit$log_det_H,
                  sum_logdetH = fit$sum_logdetH, trace = fit$trace,
                  backend = "cpp", HInvList = fit$H_inv)
   nlmeFit_make(argument = fit$argument, value = fit$value,
                gradient = fit$gradient, hessian = fit$hessian,
-               omega = Omega, etaModes = etaModes,
+               Omega = Omega, etaModes = etaModes,
                converged = isTRUE(fit$converged),
                iterations = fit$iterations, emDiag = emDiag,
                method = methodLabel,
-               model = model, data = data,
-               omegaSpec = omegaSpec, errmodel = errmodel)
+               prdfn = prdfn, data = data,
+               omega = omega, errfn = errfn)
 }
 
 
@@ -776,7 +776,7 @@ nlmeFit_make <- function(argument, value, gradient, hessian, omega, etaModes,
                               epsOfvRel = 1e-5, maxEcmPerStage = 5L,
                               maxCm1Iter = 30L, cm1Control = list(),
                               methodLabel = "quadrature", verbose = TRUE) {
-  om <- attr(em, "omegaSpec")
+  om <- attr(em, "omega")
   K  <- om$K
   chol_pars <- om$cholPars
   if (is.null(epsQuadLevels)) epsQuadLevels <- K + 1:3
@@ -784,7 +784,7 @@ nlmeFit_make <- function(argument, value, gradient, hessian, omega, etaModes,
                          fterm = 1e-6, mterm = 1e-6), cm1Control)
   psi <- init
   if (!all(chol_pars %in% names(psi)))
-    stop("nlmeFit: `init` is missing omegaSpec$cholPars (",
+    stop("nlmeFit: `init` is missing omega$cholPars (",
          paste(setdiff(chol_pars, names(psi)), collapse = ", "), ").")
   structural_names <- setdiff(names(psi), chol_pars)
   rebuild <- attr(em, "rebuildQuadrature")
@@ -846,7 +846,7 @@ nlmeFit_make <- function(argument, value, gradient, hessian, omega, etaModes,
                value      = final_out$value,
                gradient   = final_out$gradient,
                hessian    = final_out$hessian,
-               omega      = Omega,
+               Omega      = Omega,
                etaModes   = final_diag$etaModes,
                converged  = conv,
                iterations = length(stage_rows),
@@ -854,28 +854,28 @@ nlmeFit_make <- function(argument, value, gradient, hessian, omega, etaModes,
                method     = methodLabel,
                foceiStart = foceiStart,
                stageTrace = do.call(rbind, stage_rows),
-               model      = attr(em, "model"),
+               prdfn      = attr(em, "prdfn"),
                data       = attr(em, "data"),
-               omegaSpec  = attr(em, "omegaSpec"),
-               errmodel   = attr(em, "errmodel"))
+               omega      = attr(em, "omega"),
+               errfn      = attr(em, "errfn"))
 }
 
 
-#' Fit a nonlinear mixed-effects model
+#' Fit a nonlinear mixed-effects prdfn
 #'
 #' Builds the marginal-likelihood objective via [emObjfn] and runs the
 #' selected estimator. Returns an `nlmeFit` S3 object consumable by the
 #' diagnostic helpers ([predict.nlmeFit], [plot.nlmeFit], [plotIndivs] etc.).
 #'
-#' @param joint An \code{objfn} of the form
-#'   `normL2(data, model, errmodel = err) + constraintL2(mu = 0, Omega = om)`.
-#' @param omegaSpec An [omega] spec with subject expansion.
+#' @param obj An \code{objfn} of the form
+#'   `normL2(data, prdfn, errmodel = err) + constraintL2(mu = 0, Omega = om)`.
+#' @param omega An [omega] spec with subject expansion.
 #' @param init Named numeric starting parameter vector. Must contain all
-#'   structural parameters and all `omegaSpec$cholPars`.
-#' @param model The prediction function `g * x * p` used to build `joint`.
+#'   structural parameters and all `omega$cholPars`.
+#' @param prdfn The prediction function `g * x * p` used to build `obj`.
 #'   Required.
-#' @param data The [datalist] used for `joint`. Required.
-#' @param errmodel Optional obsfn defining a parameter-dependent error model.
+#' @param data The [datalist] used for `obj`. Required.
+#' @param errfn Optional obsfn defining a parameter-dependent error model.
 #' @param fixed Optional named-numeric of fixed parameters.
 #' @param method Estimator. \code{"focei"} runs the C++ FOCEI kernel
 #'   (Laplace + trust + eager Stage-2 correction); \code{"quadrature"} runs
@@ -893,15 +893,15 @@ nlmeFit_make <- function(argument, value, gradient, hessian, omega, etaModes,
 #'
 #' @return An `nlmeFit` S3 list with fields `argument`, `value`, `gradient`,
 #'   `hessian`, `omega`, `etaModes`, `converged`, `iterations`, `emDiag`,
-#'   `method`, `foceiStart`, `stageTrace`, `model`, `data`, `omegaSpec`,
-#'   `errmodel`.
+#'   `method`, `foceiStart`, `stageTrace`, `prdfn`, `data`, `omega`,
+#'   `errfn`.
 #'
 #' @seealso [emObjfn], [omega], [predict.nlmeFit]
 #' @export
-nlmeFit <- function(joint, omegaSpec, init,
-                    model    = NULL,
+nlmeFit <- function(obj, omega, init,
+                    prdfn    = NULL,
                     data     = NULL,
-                    errmodel = NULL,
+                    errfn = NULL,
                     fixed    = NULL,
                     method   = c("focei", "quadrature", "foceiQuadrature"),
                     control  = list(),
@@ -911,8 +911,8 @@ nlmeFit <- function(joint, omegaSpec, init,
   qc <- control$quadrature %||% list()
 
   if (method == "focei") {
-    return(.runFoceiCpp(joint, omegaSpec, init,
-                        model = model, data = data, errmodel = errmodel,
+    return(.runFoceiCpp(obj, omega, init,
+                        prdfn = prdfn, data = data, errfn = errfn,
                         fixed = fixed,
                         innerControl = fc$innerControl %||% list(),
                         trustControl = fc$trustControl %||% list(),
@@ -920,8 +920,8 @@ nlmeFit <- function(joint, omegaSpec, init,
   }
 
   if (method == "quadrature") {
-    em <- emObjfn(joint, omegaSpec, model = model, data = data,
-                  errmodel = errmodel, control = qc)
+    em <- emObjfn(obj, omega, prdfn = prdfn, data = data,
+                  errfn = errfn, control = qc)
     return(.runQuadratureEcm(em, init, fixed = fixed,
                              foceiStart     = NULL,
                              epsQuadLevels  = qc$epsQuadLevels,
@@ -936,15 +936,15 @@ nlmeFit <- function(joint, omegaSpec, init,
 
   # foceiQuadrature: FOCEI warmstart + quadrature polish.
   if (verbose) message("nlmeFit: running FOCEI warmstart ...")
-  foceiStart <- .runFoceiCpp(joint, omegaSpec, init,
-                             model = model, data = data, errmodel = errmodel,
+  foceiStart <- .runFoceiCpp(obj, omega, init,
+                             prdfn = prdfn, data = data, errfn = errfn,
                              fixed = fixed,
                              innerControl = fc$innerControl %||% list(),
                              trustControl = fc$trustControl %||% list(),
                              methodLabel  = "focei")
   if (verbose) message(sprintf("  warmstart OFV = %.6f", foceiStart$value))
-  em_qd <- emObjfn(joint, omegaSpec, model = model, data = data,
-                   errmodel = errmodel, control = qc)
+  em_qd <- emObjfn(obj, omega, prdfn = prdfn, data = data,
+                   errfn = errfn, control = qc)
   .runQuadratureEcm(em_qd, foceiStart$argument, fixed = fixed,
                     foceiStart     = foceiStart,
                     epsQuadLevels  = qc$epsQuadLevels,
@@ -971,9 +971,9 @@ print.nlmeFit <- function(x, ...) {
               x$converged, format(x$iterations %||% NA_integer_)))
   cat("  argument     :\n")
   print(x$argument)
-  if (!is.null(x$omega)) {
+  if (!is.null(x$Omega)) {
     cat("  Omega        :\n")
-    print(round(x$omega, 4))
+    print(round(x$Omega, 4))
   }
   if (!is.null(x$etaModes) && !is.null(x$etaSE)) {
     cat("  eta (mode +/- SE, shrinkage):\n")
@@ -1016,9 +1016,9 @@ print.nlmeFit <- function(x, ...) {
 #' This helper bypasses [normL2] / [constraintL2] entirely: the data
 #' likelihood contribution comes from the lifted [evalConditionResidual]
 #' (one prediction call per node, single-condition), the MVN prior on the
-#' subject's \eqn{\eta_b} is added in closed form via `omegaSpec$buildL`.
+#' subject's \eqn{\eta_b} is added in closed form via `omega$buildL`.
 #' Avoids the multi-condition parameter rebinding and full-population MVN
-#' contribution that calling `joint(..., conditions = subjects[i])` per node
+#' contribution that calling `obj(..., conditions = subjects[i])` per node
 #' would incur.
 #'
 #' @param subjIdx Integer in `1..N` selecting the subject.
@@ -1027,12 +1027,12 @@ print.nlmeFit <- function(x, ...) {
 #' @param etaModes N x K matrix of all subjects' eta values; the row at
 #'   `subjIdx` is ignored. Other rows are passed through to the prediction
 #'   call (required for parameter completeness in joint models).
-#' @param omegaSpec An [omega] spec object with subject expansion.
+#' @param omega An [omega] spec object with subject expansion.
 #' @param nodesSubj Output of `makeSubjectNodes(eta_hat_i, H_i, level)` for
 #'   the active subject.
 #' @param xPred The prediction function (e.g. `g * x * p`).
 #' @param datalist The [datalist] used for the joint objective.
-#' @param errmodel Optional obsfn (passed through to
+#' @param errfn Optional obsfn (passed through to
 #'   [evalConditionResidual]).
 #' @param fixed Optional fixed-parameter vector.
 #' @param outerActiveNames Character vector of parameter names to track
@@ -1057,29 +1057,29 @@ print.nlmeFit <- function(x, ...) {
 #' @seealso [makeSubjectNodes], [evalConditionResidual]
 #' @keywords internal
 ecmEvaluateSubject <- function(subjIdx, psiFull, etaModes,
-                                 omegaSpec, nodesSubj,
+                                 omega, nodesSubj,
                                  xPred, datalist,
-                                 errmodel           = NULL,
+                                 errfn           = NULL,
                                  fixed              = NULL,
                                  outerActiveNames = NULL,
                                  mode               = c("moments_only", "with_grad")) {
   mode <- match.arg(mode)
   with_grad <- (mode == "with_grad")
 
-  K            <- omegaSpec$K
-  subject_etas <- omegaSpec$subjectEtas
+  K            <- omega$K
+  subject_etas <- omega$subjectEtas
   subjects     <- rownames(subject_etas)
   cn           <- subjects[subjIdx]
   eta_i_names  <- subject_etas[subjIdx, ]
-  chol_pars    <- omegaSpec$cholPars
+  chol_pars    <- omega$cholPars
 
   if (is.null(outerActiveNames)) outerActiveNames <- names(psiFull)
   if (!all(chol_pars %in% names(psiFull)))
-    stop("ecmEvaluateSubject: `psiFull` must contain all omegaSpec$cholPars.")
+    stop("ecmEvaluateSubject: `psiFull` must contain all omega$cholPars.")
 
   # Build closed-form prior log-normalisation: log N(eta_b|0,Omega)
   # = -K/2 log(2 pi) - log|L_omega| - 0.5 * z^T z, z = L_omega^{-1} eta_b.
-  L_omega         <- omegaSpec$buildL(psiFull[chol_pars])
+  L_omega         <- omega$buildL(psiFull[chol_pars])
   log_det_L_omega <- sum(log(diag(L_omega)))
   log_norm_prior  <- -K / 2 * log(2 * pi) - log_det_L_omega
 
@@ -1115,7 +1115,7 @@ ecmEvaluateSubject <- function(subjIdx, psiFull, etaModes,
       dataI        = dataI,
       predictionI  = pred_b[[cn]],
       pars          = full_pars,
-      errmodel      = errmodel,
+      errfn      = errfn,
       fixed         = fixed,
       cn            = cn,
       eCondNames  = NULL,
@@ -1159,8 +1159,8 @@ ecmEvaluateSubject <- function(subjIdx, psiFull, etaModes,
   m_hat <- as.numeric(softmax %*% nodesSubj$etaNodes)
   M_hat <- crossprod(nodesSubj$etaNodes,
                      softmax * nodesSubj$etaNodes)
-  names(m_hat) <- omegaSpec$eta
-  dimnames(M_hat) <- list(omegaSpec$eta, omegaSpec$eta)
+  names(m_hat) <- omega$eta
+  dimnames(M_hat) <- list(omega$eta, omega$eta)
 
   out <- list(logLhat     = logLhat,
               m_hat       = m_hat,
@@ -1185,5 +1185,231 @@ ecmEvaluateSubject <- function(subjIdx, psiFull, etaModes,
     out$hessian  <- -2 * H_lse
   }
   out
+}
+
+
+# Drop heavy state (emDiag, prdfn, data, omega, errfn, foceiStart,
+# stageTrace) from an nlmeFit so a parlist of msnlmeFit results stays small.
+# Keeps everything as.parframe.parlist + summary.parlist + downstream
+# diagnostics consume: argument, value, gradient, hessian, omega, etaModes,
+# etaSE, shrinkage, converged, iterations, method.
+.stripNlmeFit <- function(fit) {
+  keep <- c("argument", "value", "gradient", "hessian",
+            "omega", "etaModes", "etaSE", "shrinkage",
+            "converged", "iterations", "method")
+  out <- fit[intersect(keep, names(fit))]
+  class(out) <- class(fit)
+  out
+}
+
+
+#' Multi-start nonlinear mixed-effects fit
+#'
+#' Runs [nlmeFit()] from many starting points in parallel, returning a
+#' [parlist] of fits sorted-ready for [as.parframe()] / [summary()]. The
+#' design mirrors [mstrust()]: `center` is either a named-numeric (perturbed
+#' by `samplefun` per fit) or a [parframe] (each row used as a starting
+#' point). Use this to characterise the multi-modality of the marginal
+#' likelihood and pick the best optimum.
+#'
+#' @param obj An `objfn` passed straight to [nlmeFit()] (typically
+#'   `normL2(data, g*x*p) + constraintL2(mu = 0, Omega = om)`).
+#' @param omega An [omega] spec with subject expansion.
+#' @param center Named numeric or [parframe]. If numeric, the population
+#'   parameter vector around which random starts are sampled (structural pars
+#'   plus `omega$cholPars`). If a parframe, each row is used as a fixed
+#'   starting point and `fits` is overridden by `nrow(center)`.
+#' @param prdfn The prediction function `g * x * p` used to build `obj`.
+#' @param data The [datalist] used for `obj`.
+#' @param errfn Optional obsfn defining a parameter-dependent error model.
+#' @param fixed Optional named-numeric of fixed parameters.
+#' @param method Estimator. Passed through to [nlmeFit()]: `"focei"`,
+#'   `"quadrature"`, or `"foceiQuadrature"`.
+#' @param control Nested control list, passed through to [nlmeFit()].
+#' @param fits Integer, number of random starts. Ignored when `center` is a
+#'   parframe.
+#' @param cores Integer, number of parallel workers. On Unix uses
+#'   `parallel::mclapply` (fork); on Windows a PSOCK cluster + `foreach`.
+#'   Outer parallelism multiplies with the inner OpenMP threads of the C++
+#'   objective kernels (`getOption("dMod.objfn.threads")`); keep
+#'   `cores * dMod.objfn.threads` below your core count.
+#' @param samplefun Name of a random-number generator (default `"rnorm"`)
+#'   used to perturb `center`. Extra args in `...` whose names match
+#'   `formals(samplefun)` are forwarded.
+#' @param start1stfromCenter Logical. If `TRUE`, the first fit starts at
+#'   `center` itself (no perturbation). Ignored when `center` is a parframe.
+#' @param keepFull Logical. If `FALSE` (the default), each returned fit is
+#'   stripped of heavy state (`emDiag`, `prdfn`, `data`, `omega`,
+#'   `errfn`, `foceiStart`, `stageTrace`) so the result stays small.
+#'   Set `TRUE` if you need to call [predict.nlmeFit()] / [plot.nlmeFit()]
+#'   etc. on individual fits.
+#' @param studyname Optional character. If `output = TRUE`, fits are written
+#'   to `<resultPath>/<studyname>/trial-N-<timestamp>/interRes/`. Defaults to
+#'   `"msnlmeFit"`.
+#' @param resultPath Character, base directory for the on-disk dump.
+#' @param output Logical. If `TRUE`, each fit is saved as it completes
+#'   (crash-resilient) and the full parlist is written at the end.
+#' @param verbose Logical. If `TRUE`, prints per-fit progress and forwards
+#'   `verbose = TRUE` into [nlmeFit()].
+#' @param ... Forwarded to `samplefun` (e.g. `sd = 0.3`).
+#'
+#' @return A [parlist] of length `fits`, each element an `nlmeFit` (stripped
+#'   per `keepFull`) with `parinit` and `index` attached. Pass to
+#'   [as.parframe()] for a sorted-by-`value` table. Failed fits are stored
+#'   as `list(error = ..., value = NA, converged = FALSE, ...)`.
+#'
+#' @seealso [nlmeFit()], [mstrust()], [msParframe()], [parlist].
+#' @export
+msnlmeFit <- function(obj, omega, center,
+                      prdfn    = NULL,
+                      data     = NULL,
+                      errfn = NULL,
+                      fixed    = NULL,
+                      method   = c("focei", "quadrature", "foceiQuadrature"),
+                      control  = list(),
+                      fits     = 20,
+                      cores    = 1,
+                      samplefun = "rnorm",
+                      start1stfromCenter = FALSE,
+                      keepFull   = FALSE,
+                      studyname  = NULL,
+                      resultPath = ".",
+                      output     = FALSE,
+                      verbose    = FALSE,
+                      ...) {
+
+  method <- match.arg(method)
+  cores  <- sanitizeCores(cores)
+
+  # Build the per-fit starting points. parframe input fixes the number of
+  # fits and pulls starts directly from rows (sorted-by-value via
+  # as.parvec.parframe). Numeric input perturbs by samplefun().
+  varargslist <- list(...)
+  if (is.parframe(center)) {
+    fits <- nrow(center)
+    parInitList <- lapply(seq_len(fits), function(i) as.parvec(center, i))
+  } else {
+    if (is.null(names(center)) || any(!nzchar(names(center))))
+      stop("`center` must be a fully named numeric vector or a parframe.")
+    namessample <- intersect(names(formals(samplefun)), names(varargslist))
+    argssample  <- varargslist[namessample]
+    argssample$n <- length(center)
+    parInitList <- lapply(seq_len(fits), function(i) {
+      if (i == 1L && start1stfromCenter) {
+        center
+      } else {
+        perturb <- do.call(samplefun, argssample)
+        out <- center + perturb
+        names(out) <- names(center)
+        out
+      }
+    })
+  }
+  cores <- min(fits, cores)
+
+  # Optional on-disk dump (crash-resilient): one .Rda per fit + a final
+  # parameterList.Rda. Mirrors mstrust()'s folder layout.
+  interResultFolder <- NULL
+  resultFolder      <- NULL
+  if (output) {
+    if (is.null(studyname)) studyname <- "msnlmeFit"
+    m_timeStamp <- format(Sys.time(), "%d-%m-%Y-%H%M%S")
+    resultFolderBase <- file.path(resultPath, studyname)
+    n_existing <- length(dir(resultFolderBase, pattern = "trial*"))
+    m_trial <- paste0("trial-", n_existing + 1L)
+    resultFolder <- file.path(resultFolderBase,
+                              paste0(m_trial, "-", m_timeStamp))
+    interResultFolder <- file.path(resultFolder, "interRes")
+    dir.create(interResultFolder, showWarnings = FALSE, recursive = TRUE)
+  }
+
+  digits <- if (fits >= 10L) floor(log10(fits)) + 1L else 1L
+
+  doOne <- function(i) {
+    init_i <- parInitList[[i]]
+    # Invalidate Pimpl warm-start caches per fit so we do not inherit roots
+    # from a neighbouring start.
+    options(.dMod.fit_token = paste0("msnlme_", i, "_", as.numeric(Sys.time())))
+    t0 <- Sys.time()
+    fit <- try(suppressMessages(
+      nlmeFit(obj, omega, init_i,
+              prdfn = prdfn, data = data, errfn = errfn,
+              fixed = fixed, method = method, control = control,
+              verbose = verbose)),
+      silent = !verbose)
+    elapsed <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
+
+    if (inherits(fit, "try-error")) {
+      fit <- list(error      = as.character(fit),
+                  value      = NA_real_,
+                  converged  = FALSE,
+                  iterations = NA_integer_,
+                  method     = method)
+      class(fit) <- c("nlmeFit", "list")
+    } else if (!keepFull) {
+      fit <- .stripNlmeFit(fit)
+    }
+    fit$parinit <- init_i
+    fit$index   <- i
+    fit$elapsed <- elapsed
+
+    if (verbose) {
+      msg <- if (!is.null(fit$error)) {
+        sprintf("[msnlmeFit %s/%d] FAILED (%.1fs): %s",
+                formatC(i, width = digits, flag = "0"), fits,
+                elapsed, fit$error)
+      } else {
+        sprintf("[msnlmeFit %s/%d] OFV=%.6f  conv=%s  iter=%s  (%.1fs)",
+                formatC(i, width = digits, flag = "0"), fits,
+                fit$value, fit$converged,
+                format(fit$iterations %||% NA_integer_), elapsed)
+      }
+      message(msg)
+    }
+
+    if (output) {
+      saveRDS(fit, file = file.path(interResultFolder,
+                                    sprintf("fit-%d.Rda", i)))
+    }
+    fit
+  }
+
+  # Parallel dispatch. Fork on Unix; PSOCK + foreach on Windows so the
+  # workers can pick up obj / prdfn / data via clusterExport. Falls back to
+  # serial when cores == 1 or fits == 1.
+  if (cores > 1L) {
+    if (Sys.info()[['sysname']] == "Windows") {
+      cluster <- parallel::makeCluster(cores)
+      on.exit(parallel::stopCluster(cluster), add = TRUE)
+      doParallel::registerDoParallel(cluster)
+      parallel::clusterCall(cl = cluster,
+                            function(x) .libPaths(x), .libPaths())
+      parallel::clusterExport(
+        cluster, envir = environment(),
+        varlist = c("obj", "omega", "parInitList", "prdfn", "data",
+                    "errfn", "fixed", "method", "control", "verbose",
+                    "keepFull", "output", "interResultFolder", "fits",
+                    "digits"))
+      `%mydo%` <- foreach::`%dopar%`
+      i <- NULL
+      results <- foreach::foreach(
+        i = seq_len(fits),
+        .packages = .packages(),
+        .inorder = TRUE,
+        .options.multicore = list(preschedule = FALSE)) %mydo% doOne(i)
+    } else {
+      results <- parallel::mclapply(seq_len(fits), doOne,
+                                    mc.cores = cores,
+                                    mc.preschedule = FALSE)
+    }
+  } else {
+    results <- lapply(seq_len(fits), doOne)
+  }
+
+  if (output) {
+    saveRDS(results, file = file.path(resultFolder, "parameterList.Rda"))
+  }
+
+  as.parlist(results)
 }
 

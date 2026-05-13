@@ -1,6 +1,10 @@
 context("odemodel")
 test_that("Basic ODE model integration with forcings", {
-  
+
+  # Run inside tempdir so the odemodel() / Xs() / Xf() codegen
+  # (odemodel.c, odemodel_s.c, .so) doesn't pollute tests/testthat/.
+  withr::local_dir(tempdir())
+
   ## Generate the same model from an equation list
   f <- addReaction(NULL, from = "", to = "A", rate = "switch*F", description = "production")
   f <- addReaction(f   , from = "A", to = "", rate = "k*A", description = "degradation")

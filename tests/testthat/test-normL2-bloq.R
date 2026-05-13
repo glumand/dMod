@@ -1,10 +1,9 @@
 # Behavioral tests for normL2() on datasets with BLOQ (below-LLOQ) rows.
 #
-# Note: normL2() routes through nll() with the default opt.BLOQ = "M3";
-# the other modes (M1, M4NM, M4BEAL) are reachable only via direct nll()
-# calls and are covered in test-nll.R against closed-form formulas. This
-# file therefore concentrates on the END-TO-END M3 behaviour of normL2
-# under both objfn backends.
+# normL2() forwards `opt.BLOQ` to both backends (R nll() and the C++
+# normL2_kernel). The first three blocks below cover the default M3 path;
+# the trailing block exercises all four modes (M1, M3, M4NM, M4BEAL) via
+# the normL2() public API on both backends.
 #
 # Hessian / second-order semantics live in test-deriv2-normL2.R.
 
@@ -139,4 +138,73 @@ test_that("R and C++ backends give the same value on a BLOQ dataset", {
     v_C <- normL2(data, bench$prd_id)(pars)$value
   })
   expect_equal(v_C, v_R, tolerance = 1e-9)
+})
+
+
+## ---- opt.BLOQ wiring: M1 / M3 / M4NM / M4BEAL via normL2() -------------
+
+test_that("normL2(opt.BLOQ = ...) selects the BLOQ method on both backends", {
+  skip_if_no_compile()
+  bench <- fx_decay_compiled()
+  data  <- fx_decay_data_bloq(sigma = 0.05, lloq = 0.1,
+                              times = seq(0, 10, by = 1))
+  pars  <- bench$outerpars_id
+
+  # Closed-form per-mode reference at these pars.
+  prd_at    <- bench$prd_id(times = data$C1$time, pars = pars,
+                            deriv = FALSE)$C1
+  pred      <- prd_at[, "y"]
+  sigma_vec <- data$C1$sigma
+  lloq_vec  <- data$C1$lloq
+  val_post  <- pmax(data$C1$value, lloq_vec)
+  is_bloq   <- val_post <= lloq_vec
+
+  aloq_value <- truth_nll_aloq(pred[!is_bloq], data$C1$value[!is_bloq],
+                               sigma_vec[!is_bloq])
+  bloq_m3    <- truth_nll_bloq_m3(pred[is_bloq], lloq_vec[is_bloq],
+                                  sigma_vec[is_bloq])
+  bloq_m4    <- truth_nll_bloq_m4(pred[is_bloq], lloq_vec[is_bloq],
+                                  sigma_vec[is_bloq])
+  # M4BEAL adds 2 * sum(log Phi(w0)) on the ALOQ rows.
+  w0_aloq <- pred[!is_bloq] / sigma_vec[!is_bloq]
+  m4beal_aloq_correction <- 2 * sum(stats::pnorm(w0_aloq, log.p = TRUE))
+
+  expected <- c(
+    M1     = aloq_value,
+    M3     = aloq_value + bloq_m3,
+    M4NM   = aloq_value + bloq_m4,
+    M4BEAL = aloq_value + m4beal_aloq_correction + bloq_m4
+  )
+
+  for_each_backend(function(cpp) {
+    for (mode in names(expected)) {
+      obj <- normL2(data, bench$prd_id, opt.BLOQ = mode)
+      o   <- obj(pars)
+      expect_equal(o$value, expected[[mode]], tolerance = 1e-3,
+                   info = paste0("cpp=", cpp, " mode=", mode))
+    }
+  })
+
+  # Cross-backend agreement on the gradient (the new bloq_mode path has to
+  # match R for every method we propagate).
+  for (mode in c("M1", "M3", "M4NM", "M4BEAL")) {
+    with_cpp_backend(FALSE, {
+      g_R <- normL2(data, bench$prd_id, opt.BLOQ = mode)(pars)$gradient
+    })
+    with_cpp_backend(TRUE, {
+      g_C <- normL2(data, bench$prd_id, opt.BLOQ = mode)(pars)$gradient
+    })
+    expect_equal(g_C, g_R, tolerance = 1e-9,
+                 info = paste0("gradient parity, mode=", mode))
+  }
+})
+
+
+test_that("normL2 rejects unknown opt.BLOQ values", {
+  skip_if_no_compile()
+  bench <- fx_decay_compiled()
+  data  <- fx_decay_data_bloq(sigma = 0.05, lloq = 0.1,
+                              times = seq(0, 10, by = 1))
+  expect_error(normL2(data, bench$prd_id, opt.BLOQ = "M2"),
+               "should be one of")
 })

@@ -5,26 +5,26 @@
 \title{Build a quadrature-based NLME marginal-likelihood objective function}
 \usage{
 emObjfn(
-  joint,
-  omegaSpec,
-  model = NULL,
+  obj,
+  omega,
+  prdfn = NULL,
   data = NULL,
-  errmodel = NULL,
+  errfn = NULL,
   method = "quadrature",
   control = list()
 )
 }
 \arguments{
-\item{joint}{An \code{objfn}, typically
+\item{obj}{An \code{objfn}, typically
 \code{normL2(data, g*x*p, errmodel = err) + constraintL2(mu = 0, Omega = om)}.}
 
-\item{omegaSpec}{An \link{omega} spec with subject expansion.}
+\item{omega}{An \link{omega} spec with subject expansion.}
 
-\item{model}{A \code{prdfn} (\code{g*x*p}). Required.}
+\item{prdfn}{A \code{prdfn} (\code{g*x*p}). Required.}
 
 \item{data}{A \link{datalist}. Required.}
 
-\item{errmodel}{Optional obsfn defining a parameter-dependent error model.}
+\item{errfn}{Optional obsfn defining a parameter-dependent error model.}
 
 \item{method}{Character. Only \code{"quadrature"} is supported. Retained for
 forward compatibility; the historical \code{"laplace"} path now lives inside
