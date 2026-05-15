@@ -3,25 +3,24 @@
 \name{trust}
 \alias{trust}
 \alias{trustL1}
-\title{Non-Linear Optimization}
+\title{Non-linear optimisation via a trust-region method}
 \usage{
 trust(
   objfun,
   parinit,
   rinit,
   rmax,
-  parscale,
-  iterlim = 100,
+  parscale = NULL,
+  iterlim = 100L,
   fterm = 1e-06,
   mterm = 1e-06,
   minimize = TRUE,
   blather = FALSE,
-  parupper = Inf,
-  parlower = -Inf,
+  parupper = NULL,
+  parlower = NULL,
   printIter = FALSE,
   traceFile = NULL,
   on_step = NULL,
-  engine = c("R", "cpp"),
   ...
 )
 
@@ -47,62 +46,55 @@ trustL1(
 )
 }
 \arguments{
-\item{objfun}{an R function that computes value, gradient, and Hessian of the
-function to be minimized or maximized and returns them as a list with
-components value, gradient, and hessian. Its first argument should be a
-vector of the length of parinit followed by any other arguments specified
-by the \code{...} argument.}
+\item{objfun}{R function whose first argument is a numeric vector of
+parameters. Must return a list with components \code{value},
+\code{gradient}, \code{hessian}. Extra arguments accepted by
+\code{objfun} can be supplied via \code{...}.}
 
-\item{parinit}{starting parameter values for the optimization. Must be
-feasible (in the domain).}
+\item{parinit}{Named numeric starting vector. Must be finite. Values
+outside \code{[parlower, parupper]} are clipped with a warning.}
 
-\item{rinit}{starting trust region radius. The trust region radius
-(see details below) is adjusted as the algorithm proceeds. A bad initial
-value wastes a few steps while the radius is adjusted, but does not keep
-the algorithm from working properly.}
+\item{rinit}{Initial trust-region radius.}
 
-\item{rmax}{maximum allowed trust region radius. This may be set very large.
-If set small, the algorithm traces a steepest descent path (steepest ascent,
-when minimize = FALSE).}
+\item{rmax}{Maximum allowed trust-region radius.}
 
-\item{parscale}{an estimate of the size of each parameter at the minimum.
-The algorithm operates as if optimizing function(x, ...) objfun(x / parscale, ...).
-May be missing in which case no rescaling is done. See also the details section below.}
+\item{parscale}{Optional named or unnamed numeric of length
+\code{length(parinit)} for parameter rescaling. The subproblem
+operates on \code{g / parscale} and
+\code{H / outer(parscale, parscale)}.}
 
-\item{iterlim}{a positive integer specifying the maximum number of iterations
-to be performed before the program is terminated.}
+\item{iterlim}{Maximum number of outer trust-region iterations.}
 
-\item{fterm}{a positive scalar giving the tolerance at which the difference
-in objective function values in a step is considered close enough to zero to
-terminate the algorithm.}
+\item{fterm}{Convergence threshold on \code{|f - f_try|}.}
 
-\item{mterm}{a positive scalar giving the tolerance at which the two-term
-Taylor-series approximation to the difference in objective function values in
-a step is considered close enough to zero to terminate the algorithm.}
+\item{mterm}{Convergence threshold on
+\code{|g^T p + 0.5 * p^T H p|}.}
 
-\item{minimize}{If TRUE minimize. If FALSE maximize.}
+\item{minimize}{If \code{TRUE} (default) minimise; if \code{FALSE}
+maximise.}
 
-\item{blather}{If TRUE return extra info.}
+\item{blather}{If \code{TRUE} return the per-iteration trace
+(\code{argpath}, \code{argtry}, \code{steptype}, \code{accept},
+\code{r}, \code{rho}, \code{valpath}, \code{valtry},
+\code{preddiff}, \code{stepnorm}).}
 
-\item{parupper}{named numeric vector of upper bounds. If not named, first value will be used for all parameters.}
+\item{parupper, parlower}{Named or scalar numeric bounds. If unnamed,
+the first element broadcasts to all parameters; if named, the
+entries slot by name into a length-K vector defaulting to
+\code{+/- Inf}.}
 
-\item{parlower}{named numeric vector of lower bounds. If not named, first value will be used for all parameters.}
+\item{printIter}{If \code{TRUE} print iteration count and objective
+value to the console at each function evaluation.}
 
-\item{printIter}{print iteration information to R console}
+\item{traceFile}{Optional path. If non-\code{NULL}, CSV-log per
+evaluation \code{iter, value, p1, p2, ...}.}
 
-\item{traceFile}{Optional path. If non-\code{NULL}, per-iteration objective
-value and parameters are written there.}
+\item{on_step}{Optional R callback
+\code{function(rho, accepted, iter, r)} invoked once per step
+decision. Return value is ignored. Used by \code{\link{nlmeFit}}
+to invalidate cached FOCEI corrections on rejected steps.}
 
-\item{on_step}{Optional callback \verb{function(rho, accepted, iter, r)}
-invoked once per step decision; return value is ignored. Used by
-\code{\link[=nlmeFit]{nlmeFit()}} to invalidate cached FOCEI corrections on rejected steps.}
-
-\item{engine}{Character. \code{"R"} (default) uses the historical R implementation;
-\code{"cpp"} dispatches to the compiled outer-loop kernel when the problem
-matches its supported shape (no \code{parscale}, no bounds, no callbacks).
-The function silently falls back to \code{"R"} for unsupported cases.}
-
-\item{...}{additional argument to objfun}
+\item{...}{Additional named arguments forwarded to \code{objfun}.}
 
 \item{mu}{named numeric value. The reference value for L1 penalized parameters.}
 
@@ -113,54 +105,22 @@ The function silently falls back to \code{"R"} for unsupported cases.}
 \item{blather2}{even more information}
 }
 \value{
-A list containing the following components:
-\describe{
-\item{value}{the value returned by objfun at the final iterate.}
-\item{gradient}{the gradient returned by objfun at the final iterate.}
-\item{hessian}{the Hessian returned by objfun at the final iterate.}
-\item{argument}{the final iterate}
-\item{converged}{if TRUE the final iterate was deemed optimal by the
-specified termination criteria.}
-\item{iterations}{number of trust region subproblems done (including those
-whose solutions are not accepted).}
-\item{argpath}{(if blather == TRUE) the sequence of iterates, not including
-the final iterate.}
-\item{argtry}{(if blather == TRUE) the sequence of solutions of the trust
-region subproblem.}
-\item{steptype}{(if blather == TRUE) the sequence of cases that arise in
-solutions of the trust region subproblem. "Newton" means the Newton step
-solves the subproblem (lies within the trust region). Other values mean the
-subproblem solution is constrained. "easy-easy" means the eigenvectors
-corresponding to the minimal eigenvalue of the rescaled Hessian are not all
-orthogonal to the gradient. The other cases are rarely seen. "hard-hard" means
-the Lagrange multiplier for the trust region constraint is minus the minimal
-eigenvalue of the rescaled Hessian; "hard-easy" means it isn't.}
-\item{accept}{(if blather == TRUE) indicates which of the sequence of
-solutions of the trust region subproblem were accepted as the next iterate.
-(When not accepted the trust region radius is reduced, and the previous iterate
-is kept.)}
-\item{r}{(if blather == TRUE) the sequence of trust region radii.}
-\item{rho}{(if blather == TRUE) the sequence of ratios of actual over
-predicted decrease in the objective function in the trust region subproblem,
-where predicted means the predicted decrease in the two-term Taylor series model
-used in the subproblem.}
-\item{valpath}{(if blather == TRUE) the sequence of objective function values
-at the iterates.}
-\item{valtry}{(if blather == TRUE) the sequence of objective function values
-at the solutions of the trust region subproblem.}
-\item{preddiff}{(if blather == TRUE) the sequence of predicted differences using
-the two-term Taylor-series model between the function values at the current iterate
-and at the solution of the trust region subproblem.}
-\item{stepnorm}{(if blather == TRUE) the sequence of norms of steps, that is
-distance between current iterate and proposed new iterate found in the trust region
-subproblem.}
-}
+A list with components \code{argument}, \code{value},
+\code{gradient}, \code{hessian}, \code{iterations},
+\code{converged}. When \code{blather = TRUE} the list also
+contains \code{argpath}, \code{argtry}, \code{steptype},
+\code{accept}, \code{r}, \code{rho}, \code{valpath},
+\code{valtry}, \code{preddiff}, \code{stepnorm}.
 }
 \description{
-This function carries out a minimization or maximization of a function
-using a trust region algorithm. See the references for details.
+Minimise (or maximise) an objective function for which value, gradient,
+and Hessian are available. Uses a Moré-Sorensen subproblem on a working
+reduced space that drops coordinates pinned at a bound where the
+gradient pushes further into the bound (active-set treatment).
 }
 \details{
-See Fletcher (1987, Section 5.1) or Nocedal and Wright (1999, Section 4.2)
-for detailed expositions.
+The numerical kernel is implemented in C++ (see
+\code{src/trust_kernel.cpp}). This R-level wrapper only captures
+\code{...} into a closure around \code{objfun} so that callers can
+continue to pass extra named arguments through to the objective.
 }

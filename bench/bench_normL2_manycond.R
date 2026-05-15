@@ -108,7 +108,7 @@ res <- do.call(rbind, lapply(sizes, function(N) {
 }))
 print(res, row.names = FALSE)
 
-## Rprof on the N=64 case to confirm where the glue time actually goes
+## N=64 detailed analysis: backend comparison + Rprof on the glue path
 big <- probs[["64"]]
 prd_big <- g * x * big$p
 obj_big <- normL2(big$data, prd_big)
@@ -117,7 +117,37 @@ pouter <- structure(rep(-1, length(outerpars)), names = outerpars)
 times_b <- sort(unique(c(0, unlist(lapply(big$data, `[[`, "time")))))
 invisible(obj_big(pouter))
 
-cat("\n=== Rprof: 200 obj_big() calls (N_cond = 64) ===\n")
+## R vs cpp backend: toggled via getOption("dMod.objfn.cpp"), checked per call
+cat("\n=== R vs cpp backend (N = 64, deriv = TRUE) ===\n")
+old_opt <- getOption("dMod.objfn.cpp")
+
+options(dMod.objfn.cpp = TRUE)
+invisible(obj_big(pouter))
+mb_cpp <- microbenchmark(obj_big(pouter), times = 20L, unit = "ms")
+
+options(dMod.objfn.cpp = FALSE)
+invisible(obj_big(pouter))
+mb_r <- microbenchmark(obj_big(pouter), times = 20L, unit = "ms")
+
+options(dMod.objfn.cpp = old_opt)
+
+m_cpp <- median(mb_cpp$time) / 1e6
+m_r   <- median(mb_r$time)   / 1e6
+cat(sprintf("normL2 median: cpp = %.2f ms, R = %.2f ms, speedup R/cpp = %.2fx\n",
+            m_cpp, m_r, m_r / m_cpp))
+
+## sanity check: both backends should agree numerically
+options(dMod.objfn.cpp = TRUE);  o_cpp <- obj_big(pouter)
+options(dMod.objfn.cpp = FALSE); o_r   <- obj_big(pouter)
+options(dMod.objfn.cpp = old_opt)
+cat(sprintf("|value cpp - value R|     = %.3e\n",
+            abs(o_cpp$value - o_r$value)))
+cat(sprintf("max|gradient cpp - R|     = %.3e\n",
+            max(abs(o_cpp$gradient - o_r$gradient))))
+cat(sprintf("max|hessian  cpp - R|     = %.3e\n",
+            max(abs(o_cpp$hessian  - o_r$hessian))))
+
+cat("\n=== Rprof: 200 obj_big() calls (N_cond = 64, default backend) ===\n")
 pf <- tempfile(fileext = ".out")
 Rprof(pf, interval = 0.005)
 for (i in 1:200) invisible(obj_big(pouter))
@@ -143,5 +173,52 @@ top <- prof[order(-prof$self.time),
             c("self.time","self.pct","family")][1:20, ]
 top$fun <- rownames(top)
 print(top[, c("fun","self.time","self.pct","family")], row.names = FALSE)
+
+## profvis: same Rprof samples, but flame-graph UI with explicit .Call time
+## attribution. Lets us see how much wall time goes into CppODE's .Call
+## entries vs the per-condition R glue around it.
+if (requireNamespace("profvis", quietly = TRUE)) {
+  cat("\n=== profvis: 200 obj_big() calls (N_cond = 64) ===\n")
+  pv_N64 <- profvis::profvis(
+    for (i in 1:200) invisible(obj_big(pouter)),
+    interval = 0.005
+  )
+  html_path <- file.path(tempdir(), "profvis_normL2_N64.html")
+  ## selfcontained = FALSE: HTML + lib/ sidecar, no pandoc needed.
+  htmlwidgets::saveWidget(pv_N64, html_path, selfcontained = FALSE)
+  assign("pv_N64", pv_N64, envir = .GlobalEnv)
+  cat(sprintf("flame graph saved: %s\n", html_path))
+  cat("interactive view:  print(pv_N64)   (or browseURL(html_path))\n")
+
+  ## --- aggregate profvis samples by .Call vs R-glue ---
+  ## profvis stores parsed prof data; we walk its sample frames and
+  ## attribute each sample to the topmost .Call (= native C++ time) or
+  ## to the topmost R frame above it.
+  prof_df <- pv_N64$x$message$prof
+  if (!is.null(prof_df)) {
+    interval_ms <- pv_N64$x$message$interval %||% 5
+    by_sample <- split(prof_df, prof_df$time)
+    classify_stack <- function(s) {
+      labs <- s$label
+      if (any(grepl("\\.Call|CppODE::solveODE|CppODE_", labs))) return("cpp_call")
+      if (any(grepl("tryCatch", labs))) return("tryCatch_glue")
+      if (any(grepl("intersect|setdiff|union|unique|\\.set_ops", labs))) return("set_ops")
+      if (any(grepl("parvec|c\\.parvec|as\\.parvec|\\[\\.parvec", labs))) return("parvec")
+      if (any(grepl("lapply|do\\.call|\\*\\.fn|Reduce|FUN", labs))) return("compose_glue")
+      "other"
+    }
+    cats <- vapply(by_sample, classify_stack, "")
+    tab <- sort(table(cats), decreasing = TRUE)
+    tot <- sum(tab) * interval_ms
+    cat(sprintf("\nprofvis sample breakdown (interval = %g ms, %d samples = %.2fs):\n",
+                interval_ms, sum(tab), tot/1000))
+    for (k in names(tab))
+      cat(sprintf("  %-15s %5d samples  %6.0f ms  (%5.1f%%)\n",
+                  k, tab[[k]], tab[[k]] * interval_ms,
+                  100 * tab[[k]] / sum(tab)))
+  }
+} else {
+  cat("\n(profvis not installed; skip flame graph. install.packages('profvis'))\n")
+}
 
 cat("\nDONE\n")

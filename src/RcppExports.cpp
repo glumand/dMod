@@ -261,9 +261,9 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// trust_kernel
-List trust_kernel(Function objfun, NumericVector parinit, double rinit, double rmax, int iterlim, double fterm, double mterm);
-RcppExport SEXP _dMod_trust_kernel(SEXP objfunSEXP, SEXP parinitSEXP, SEXP rinitSEXP, SEXP rmaxSEXP, SEXP iterlimSEXP, SEXP ftermSEXP, SEXP mtermSEXP) {
+// trust_impl
+List trust_impl(Function objfun, NumericVector parinit, double rinit, double rmax, Nullable<NumericVector> parscale, int iterlim, double fterm, double mterm, bool minimize, bool blather, Nullable<NumericVector> parupper, Nullable<NumericVector> parlower, bool printIter, Nullable<CharacterVector> traceFile, Nullable<Function> on_step);
+RcppExport SEXP _dMod_trust_impl(SEXP objfunSEXP, SEXP parinitSEXP, SEXP rinitSEXP, SEXP rmaxSEXP, SEXP parscaleSEXP, SEXP iterlimSEXP, SEXP ftermSEXP, SEXP mtermSEXP, SEXP minimizeSEXP, SEXP blatherSEXP, SEXP parupperSEXP, SEXP parlowerSEXP, SEXP printIterSEXP, SEXP traceFileSEXP, SEXP on_stepSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -271,10 +271,18 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< NumericVector >::type parinit(parinitSEXP);
     Rcpp::traits::input_parameter< double >::type rinit(rinitSEXP);
     Rcpp::traits::input_parameter< double >::type rmax(rmaxSEXP);
+    Rcpp::traits::input_parameter< Nullable<NumericVector> >::type parscale(parscaleSEXP);
     Rcpp::traits::input_parameter< int >::type iterlim(iterlimSEXP);
     Rcpp::traits::input_parameter< double >::type fterm(ftermSEXP);
     Rcpp::traits::input_parameter< double >::type mterm(mtermSEXP);
-    rcpp_result_gen = Rcpp::wrap(trust_kernel(objfun, parinit, rinit, rmax, iterlim, fterm, mterm));
+    Rcpp::traits::input_parameter< bool >::type minimize(minimizeSEXP);
+    Rcpp::traits::input_parameter< bool >::type blather(blatherSEXP);
+    Rcpp::traits::input_parameter< Nullable<NumericVector> >::type parupper(parupperSEXP);
+    Rcpp::traits::input_parameter< Nullable<NumericVector> >::type parlower(parlowerSEXP);
+    Rcpp::traits::input_parameter< bool >::type printIter(printIterSEXP);
+    Rcpp::traits::input_parameter< Nullable<CharacterVector> >::type traceFile(traceFileSEXP);
+    Rcpp::traits::input_parameter< Nullable<Function> >::type on_step(on_stepSEXP);
+    rcpp_result_gen = Rcpp::wrap(trust_impl(objfun, parinit, rinit, rmax, parscale, iterlim, fterm, mterm, minimize, blather, parupper, parlower, printIter, traceFile, on_step));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -294,7 +302,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_dMod_sparse_grid_gh", (DL_FUNC) &_dMod_sparse_grid_gh, 3},
     {"_dMod_residual_kernel_aloq", (DL_FUNC) &_dMod_residual_kernel_aloq, 9},
     {"_dMod_residual_kernel_bloq", (DL_FUNC) &_dMod_residual_kernel_bloq, 9},
-    {"_dMod_trust_kernel", (DL_FUNC) &_dMod_trust_kernel, 7},
+    {"_dMod_trust_impl", (DL_FUNC) &_dMod_trust_impl, 15},
     {NULL, NULL, 0}
 };
 

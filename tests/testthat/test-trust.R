@@ -1,10 +1,12 @@
-# Behavioral tests for trust() (trust-region optimizer).
+# Behavioral tests for trust() (trust-region optimizer, C++ implementation).
 #
 # Verifies:
 #   * convergence to the exact minimum of a quadratic in one trust step
 #   * recovery of simulated-truth parameters from a noisy decay dataset
-#   * fixed = ... correctly holds out parameters
-#   * agreement between engine = "R" and engine = "cpp" on a simple case
+#   * extra objfun args passed via closure binding (no more ... forwarding)
+#   * parscale rescaling lands at the same minimum
+#   * parupper clamps a single component
+#   * blather returns the per-iter trace
 #
 # Trust is also exercised end-to-end via normL2 -> trust in
 # test-mstrust-profile.R and the existing FOCEI tests.
@@ -92,22 +94,6 @@ test_that("trust honors fixed = ... (held parameters unchanged in argument)", {
 })
 
 
-## ---- R vs cpp engine agreement ---------------------------------------
-
-test_that("trust engine R and engine cpp converge to the same value on a simple quadratic", {
-  target <- c(a = 1.0, b = -0.7)
-  obj <- .quadratic_objfn(target)
-  init <- c(a = 0, b = 0)
-
-  fit_R <- trust(obj, init, rinit = 5, rmax = 100, iterlim = 50,
-                 engine = "R", printIter = FALSE)
-  fit_C <- trust(obj, init, rinit = 5, rmax = 100, iterlim = 50,
-                 engine = "cpp", printIter = FALSE)
-  expect_equal(fit_C$value,    fit_R$value,    tolerance = 1e-10)
-  expect_equal(fit_C$argument, fit_R$argument, tolerance = 1e-8)
-})
-
-
 ## ---- parscale invariance --------------------------------------------
 
 test_that("trust with parscale lands at the same minimum as the unscaled run", {
@@ -140,4 +126,32 @@ test_that("trust honors parupper on one component while leaving the other free",
                printIter = FALSE)
   expect_equal(unname(fit$argument[["a"]]), 2.0, tolerance = 1e-5)
   expect_equal(unname(fit$argument[["b"]]), 1.0, tolerance = 1e-5)
+})
+
+
+## ---- blather returns the per-iter trace ------------------------------
+
+test_that("trust(blather = TRUE) returns all trace fields with finite numbers", {
+  target <- c(a = 1.0, b = -0.5, c = 2.3)
+  obj <- .quadratic_objfn(target)
+  init <- c(a = 0, b = 0, c = 0)
+
+  fit <- trust(obj, init, rinit = 0.3, rmax = 5, iterlim = 20,
+               blather = TRUE, printIter = FALSE)
+  expect_true(fit$converged)
+  n <- fit$iterations
+  expect_equal(nrow(fit$argpath), n)
+  expect_equal(ncol(fit$argpath), 3L)
+  expect_equal(nrow(fit$argtry),  n)
+  expect_equal(length(fit$steptype), n)
+  expect_equal(length(fit$accept),   n)
+  expect_equal(length(fit$r),        n)
+  expect_equal(length(fit$rho),      n)
+  expect_equal(length(fit$valpath),  n)
+  expect_equal(length(fit$valtry),   n)
+  expect_equal(length(fit$preddiff), n)
+  expect_equal(length(fit$stepnorm), n)
+  expect_true(all(fit$steptype %in% c("Newton", "easy-easy", "hard-easy", "hard-hard")))
+  expect_true(all(is.finite(fit$valpath)))
+  expect_true(all(fit$r >= 0))
 })

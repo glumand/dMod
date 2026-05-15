@@ -69,7 +69,7 @@ residual_kernel_bloq <- function(pred, dpred, d2pred, y_data, sigma, dsigma, d2s
     .Call(`_dMod_residual_kernel_bloq`, pred, dpred, d2pred, y_data, sigma, dsigma, d2sigma, lloq, opts)
 }
 
-trust_kernel <- function(objfun, parinit, rinit, rmax, iterlim, fterm, mterm) {
-    .Call(`_dMod_trust_kernel`, objfun, parinit, rinit, rmax, iterlim, fterm, mterm)
+trust_impl <- function(objfun, parinit, rinit, rmax, parscale = NULL, iterlim = 100L, fterm = 1e-6, mterm = 1e-6, minimize = TRUE, blather = FALSE, parupper = NULL, parlower = NULL, printIter = FALSE, traceFile = NULL, on_step = NULL) {
+    .Call(`_dMod_trust_impl`, objfun, parinit, rinit, rmax, parscale, iterlim, fterm, mterm, minimize, blather, parupper, parlower, printIter, traceFile, on_step)
 }
 
