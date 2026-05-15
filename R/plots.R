@@ -61,35 +61,71 @@ theme_dMod <- function(base_size = 12, base_family = "") {
   
 }
 
-dMod_colors <- c("#000000", "#C5000B", "#0084D1", "#579D1C", "#FF950E", "#4B1F6F", "#CC79A7","#006400", "#F0E442", "#8B4513", rep("gray", 100))
+dMod_colors <- c("#000000", "#C5000B", "#0084D1", "#579D1C", "#FF950E",
+                 "#4B1F6F", "#CC79A7", "#006400", "#F0E442", "#8B4513")
+
+#' Generate `n` distinct colors from the dMod palette
+#'
+#' Returns the first `n` seed colors directly. For `n` larger than the seed
+#' set, `Polychrome::createPalette()` extends the palette deterministically;
+#' if Polychrome is not installed, the overflow falls back to gray.
+#'
+#' @param n integer, number of colors to produce.
+#' @return Character vector of length `n` with hex color codes.
+#' @export
+dMod_palette <- function(n) {
+  n <- as.integer(n)
+  if (n <= 0L) return(character(0))
+  if (n <= length(dMod_colors)) {
+    return(unname(dMod_colors[seq_len(n)]))
+  }
+  if (requireNamespace("Polychrome", quietly = TRUE)) {
+    old_seed <- if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE))
+      get(".Random.seed", envir = .GlobalEnv, inherits = FALSE) else NULL
+    on.exit({
+      if (is.null(old_seed)) {
+        if (exists(".Random.seed", envir = .GlobalEnv, inherits = FALSE))
+          rm(".Random.seed", envir = .GlobalEnv)
+      } else {
+        assign(".Random.seed", old_seed, envir = .GlobalEnv)
+      }
+    }, add = TRUE)
+    set.seed(123L)
+    # createPalette() shifts the seeds slightly to maximize distinctness across
+    # the whole set; keep the original seeds verbatim and only borrow the tail.
+    extended <- unname(Polychrome::createPalette(n, seedcolors = dMod_colors))
+    return(c(dMod_colors, extended[(length(dMod_colors) + 1L):n]))
+  }
+  c(dMod_colors, rep("gray", n - length(dMod_colors)))
+}
 
 #' Standard dMod color palette
 #'
-#' @param ... arguments going to \code{scale_color_manual()}
+#' @param ... arguments forwarded to [ggplot2::discrete_scale()].
 #' @export
 #' @examples
 #' library(ggplot2)
 #' times <- seq(0, 2*pi, 0.1)
 #' values <- sin(times)
 #' data <- data.frame(
-#'    time = times, 
-#'    value = c(values, 1.2*values, 1.4*values, 1.6*values), 
+#'    time = times,
+#'    value = c(values, 1.2*values, 1.4*values, 1.6*values),
 #'    group = rep(c("C1", "C2", "C3", "C4"), each = length(times))
 #' )
-#' qplot(time, value, data = data, color = group, geom = "line") + 
+#' qplot(time, value, data = data, color = group, geom = "line") +
 #'    theme_dMod() + scale_color_dMod()
 #' @export
 scale_color_dMod <- function(...) {
-  scale_color_manual(..., values = dMod_colors)
+  ggplot2::discrete_scale(aesthetics = "colour", palette = dMod_palette, ...)
 }
 
 
-#' Standard dMod color scheme
+#' Standard dMod fill scheme
 #'
 #' @export
-#' @param ... arguments going to \code{scale_color_manual()}
+#' @param ... arguments forwarded to [ggplot2::discrete_scale()].
 scale_fill_dMod <- function(...) {
-  scale_fill_manual(..., values = dMod_colors)
+  ggplot2::discrete_scale(aesthetics = "fill", palette = dMod_palette, ...)
 }
 
 ggplot <- function(...) ggplot2::ggplot(...) + scale_color_dMod() + theme_dMod()
@@ -342,7 +378,7 @@ plotPaths <- function(profs, ..., whichPar = NULL, sort = FALSE, relative = TRUE
       geom_path() + #geom_point(aes=aes(size=1), alpha=1/3) +
       xlab(axis.labels[1]) + ylab(axis.labels[2]) +
       scale_linetype_discrete(name = "profile\nlist") +
-      scale_color_manual(name = "profiled\nparameter", values = dMod_colors)
+      scale_color_dMod(name = "profiled\nparameter")
   )
   
   attr(p, "data") <- data

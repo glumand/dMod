@@ -47,7 +47,8 @@ Suggests:
     withr,
     deSolve,
     JuliaCall,
-    openxlsx
+    openxlsx,
+    Polychrome
 VignetteBuilder: knitr
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)

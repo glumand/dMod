@@ -227,8 +227,8 @@ PlotPaths <- function(profs=myprofiles, ..., whichPar, sort = FALSE, relative = 
     data[,label := ifelse(max.dev %in% unique(max.dev)[1:n_pars], partner, "Others")]
     
     # Define the plotting colors
-    species_colors <- c( # c(dMod_colors[2:(n_pars+1)], rep("gray", 100))
-      setNames(dMod_colors[2:(n_pars+1)], unique(data$partner)[1:n_pars]),
+    species_colors <- c(
+      setNames(dMod_palette(n_pars + 1L)[-1L], unique(data$partner)[1:n_pars]),
       "Others" = "gray"
     )
     
@@ -257,7 +257,7 @@ PlotPaths <- function(profs=myprofiles, ..., whichPar, sort = FALSE, relative = 
         geom_path() + #geom_point(aes=aes(size=1), alpha=1/3) +
         xlab(axis.labels[1]) + ylab(axis.labels[2]) +
         scale_linetype_discrete(name = "profile\nlist") +
-        scale_color_manual(name = "profiled\nparameter", values = dMod_colors)
+        scale_color_dMod(name = "profiled\nparameter")
     )
   }
   

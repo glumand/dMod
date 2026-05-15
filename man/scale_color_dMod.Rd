@@ -7,7 +7,7 @@
 scale_color_dMod(...)
 }
 \arguments{
-\item{...}{arguments going to \code{scale_color_manual()}}
+\item{...}{arguments forwarded to \code{\link[ggplot2:discrete_scale]{ggplot2::discrete_scale()}}.}
 }
 \description{
 Standard dMod color palette
@@ -17,10 +17,10 @@ library(ggplot2)
 times <- seq(0, 2*pi, 0.1)
 values <- sin(times)
 data <- data.frame(
-   time = times, 
-   value = c(values, 1.2*values, 1.4*values, 1.6*values), 
+   time = times,
+   value = c(values, 1.2*values, 1.4*values, 1.6*values),
    group = rep(c("C1", "C2", "C3", "C4"), each = length(times))
 )
-qplot(time, value, data = data, color = group, geom = "line") + 
+qplot(time, value, data = data, color = group, geom = "line") +
    theme_dMod() + scale_color_dMod()
 }

@@ -2,13 +2,13 @@
 % Please edit documentation in R/plots.R
 \name{scale_fill_dMod}
 \alias{scale_fill_dMod}
-\title{Standard dMod color scheme}
+\title{Standard dMod fill scheme}
 \usage{
 scale_fill_dMod(...)
 }
 \arguments{
-\item{...}{arguments going to \code{scale_color_manual()}}
+\item{...}{arguments forwarded to \code{\link[ggplot2:discrete_scale]{ggplot2::discrete_scale()}}.}
 }
 \description{
-Standard dMod color scheme
+Standard dMod fill scheme
 }
