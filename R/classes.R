@@ -78,17 +78,9 @@ collectCompileInfo <- function(...) {
 #'   1st-order cost via `deriv = TRUE, deriv2 = FALSE` even when the model
 #'   was built with `deriv2 = TRUE`.
 #' @param forcings Character vector with the names of external forcings.
-#' @param events `data.frame` specifying discrete events during integration.
-#'   Must contain the columns `"var"` (character, name of the affected state),
-#'   `"time"` (character or numeric, time point),
-#'   `"value"` (character or numeric, value to apply), and
-#'   `"method"` (character, either `"replace"` or `"add"`).
-#'   Events must be defined here if they depend on parameters (e.g., event time or value).
-#'   If both `time` and `value` are purely numeric, such events may alternatively
-#'   be specified in [Xs()], but this is only supported for
-#'   `solver = "deSolve"`.
-#'   See [events][deSolve::events] for details on the `deSolve` implementation, or
-#'   [CppODE::CppODE()] for event handling in the `CppODE` / `Sundials` backends.
+#' @param events An [eventlist] (or `data.frame` coercible via [as.eventlist]).
+#'   Must be defined here — not on [Xs()] — so that the sensitivity equations
+#'   are extended consistently.
 #' @param outputs Named character vector for additional output variables.
 #' @param fixed Character vector with the names of parameters (initial values and dynamic)
 #'   for which no sensitivities are required (this speeds up integration).

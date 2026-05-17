@@ -13,7 +13,7 @@ Description: The framework provides functions to generate ODEs of reaction
 License: GPL (>= 2)
 Depends: R (>= 4.5.0)
 Imports:
-    cOde (>= 1.1),
+    cOde,
     CppODE,
     ggplot2,
     parallel,
@@ -36,7 +36,8 @@ Imports:
     nleqslv,
     scales
 Remotes:
-    simonbeyer1/CppODE
+    simonbeyer1/CppODE,
+    dkaschek/cOde
 Suggests:
     MASS,
     pander,

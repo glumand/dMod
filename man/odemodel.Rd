@@ -42,17 +42,9 @@ was built with \code{deriv2 = TRUE}.}
 
 \item{forcings}{Character vector with the names of external forcings.}
 
-\item{events}{\code{data.frame} specifying discrete events during integration.
-Must contain the columns \code{"var"} (character, name of the affected state),
-\code{"time"} (character or numeric, time point),
-\code{"value"} (character or numeric, value to apply), and
-\code{"method"} (character, either \code{"replace"} or \code{"add"}).
-Events must be defined here if they depend on parameters (e.g., event time or value).
-If both \code{time} and \code{value} are purely numeric, such events may alternatively
-be specified in \code{\link[=Xs]{Xs()}}, but this is only supported for
-\code{solver = "deSolve"}.
-See \link[deSolve:events]{events} for details on the \code{deSolve} implementation, or
-\code{\link[CppODE:CppODE]{CppODE::CppODE()}} for event handling in the \code{CppODE} / \code{Sundials} backends.}
+\item{events}{An \link{eventlist} (or \code{data.frame} coercible via \link{as.eventlist}).
+Must be defined here — not on \code{\link[=Xs]{Xs()}} — so that the sensitivity equations
+are extended consistently.}
 
 \item{outputs}{Named character vector for additional output variables.}
 

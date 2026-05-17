@@ -7,11 +7,10 @@
 #' @param forcings data.frame with columns name (factor), time (numeric) and value (numeric).
 #' The ODE forcings. Forcing support for the CppODE / Sundials backends depends
 #' on the chosen solver method; see [CppODE::CppODE()].
-#' @param events data.frame of events with columns "var" (character, the name of the state to be
-#' affected), "time" (numeric, time point), "value" (numeric, value), "method" (character, either
-#' "replace", "add" or "multiply"). See [events][deSolve::events].
-#' ATTENTION: Sensitivities for event states will only be correctly computed if defined within
-#' [odemodel()]. Specify events within `Xs()` only for forward simulation.
+#' @param events An [eventlist] (or `data.frame` coercible via [as.eventlist]).
+#' Applied to the forward simulation only — sensitivities are not corrected.
+#' Define events on [odemodel()] unless the prediction is used purely for
+#' forward simulation.
 #' @param names character vector with the states to be returned. If NULL, all states are returned.
 #' @param condition either NULL (generic prediction for any condition) or a character, denoting
 #' the condition for which the function makes a prediction.
@@ -327,75 +326,79 @@ Xs.CppODE <- function(odemodel, forcings = NULL, events = NULL, names = NULL, co
 }
 
 
-#' Model prediction function for ODE models without sensitivities. 
-#' @description Interface to get an ODE 
-#' into a model function `x(times, pars, forcings, events)` returning ODE output.
-#' It is a reduced version of [Xs], missing the sensitivities. 
+#' Model prediction function for ODE models without sensitivities.
+#' @description Reduced version of [Xs] that returns the ODE output without
+#' first- or second-order sensitivities. Dispatches on the [odemodel] class:
+#' the `deSolve` method drives the cOde backend, the `CppODE` method drives
+#' the CppODE / Sundials backend.
 #' @param odemodel Object of class [odemodel].
-#' @param forcings, see [Xs]
-#' @param events, see [Xs]
-#' @param condition either NULL (generic prediction for any condition) or a character, denoting
-#' the condition for which the function makes a prediction.
-#' @param optionsOde list with arguments to be passed to odeC() for the ODE integration.
-#' @param fcontrol list with additional fine-tuning arguments for the forcing interpolation. 
-#' See [approxfun][stats::approxfun] for possible arguments.
-#' @details Can be used to integrate additional quantities, e.g. fluxes, by adding them to `f`. 
-#' All quantities that are not initialised by pars 
-#' in `x(..., forcings, events)` are initialized with 0. For more details and
-#' the return value see [Xs].
+#' @param forcings see [Xs].
+#' @param events see [Xs].
+#' @param condition either NULL (generic prediction for any condition) or a
+#' character denoting the condition for which the function makes a prediction.
+#' @param optionsOde list with arguments passed to the ODE integrator (deSolve
+#' or [CppODE::solveODE]).
+#' @param fcontrol list with additional fine-tuning arguments for the forcing
+#' interpolation (cOde backend only). See [approxfun][stats::approxfun].
+#' @param ... not used.
+#' @details Can be used to integrate additional quantities, e.g. fluxes, by
+#' adding them to `f`. All quantities not initialised by `pars` are initialised
+#' to 0. For more details and the return value see [Xs].
 #' @export
-Xf <- function(odemodel, forcings = NULL, events = NULL, condition = NULL, optionsOde=list(method = "lsoda"), fcontrol = NULL) {
-  
+Xf <- function(odemodel, ...) {
+  UseMethod("Xf", odemodel)
+}
+
+#' @export
+#' @rdname Xf
+Xf.deSolve <- function(odemodel, forcings = NULL, events = NULL, condition = NULL,
+                       optionsOde = list(method = "lsoda"), fcontrol = NULL, ...) {
+
   func <- odemodel$func
-  
+
   myforcings <- forcings
   myevents <- events
   myfcontrol <- fcontrol
-  
+
   variables <- attr(func, "variables")
   parameters <- attr(func, "parameters")
-  yini <- rep(0,length(variables))
+  yini <- rep(0, length(variables))
   names(yini) <- variables
-  
-  # Controls to be modified from outside
+
   controls <- list(
     forcings = myforcings,
     events = myevents,
     optionsOde = optionsOde,
-    fctonrol = myfcontrol
+    fcontrol = myfcontrol
   )
-  
-  P2X <- function(times, pars, fixed = NULL, deriv = TRUE, deriv2 = FALSE){
+
+  P2X <- function(times, pars, fixed = NULL, deriv = TRUE, deriv2 = FALSE) {
 
     if (deriv2)
-      stop("Xf: second-order sensitivities are not implemented (Xf is the no-sensitivity prediction; use Xs() for deriv2).")
+      stop("Xf: second-order sensitivities are not implemented (use Xs() for deriv2).")
 
     events <- controls$events
     forcings <- controls$forcings
     optionsOde <- controls$optionsOde
+    fcontrol <- controls$fcontrol
 
-    # Merge fixed parameters into pars; Xf does not propagate derivatives so
-    # fixed/free distinction collapses for the integration call.
+    # Xf carries no sensitivities, so fixed/free collapses to a single pars vector.
     pars <- c(unclass(pars), unclass(fixed))
 
-    # Add event time points (required by integrator)
-    event.times <- unique(events$time)
-    times <- sort(union(event.times, times))
-
+    times <- sort(union(unique(events$time), times))
 
     yini[names(pars[names(pars) %in% variables])] <- pars[names(pars) %in% variables]
     mypars <- pars[parameters]
-    #alltimes <- unique(sort(c(times, forctimes)))
-    
-    # loadDLL(func)
-    if(!is.null(forcings)) forc <- setForcings(func, forcings) else forc <- NULL
-    out <- suppressWarnings(do.call(odeC, c(list(y=yini, times=times, func=func, parms=mypars, forcings=forc,events = list(data = events), fcontrol = fcontrol), optionsOde)))
-    #out <- cbind(out, out.inputs)      
-    
+
+    if (!is.null(forcings)) forc <- setForcings(func, forcings) else forc <- NULL
+    out <- suppressWarnings(do.call(odeC, c(list(y = yini, times = times, func = func,
+                                                 parms = mypars, forcings = forc,
+                                                 events = list(data = events),
+                                                 fcontrol = fcontrol), optionsOde)))
+
     prdframe(out, deriv = NULL, parameters = pars)
-    
   }
-  
+
   attr(P2X, "parameters") <- c(variables, parameters)
   attr(P2X, "equations") <- as.eqnvec(attr(func, "equations"))
   attr(P2X, "forcings") <- forcings
@@ -403,9 +406,80 @@ Xf <- function(odemodel, forcings = NULL, events = NULL, condition = NULL, optio
   attr(P2X, "modelname") <- func[1]
   attr(P2X, "compileInfo") <- attr(odemodel, "compileInfo")
 
-
   prdfn(P2X, c(variables, parameters), condition)
+}
 
+#' @export
+#' @rdname Xf
+Xf.CppODE <- function(odemodel, forcings = NULL, events = NULL, condition = NULL,
+                      optionsOde = list(), ...) {
+
+  if (!is.null(forcings)) {
+    if (!inherits(forcings, "data.frame"))
+      stop("'forcings' must be a data.frame, data.table, or tibble")
+    if (!all(c("name", "time", "value") %in% names(forcings)))
+      stop("'forcings' must contain columns: name, time, value")
+    if (!is.character(forcings$name)) stop("'name' must be a character")
+    if (!is.numeric(forcings$time))   stop("'time' must be numeric")
+    if (!is.numeric(forcings$value))  stop("'value' must be numeric")
+    if (anyNA(forcings[, c("name", "time", "value")])) stop("'forcings' contains NA values")
+    forcs <- split(forcings[, c("time", "value")], forcings$name)
+  } else {
+    forcs <- NULL
+  }
+
+  if (!is.null(events))
+    stop("Events must be passed to odemodel() for solver = 'CppODE' / 'Sundials'.")
+
+  optionsDefault <- list(atol = 1e-6, rtol = 1e-6, maxWithoutProgress = 20L, maxsteps = 1e6L,
+                         hini = 0, roottol = 1e-6, maxroot = 1L,
+                         usePID = "none", onFailure = "stop", traceFile = NULL)
+  bad <- setdiff(names(optionsOde), names(optionsDefault))
+  if (length(bad))
+    warning(sprintf("optionsOde: Ignoring unknown option(s): %s", paste(bad, collapse = ", ")))
+  optionsOde <- modifyList(optionsDefault, optionsOde)
+
+  func <- odemodel$func
+  paramNames <- c(attr(func, "variables"), attr(func, "parameters"))
+
+  controls <- list(forcings = forcs, optionsOde = optionsOde)
+
+  P2X <- function(times, pars, fixed = NULL, deriv = TRUE, deriv2 = FALSE) {
+
+    if (deriv2)
+      stop("Xf: second-order sensitivities are not implemented (use Xs() for deriv2).")
+
+    params <- c(unclass(pars), unclass(fixed))
+    forcings <- controls$forcings
+    optionsOde <- controls$optionsOde
+
+    out <- CppODE::solveODE(func, times, params,
+                            sens1ini = NULL, sens2ini = NULL, fixed = NULL,
+                            forcings = forcings,
+                            abstol = optionsOde$atol, reltol = optionsOde$rtol,
+                            maxprogress = optionsOde$maxWithoutProgress,
+                            maxsteps = optionsOde$maxsteps,
+                            hini = optionsOde$hini,
+                            roottol = optionsOde$roottol,
+                            maxroot = optionsOde$maxroot,
+                            usePID = optionsOde$usePID,
+                            onFailure = optionsOde$onFailure,
+                            traceFile = optionsOde$traceFile)
+
+    out <- cbind(out$time, out$variable)
+    colnames(out)[1] <- "time"
+
+    prdframe(out, deriv = NULL, parameters = c(pars, fixed))
+  }
+
+  attr(P2X, "parameters") <- paramNames
+  attr(P2X, "equations") <- as.eqnvec(attr(func, "equations"))
+  attr(P2X, "forcings") <- forcings
+  attr(P2X, "events") <- events
+  attr(P2X, "modelname") <- func[1]
+  attr(P2X, "compileInfo") <- attr(odemodel, "compileInfo")
+
+  prdfn(P2X, paramNames, condition)
 }
 
 
@@ -498,37 +572,33 @@ Xd <- function(data, condition = NULL) {
     out <- cbind(times, do.call(cbind, predictions))
     colnames(out) <- c("time", states)
     
-    mysensitivities <- NULL
     myderivs <- NULL
-    if(deriv) {
-      
-      # Fill in sensitivities
-      outSens <- matrix(0, nrow = length(times), ncol = length(sensNames), dimnames = list(NULL, c(sensNames)))
-      for(s in states) {
-        mysens <- attr(predictions[[s]], "sensitivities")
-        mynames <- attr(predictions[[s]], "sensnames")
+    if (deriv) {
+
+      # Fill in sensitivities — column layout is state-fastest, matching the
+      # expand.grid(states, parameters) ordering used to build sensNames.
+      outSens <- matrix(0, nrow = length(times), ncol = length(sensNames),
+                        dimnames = list(NULL, sensNames))
+      for (s in states) {
+        mysens   <- attr(predictions[[s]], "sensitivities")
+        mynames  <- attr(predictions[[s]], "sensnames")
         outSens[, mynames] <- mysens
       }
-      
-      mysensitivities <- cbind(time = times, outSens)
-      
-      # Apply parameter transformation to the derivatives
-      sensLong <- matrix(outSens, nrow = nrow(outSens)*length(states))
+
+      # Reshape to 3D [time, state, param] (batch-first), matching Xs.
+      myderivs <- array(outSens,
+                        dim = c(length(times), length(states), length(parameters)),
+                        dimnames = list(NULL, states, parameters))
+
+      # Chain rule via upstream parameter transformation.
       dP <- attr(pars, "deriv")
       if (!is.null(dP)) {
-        sensLong <- sensLong %*% submatrix(dP, rows = parameters)
-        sensGrid <- expand.grid.alt(states, colnames(dP))
-        sensNames <- paste(sensGrid[,1], sensGrid[,2], sep = ".")
+        dPsub <- dP[parameters, , drop = FALSE]
+        myderivs <- myderivs %bmm% dPsub
+        dimnames(myderivs) <- list(NULL, states, colnames(dPsub))
       }
-      outSens <- cbind(times, matrix(sensLong, nrow = dim(outSens)[1]))
-      colnames(outSens) <- c("time", sensNames)
-      
-      myderivs <- outSens
-      #attr(out, "deriv") <- outSens
     }
-    
-    #attr(out, "parameters") <- unique(sensGrid[,2])
-    
+
     prdframe(out, deriv = myderivs, parameters = pars)
     
   }
@@ -839,23 +909,23 @@ Y <- function(g, f = NULL, states = NULL, parameters = NULL,
 #' }
 #' @export
 Xt <- function(condition = NULL) {
-  # Controls to be modified from outside
-  controls <- list()
-  P2X <- function(times, pars, deriv = TRUE, deriv2 = FALSE, ...) {
+  P2X <- function(times, pars, fixed = NULL, deriv = TRUE, deriv2 = FALSE) {
     n_times <- length(times)
-    n_pars <- length(pars)
     par_names <- names(pars)
-    
-    # Output: matrix with time column
+    n_pars <- length(par_names)
+
     out <- matrix(times, ncol = 1, dimnames = list(NULL, "time"))
-    
-    # Sensitivities (deriv): 3D array [n_times, n_states, n_pars] (batch-first).
-    # time has no dependence on parameters, so all zeros.
-    sens <- array(0,
-                  dim = c(n_times, 1, n_pars),
-                  dimnames = list(NULL, "time", par_names))
-    
-    prdframe(out, deriv = sens, parameters = pars)
+
+    # time has no parameter dependence — both sens1 and sens2 are zero arrays
+    # in batch-first [time, observable, ...] layout matching Xs.
+    sens  <- array(0, dim = c(n_times, 1, n_pars),
+                   dimnames = list(NULL, "time", par_names))
+    sens2 <- if (deriv2)
+      array(0, dim = c(n_times, 1, n_pars, n_pars),
+            dimnames = list(NULL, "time", par_names, par_names))
+    else NULL
+
+    prdframe(out, deriv = sens, deriv2 = sens2, parameters = pars)
   }
   attr(P2X, "parameters") <- NULL
   attr(P2X, "equations") <- NULL

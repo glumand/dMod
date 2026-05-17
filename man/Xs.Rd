@@ -40,11 +40,10 @@ Xs(odemodel, ...)
 The ODE forcings. Forcing support for the CppODE / Sundials backends depends
 on the chosen solver method; see \code{\link[CppODE:CppODE]{CppODE::CppODE()}}.}
 
-\item{events}{data.frame of events with columns "var" (character, the name of the state to be
-affected), "time" (numeric, time point), "value" (numeric, value), "method" (character, either
-"replace", "add" or "multiply"). See \link[deSolve:events]{events}.
-ATTENTION: Sensitivities for event states will only be correctly computed if defined within
-\code{\link[=odemodel]{odemodel()}}. Specify events within \code{Xs()} only for forward simulation.}
+\item{events}{An \link{eventlist} (or \code{data.frame} coercible via \link{as.eventlist}).
+Applied to the forward simulation only — sensitivities are not corrected.
+Define events on \code{\link[=odemodel]{odemodel()}} unless the prediction is used purely for
+forward simulation.}
 
 \item{names}{character vector with the states to be returned. If NULL, all states are returned.}
 

@@ -2,40 +2,57 @@
 % Please edit documentation in R/prediction.R
 \name{Xf}
 \alias{Xf}
+\alias{Xf.deSolve}
+\alias{Xf.CppODE}
 \title{Model prediction function for ODE models without sensitivities.}
 \usage{
-Xf(
+Xf(odemodel, ...)
+
+\method{Xf}{deSolve}(
   odemodel,
   forcings = NULL,
   events = NULL,
   condition = NULL,
   optionsOde = list(method = "lsoda"),
-  fcontrol = NULL
+  fcontrol = NULL,
+  ...
+)
+
+\method{Xf}{CppODE}(
+  odemodel,
+  forcings = NULL,
+  events = NULL,
+  condition = NULL,
+  optionsOde = list(),
+  ...
 )
 }
 \arguments{
 \item{odemodel}{Object of class \link{odemodel}.}
 
-\item{forcings, }{see \link{Xs}}
+\item{...}{not used.}
 
-\item{events, }{see \link{Xs}}
+\item{forcings}{see \link{Xs}.}
 
-\item{condition}{either NULL (generic prediction for any condition) or a character, denoting
-the condition for which the function makes a prediction.}
+\item{events}{see \link{Xs}.}
 
-\item{optionsOde}{list with arguments to be passed to odeC() for the ODE integration.}
+\item{condition}{either NULL (generic prediction for any condition) or a
+character denoting the condition for which the function makes a prediction.}
 
-\item{fcontrol}{list with additional fine-tuning arguments for the forcing interpolation.
-See \link[stats:approxfun]{approxfun} for possible arguments.}
+\item{optionsOde}{list with arguments passed to the ODE integrator (deSolve
+or \link[CppODE:solveODE]{CppODE::solveODE}).}
+
+\item{fcontrol}{list with additional fine-tuning arguments for the forcing
+interpolation (cOde backend only). See \link[stats:approxfun]{approxfun}.}
 }
 \description{
-Interface to get an ODE
-into a model function \code{x(times, pars, forcings, events)} returning ODE output.
-It is a reduced version of \link{Xs}, missing the sensitivities.
+Reduced version of \link{Xs} that returns the ODE output without
+first- or second-order sensitivities. Dispatches on the \link{odemodel} class:
+the \code{deSolve} method drives the cOde backend, the \code{CppODE} method drives
+the CppODE / Sundials backend.
 }
 \details{
-Can be used to integrate additional quantities, e.g. fluxes, by adding them to \code{f}.
-All quantities that are not initialised by pars
-in \code{x(..., forcings, events)} are initialized with 0. For more details and
-the return value see \link{Xs}.
+Can be used to integrate additional quantities, e.g. fluxes, by
+adding them to \code{f}. All quantities not initialised by \code{pars} are initialised
+to 0. For more details and the return value see \link{Xs}.
 }
