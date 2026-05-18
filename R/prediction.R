@@ -786,10 +786,18 @@ Y <- function(g, f = NULL, states = NULL, parameters = NULL,
         theta <- dimnames(myderivs2)[[3]]
         outer_theta <- theta %||% dimnames(dX2_full)[[3]]
         missing <- setdiff(outer_theta, dimnames(dX2_full)[[3]])
-        if (length(missing)) dX2_full <- abind::abind(dX2_full,
-                                                       array(0, c(dim(dX2_full)[1], dim(dX2_full)[2], length(missing), length(missing)),
-                                                             dimnames = list(NULL, NULL, missing, missing)),
-                                                       along = 3)
+        if (length(missing)) {
+          # Pad dim 3 (theta1) with zero blocks; keep dim 4 matching existing dX2_full.
+          dX2_full <- abind::abind(dX2_full,
+                                   array(0, c(dim(dX2_full)[1], dim(dX2_full)[2], length(missing), dim(dX2_full)[4]),
+                                         dimnames = list(NULL, NULL, missing, dimnames(dX2_full)[[4]])),
+                                   along = 3)
+          # Pad dim 4 (theta2) with zero blocks; dim 3 now includes the missing entries.
+          dX2_full <- abind::abind(dX2_full,
+                                   array(0, c(dim(dX2_full)[1], dim(dX2_full)[2], dim(dX2_full)[3], length(missing)),
+                                         dimnames = list(NULL, NULL, dimnames(dX2_full)[[3]], missing)),
+                                   along = 4)
+        }
         already <- intersect(dimnames(myderivs2)[[2]], dimnames(dX2_full)[[2]])
         add_states <- setdiff(dimnames(dX2_full)[[2]], already)
         if (length(add_states))
