@@ -29,6 +29,10 @@ focei_kernel_ping <- function(joint_cb, pars, fixed, conditions) {
     .Call(`_dMod_focei_kernel_ping`, joint_cb, pars, fixed, conditions)
 }
 
+focei_eval_one_subject <- function(model_cb, err_cb, pars_full, fixed, meta_i, eta_block, Omega_inv, Omega_log_det) {
+    .Call(`_dMod_focei_eval_one_subject`, model_cb, err_cb, pars_full, fixed, meta_i, eta_block, Omega_inv, Omega_log_det)
+}
+
 focei_inner_trust <- function(model_cb, err_cb, pars_full, eta_warmstart, subject_meta, Omega_inv_mat, Omega_log_det, fixed, control) {
     .Call(`_dMod_focei_inner_trust`, model_cb, err_cb, pars_full, eta_warmstart, subject_meta, Omega_inv_mat, Omega_log_det, fixed, control)
 }
@@ -41,24 +45,48 @@ focei_run <- function(model_cb, err_cb, joint_cb, init, subject_meta, fixed, con
     .Call(`_dMod_focei_run`, model_cb, err_cb, joint_cb, init, subject_meta, fixed, control, correction_mode, correction_cb)
 }
 
+mcmcChainRun <- function(objfun, parinit, n, warmup, moveType, control, bounds, parscale_, dG_cb_opt) {
+    .Call(`_dMod_mcmc_chain_run`, objfun, parinit, n, warmup, moveType, control, bounds, parscale_, dG_cb_opt)
+}
+
+mcmcSmcReweight <- function(logL, logwPrev, betaOld, betaNew) {
+    .Call(`_dMod_mcmc_smc_reweight`, logL, logwPrev, betaOld, betaNew)
+}
+
+mcmcStratifiedResample <- function(weights) {
+    .Call(`_dMod_mcmc_stratified_resample`, weights)
+}
+
+mcmcResidualResample <- function(weights) {
+    .Call(`_dMod_mcmc_residual_resample`, weights)
+}
+
+mcmcMultinomialResample <- function(weights) {
+    .Call(`_dMod_mcmc_multinomial_resample`, weights)
+}
+
 normL2_kernel <- function(prediction, err_list_opt, meta_list, par_names_global, bessel, deriv2_requested, threads, bloq_mode = "M3") {
     .Call(`_dMod_normL2_kernel`, prediction, err_list_opt, meta_list, par_names_global, bessel, deriv2_requested, threads, bloq_mode)
 }
 
-#' @name sparse_grid_gh
+priorOmegaKernel <- function(omegaVec, cholLoc, isDiag, K, lkjEta, scaleSD, kindFlag) {
+    .Call(`_dMod_prior_omega_kernel`, omegaVec, cholLoc, isDiag, K, lkjEta, scaleSD, kindFlag)
+}
+
+#' @name sparseGridGH
 #' @title Sparse-grid Gauss-Hermite quadrature nodes (Smolyak rule)
 #' @description Builds the K-dimensional Smolyak sparse grid for physicists'
 #'   Gauss-Hermite at depth `level`. Returns nodes `[B, K]` in z-space and
 #'   signed weights (length `B`).
 #' @param K Integer >= 1, problem dimension.
 #' @param level Integer >= K, Smolyak depth (K+1..K+3 is the useful range).
-#' @param deriv_mode Reserved for future Genz-Keister / adaptive refinement;
+#' @param derivMode Reserved for future Genz-Keister / adaptive refinement;
 #'   currently ignored.
 #' @return A list with `nodes` (B x K, batch-first), `weights` (length B,
 #'   signed), and `K`, `level`.
 #' @export
-sparse_grid_gh <- function(K, level, deriv_mode = 0L) {
-    .Call(`_dMod_sparse_grid_gh`, K, level, deriv_mode)
+sparseGridGH <- function(K, level, derivMode = 0L) {
+    .Call(`_dMod_sparseGridGH`, K, level, derivMode)
 }
 
 residual_kernel_aloq <- function(pred, dpred, d2pred, y_data, sigma, dsigma, d2sigma, lloq, opts) {
@@ -69,7 +97,27 @@ residual_kernel_bloq <- function(pred, dpred, d2pred, y_data, sigma, dsigma, d2s
     .Call(`_dMod_residual_kernel_bloq`, pred, dpred, d2pred, y_data, sigma, dsigma, d2sigma, lloq, opts)
 }
 
-trust_impl <- function(objfun, parinit, rinit, rmax, parscale = NULL, iterlim = 100L, fterm = 1e-6, mterm = 1e-6, minimize = TRUE, blather = FALSE, parupper = NULL, parlower = NULL, printIter = FALSE, traceFile = NULL, on_step = NULL) {
-    .Call(`_dMod_trust_impl`, objfun, parinit, rinit, rmax, parscale, iterlim, fterm, mterm, minimize, blather, parupper, parlower, printIter, traceFile, on_step)
+smcLogSumExp <- function(x) {
+    .Call(`_dMod_smc_log_sum_exp`, x)
+}
+
+smcESS <- function(logw) {
+    .Call(`_dMod_smc_ess`, logw)
+}
+
+smcSystematicResample <- function(weights, u) {
+    .Call(`_dMod_smc_systematic_resample`, weights, u)
+}
+
+smcBetaBisect <- function(logL, logwPrev, betaOld, targetESS, tol = 1e-6, maxIter = 80L) {
+    .Call(`_dMod_smc_beta_bisect`, logL, logwPrev, betaOld, targetESS, tol, maxIter)
+}
+
+trustL1_impl <- function(objfun, parinit, mu, lambda, one_sided, rinit, rmax, parscale = NULL, iterlim = 100L, fterm = 1e-6, mterm = 1e-6, minimize = TRUE, blather = FALSE, parupper = NULL, parlower = NULL, printIter = FALSE, traceFile = NULL) {
+    .Call(`_dMod_trustL1_impl`, objfun, parinit, mu, lambda, one_sided, rinit, rmax, parscale, iterlim, fterm, mterm, minimize, blather, parupper, parlower, printIter, traceFile)
+}
+
+trust_impl <- function(objfun, parinit, rinit, rmax, parscale = NULL, iterlim = 100L, fterm = 1e-6, mterm = 1e-6, minimize = TRUE, blather = FALSE, parupper = NULL, parlower = NULL, printIter = FALSE, traceFile = NULL) {
+    .Call(`_dMod_trust_impl`, objfun, parinit, rinit, rmax, parscale, iterlim, fterm, mterm, minimize, blather, parupper, parlower, printIter, traceFile)
 }
 

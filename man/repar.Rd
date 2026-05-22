@@ -7,36 +7,33 @@
 repar(expr, trafo = NULL, ..., reset = FALSE)
 }
 \arguments{
-\item{expr}{character of the form \code{"lhs ~ rhs"} where \code{rhs}
-reparameterizes \code{lhs}. Both \code{lhs} and \code{rhs}
-can contain a number of symbols whose values need to be passed by the \code{...} argument.}
+\item{expr}{\code{"lhs ~ rhs"} string (or a formula).}
 
-\item{trafo}{character or equation vector or list thereof. The object where the replacement takes place in}
+\item{trafo}{Character / \link{eqnvec} / list. \code{NULL} builds a fresh trafo
+from the LHS.}
 
-\item{...}{pass symbols as named arguments}
+\item{...}{Named character/numeric vectors; each row supplies one
+substitution.}
 
-\item{reset}{logical. If true, the trafo element corresponding to lhs is reset according to rhs.
-If false, lhs wherever it occurs in the rhs of trafo is replaced by rhs of the formula.}
+\item{reset}{Overwrite (\code{TRUE}) or substitute into (\code{FALSE}).}
 }
 \value{
-an equation vector with the reparameterization.
+Same shape as \code{trafo}.
 }
 \description{
-Reparameterization
-}
-\details{
-Left and right-hand side of \code{expr} are searched for symbols. If separated by
-"_", symbols are recognized as such, e.g. in \code{Delta_x} where the symbols are
-"Delta" and "x". Each symbol for which values (character or numbers) are passed by the
-\code{...} argument is replaced.
+Replaces symbols on either side of \code{"lhs ~ rhs"}. With \code{reset = TRUE}
+the LHS entry of \code{trafo} is overwritten by the RHS (per row when \code{...}
+supplies vector replacements); otherwise the LHS is substituted into
+\code{trafo} wherever it occurs. Symbols separated by \verb{_} are recognised as
+compound identifiers, e.g. \code{Delta_x} -> symbols \code{"Delta"} and \code{"x"}.
 }
 \examples{
-innerpars <- letters[1:3]
+innerpars   <- letters[1:3]
 constraints <- c(a = "b + c")
 mycondition <- "cond1"
-
-trafo <- repar("x ~ x", x = innerpars)
-trafo <- repar("x ~ y", trafo, x = names(constraints), y = constraints)
-trafo <- repar("x ~ exp(x)", trafo, x = innerpars)
-trafo <- repar("x ~ x + Delta_x_condition", trafo, x = innerpars, condition = mycondition)
+trafo <- repar("x ~ x",        x = innerpars)
+trafo <- repar("x ~ y",        trafo, x = names(constraints), y = constraints)
+trafo <- repar("x ~ exp(x)",   trafo, x = innerpars)
+trafo <- repar("x ~ x + Delta_x_condition",
+               trafo, x = innerpars, condition = mycondition)
 }

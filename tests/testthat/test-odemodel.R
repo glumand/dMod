@@ -8,7 +8,8 @@ test_that("Basic ODE model integration with forcings", {
   ## Generate the same model from an equation list
   f <- addReaction(NULL, from = "", to = "A", rate = "switch*F", description = "production")
   f <- addReaction(f   , from = "A", to = "", rate = "k*A", description = "degradation")
-  model <- odemodel(f, forcings = "F", fixed = "switch")
+  model <- odemodel(f, forcings = "F", fixed = "switch", compile = FALSE)
+  compile(Xs(model))
   
   # create forcings
   forc1 <- data.frame(name = "F", time = seq(0,5, 1), value = sin(seq(0,5,1)))

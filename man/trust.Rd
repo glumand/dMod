@@ -20,7 +20,6 @@ trust(
   parlower = NULL,
   printIter = FALSE,
   traceFile = NULL,
-  on_step = NULL,
   ...
 )
 
@@ -32,16 +31,16 @@ trustL1(
   lambda = 1,
   rinit,
   rmax,
-  parscale,
-  iterlim = 100,
+  parscale = NULL,
+  iterlim = 100L,
   fterm = 1e-06,
   mterm = 1e-06,
   minimize = TRUE,
   blather = FALSE,
-  blather2 = FALSE,
-  parupper = Inf,
-  parlower = -Inf,
+  parupper = NULL,
+  parlower = NULL,
   printIter = FALSE,
+  traceFile = NULL,
   ...
 )
 }
@@ -89,20 +88,19 @@ value to the console at each function evaluation.}
 \item{traceFile}{Optional path. If non-\code{NULL}, CSV-log per
 evaluation \code{iter, value, p1, p2, ...}.}
 
-\item{on_step}{Optional R callback
-\code{function(rho, accepted, iter, r)} invoked once per step
-decision. Return value is ignored. Used by \code{\link{nlmeFit}}
-to invalidate cached FOCEI corrections on rejected steps.}
-
 \item{...}{Additional named arguments forwarded to \code{objfun}.}
 
-\item{mu}{named numeric value. The reference value for L1 penalized parameters.}
+\item{mu}{Named numeric vector of reference values for the L1-penalised
+parameters. Names must be a subset of \code{names(parinit)}; only the
+named parameters receive a penalty. Defaults to a zero vector covering
+all of \code{parinit}.}
 
-\item{one.sided}{logical. One-sided penalization.}
+\item{one.sided}{Logical. If \code{TRUE}, the penalty is one-sided and
+acts as a lower wall at \code{mu}: \code{lambda * max(0, mu - p)}.
+Otherwise it is the symmetric \code{lambda * |p - mu|}.}
 
-\item{lambda}{strength of the L1 penalty}
-
-\item{blather2}{even more information}
+\item{lambda}{Strength of the L1 penalty. Either a scalar (broadcast to
+all entries of \code{mu}) or a named numeric aligned with \code{mu}.}
 }
 \value{
 A list with components \code{argument}, \code{value},
@@ -113,14 +111,12 @@ contains \code{argpath}, \code{argtry}, \code{steptype},
 \code{valtry}, \code{preddiff}, \code{stepnorm}.
 }
 \description{
-Minimise (or maximise) an objective function for which value, gradient,
-and Hessian are available. Uses a Moré-Sorensen subproblem on a working
-reduced space that drops coordinates pinned at a bound where the
-gradient pushes further into the bound (active-set treatment).
-}
-\details{
-The numerical kernel is implemented in C++ (see
-\code{src/trust_kernel.cpp}). This R-level wrapper only captures
-\code{...} into a closure around \code{objfun} so that callers can
-continue to pass extra named arguments through to the objective.
+\code{trust} minimises (or maximises) a smooth objective function for which
+value, gradient and Hessian are available. \code{trustL1} additionally adds
+an L1 (lasso-style) penalty \code{lambda * sum(|p - mu|)} on a user-selected
+subset of parameters, with kink-aware step handling. Both routines use a
+Moré-Sorensen trust-region subproblem on a reduced working space that drops
+coordinates pinned at a bound where the gradient pushes further into the
+bound (active-set treatment). \code{trustL1} additionally drops parameters
+pinned at their L1 kink.
 }

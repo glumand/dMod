@@ -103,7 +103,7 @@ p(pouter)
 obj <- normL2(data, g * x * p) + constraintL2(pouter, sigma = 4)
 
 # # Fit 50 times, sample with sd=4 around pouter
-outms <- mstrust(obj, pouter, sd = 4, studyname = "bamodel", cores=detectFreeCores(), fits=50, iterlim = 1e3)
+outms <- mstrust(obj, pouter, sd = 4, studyname = "bamodel", cores=detectFreeCores(), fits=50, iterlim = 5e3)
 
 # ## Later: Fitting on Knecht machines
 # outknecht <- runbg({

@@ -40,8 +40,7 @@ The structure of the returned object depends on the class of \code{x}:
 }
 \description{
 Generic accessor for the \code{deriv2} attribute (or \code{hessian} field, in the
-case of \code{objlist}) attached to dMod objects. Mirrors \link{getDerivs} for
-first-order derivatives.
+case of \code{objlist}) attached to dMod objects.
 }
 \examples{
 \dontrun{

@@ -38,20 +38,23 @@ events$b <- data.frame(var = "A", time = 5, value = 2, method = "add")
 ## and functions from above information) 
 
 # ODE model
-model <- odemodel(f)
+model <- odemodel(f, compile = FALSE)
 
-# Observation function
-g <- Y(observables, f, compile = TRUE, modelname = "obsfn")
+# Observation function (compiled later together with x and p)
+g <- Y(observables, f, compile = FALSE, modelname = "obsfn")
 
 # Parameter transformation for steady states
-pSS <- P(f, method = "implicit", condition = NULL)
+pSS <- P(f, method = "implicit", condition = NULL, compile = FALSE)
 
 # Condition-specific transformation and prediction functions
 p0 <- x <- NULL
 for (C in conditions) {
-  p0 <- p0 + P(trafo[[C]], condition = C)
+  p0 <- p0 + P(trafo[[C]], condition = C, compile = FALSE)
   x <- x + Xs(model, events = events[[C]], condition = C)
 }
+
+# Single combined compile through dMod's compile() (matches -w convention).
+compile(g, x, p0, pSS)
 
 ## Process data
 

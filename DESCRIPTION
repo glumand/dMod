@@ -49,10 +49,12 @@ Suggests:
     deSolve,
     JuliaCall,
     openxlsx,
-    Polychrome
+    Polychrome,
+    lpSolve
 VignetteBuilder: knitr
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 LinkingTo: 
     Rcpp
 Config/roxygen2/version: 8.0.0
+Config/testthat/parallel: true

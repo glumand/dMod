@@ -29,10 +29,19 @@
 #'   `sympy.simplify` once per expression), `FALSE` (skip; fastest, bulkier
 #'   output), or `"full"` (aggressive `cancel`/`posify`/`simplify`/`factor`
 #'   pipeline; slower but more compact). Version "1.2" only.
+#' @param solveQuadratic Logical. When `TRUE`, the solver attempts a closed-form
+#'   quadratic state-side resolution (positive root of `a*X^2 + b*X + c = 0`)
+#'   before falling back to a flux-parameter pivot for any cycle whose final
+#'   ODE is quadratic-in-self after upstream linear substitutions. Keeps the
+#'   pivoted flux parameter (and the chain of substituted upstream rate
+#'   constants) out of `mysteadies`, at the cost of emitting `sqrt(...)`
+#'   expressions. Default `FALSE`; some workflows cannot consume `sqrt(...)`
+#'   in their parameter trafos. Version "1.2" only.
 #' @param version Character, AlyssaPetit backend version. One of
 #'   \code{"1.0"} (original), \code{"1.1"} (adds \code{testSteady}), or
 #'   \code{"1.2"} (default; sink-cluster detection, \code{walltime},
-#'   priority-table cycle breaking, end-of-pipeline \code{simplify} toggle).
+#'   priority-table cycle breaking, end-of-pipeline \code{simplify} toggle,
+#'   optional quadratic state-side solve).
 #'
 #' @return Named character vector of steady-state equations (dMod compatible).
 #'
@@ -52,7 +61,8 @@
 steadyStates <- function(model, file = NULL, rates = NULL, forcings = NULL,
                          givenCQs = NULL, neglect = NULL, sparsifyLevel = NULL,
                          outputFormat = "R", testSteady = "T",
-                         walltime = 0L, simplify = TRUE, version = "1.2") {
+                         walltime = 0L, simplify = TRUE, solveQuadratic = FALSE,
+                         version = "1.2") {
 
   # Validate version
   version <- match.arg(version, choices = c("1.0", "1.1", "1.2"))
@@ -87,15 +97,21 @@ steadyStates <- function(model, file = NULL, rates = NULL, forcings = NULL,
   # Version-specific Python signatures:
   #   v1.0: Alyssa(filename, injections, givenCQs, neglect, sparsifyLevel, outputFormat)
   #   v1.1: Alyssa(filename, injections, givenCQs, neglect, sparsifyLevel, outputFormat, testSteady)
-  #   v1.2: Alyssa(filename, injections, givenCQs, neglect, sparsifyLevel, outputFormat, testSteady, walltime, simplify)
-  #        — v1.2 additionally runs structural sink-cluster detection a priori.
+  #   v1.2: Alyssa(filename, injections, givenCQs, neglect, sparsifyLevel, outputFormat, testSteady, walltime, simplify, solveQuadratic)
+  #        — v1.2 additionally runs structural sink-cluster detection a priori,
+  #          and (when `solveQuadratic=TRUE`) attempts a closed-form quadratic
+  #          state-side solve before resorting to flux-parameter pivots.
   if (version == "1.0") {
     if (testSteady == "F")
       message("Note: version 1.0 does not support testSteady='F', test will always run.")
+    if (isTRUE(solveQuadratic))
+      message("Note: version 1.0 does not support solveQuadratic=TRUE, ignored.")
     m_ss <- ap$Alyssa(model, as.list(forcings), as.list(givenCQs),
                       as.list(neglect), sparsifyLevel, outputFormat)
 
   } else if (version == "1.1") {
+    if (isTRUE(solveQuadratic))
+      message("Note: version 1.1 does not support solveQuadratic=TRUE, ignored.")
     m_ss <- ap$Alyssa(model, as.list(forcings), as.list(givenCQs),
                       as.list(neglect), sparsifyLevel, outputFormat,
                       testSteady)
@@ -111,14 +127,15 @@ steadyStates <- function(model, file = NULL, rates = NULL, forcings = NULL,
       simplify_arg <- as.logical(simplify)
     }
     m_ss <- ap$Alyssa(model,
-                      injections    = as.list(forcings),
-                      givenCQs      = as.list(givenCQs),
-                      neglect       = as.list(neglect),
-                      sparsifyLevel = as.integer(sparsifyLevel),
-                      outputFormat  = outputFormat,
-                      testSteady    = testSteady,
-                      walltime      = as.integer(walltime),
-                      simplify      = simplify_arg)
+                      injections     = as.list(forcings),
+                      givenCQs       = as.list(givenCQs),
+                      neglect        = as.list(neglect),
+                      sparsifyLevel  = as.integer(sparsifyLevel),
+                      outputFormat   = outputFormat,
+                      testSteady     = testSteady,
+                      walltime       = as.integer(walltime),
+                      simplify       = simplify_arg,
+                      solveQuadratic = as.logical(solveQuadratic))
   }
 
   if (is.null(m_ss) || identical(m_ss, 0L)) return(0)

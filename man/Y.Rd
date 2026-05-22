@@ -2,7 +2,7 @@
 % Please edit documentation in R/prediction.R
 \name{Y}
 \alias{Y}
-\title{Observation functions.}
+\title{Observation functions}
 \usage{
 Y(
   g,
@@ -14,6 +14,7 @@ Y(
   compile = FALSE,
   modelname = NULL,
   verbose = FALSE,
+  deriv = TRUE,
   deriv2 = FALSE,
   derivMode = c("dual", "symbolic")
 )
@@ -48,9 +49,12 @@ filename for the generated C file.}
 
 \item{verbose}{Logical, print compiler output to the R console.}
 
+\item{deriv}{Logical. If \code{TRUE} (default), attach the first-order
+sensitivity \code{attr(., "deriv")} of shape \verb{[time, observable, theta]}.}
+
 \item{deriv2}{Logical. If \code{TRUE}, attach a second-order derivative
 \code{attr(., "deriv2")} array of shape \verb{[time, observable, theta, theta]}.
-Default \code{FALSE}.}
+Requires \code{deriv = TRUE}. Default \code{FALSE}.}
 
 \item{derivMode}{Character. Jacobian backend: \code{"dual"} (default,
 forward-mode AD; faster for many parameters; requires compiled native

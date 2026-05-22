@@ -49,9 +49,8 @@ The SBML side is delegated to \code{\link[=import_sbml]{import_sbml()}} (libsbml
 }
 \details{
 Dispatch is on \code{format_version}. v2 manifests are translated to the
-internal v1 shapes by an adapter (see \code{.petab_v2_normalize_tables} in
-\code{R/PEtabInterface.R}) so the downstream trafo / observation / objective
-machinery is shared.
+internal v1 shapes so the trafo / observation / objective pipeline is
+shared.
 
 v2 specifics handled here: long-format conditions are pivoted to wide,
 the \code{experiments.tsv} \verb{(time, conditionId)} sequences are mapped to

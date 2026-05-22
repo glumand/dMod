@@ -14,39 +14,48 @@ Pimpl(
   compile = FALSE,
   modelname = NULL,
   verbose = FALSE,
+  deriv = TRUE,
+  deriv2 = FALSE,
   controlsNleqslv = list()
 )
 }
 \arguments{
-\item{trafo}{Named character vector, \code{\link{eqnvec}}, or
-\code{\link{eqnlist}} defining the equations to be set to zero. For
-\code{eqnlist} inputs, conserved quantities are auto-detected and
-eliminated species replaced by \code{total_*} parameters.}
+\item{trafo}{Named character / \link{eqnvec} / \link{eqnlist}.}
 
-\item{parameters}{Character vector, the independent variables.}
+\item{parameters}{Outer parameters. Auto-extended with state names that
+need to be eliminated for CQ substitution.}
 
-\item{forcings}{Character vector of forcing/dummy state names.}
+\item{forcings}{Forcing names; replaced by 0 and removed from the system.}
 
-\item{condition}{Character, the condition label.}
+\item{condition}{Condition label.}
 
-\item{keep.root}{Logical, cache the root for warm-starting.}
+\item{keep.root}{Cache the root as warm-start for the next call.}
 
-\item{positive}{Logical, solve in log-space for positivity.}
+\item{positive}{Solve in log-space to enforce positivity.}
 
-\item{compile}{Logical, compile C++ code.}
+\item{compile, modelname, verbose}{Forwarded to \link[CppODE:funCpp]{CppODE::funCpp}.}
 
-\item{modelname}{Character, base filename for C++ code.}
+\item{deriv}{If \code{TRUE} (default), attach first-order parameter
+sensitivities \code{attr(., "deriv")} via the implicit function theorem.}
 
-\item{verbose}{Logical, print compiler output.}
+\item{deriv2}{Emit \code{attr(., "deriv2")} via the implicit function theorem
+(closed form: one extra \code{df/dx}-solve per parameter pair). Requires
+\code{funCpp} to expose \code{hess()}. Same shape as in \link{Pexpl} / \link{Pequil}.}
 
-\item{controlsNleqslv}{Named list of solver controls.}
+\item{controlsNleqslv}{Solver-control overrides (merged into the
+defaults below).}
 }
 \value{
-A function of class \code{\link{parfn}}.
+A \link{parfn}.
 }
 \description{
-Parameter transformation (implicit, root-finding)
+Solves \code{f(x, p) = 0} for the dependent states \code{x} via \link[nleqslv:nleqslv]{nleqslv::nleqslv}
+(multistart on failure), then returns a \link{parfn} over the outer inputs
+carrying the IFT-derived Jacobian (and Hessian, with \code{deriv2 = TRUE}).
+For \link{eqnlist} inputs, conserved quantities are detected and eliminated
+species are replaced by \verb{total_*} parameters; their values are
+reconstructed from the solved root.
 }
 \seealso{
-\link{Pexpl}, \link{Pequil}, \link{P}
+\link{Pexpl}, \link{Pequil}, \link{P}.
 }

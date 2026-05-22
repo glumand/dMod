@@ -16,6 +16,7 @@ steadyStates(
   testSteady = "T",
   walltime = 0L,
   simplify = TRUE,
+  solveQuadratic = FALSE,
   version = "1.2"
 )
 }
@@ -55,10 +56,20 @@ is skipped. Ignored for version "1.0" (always tests).}
 output), or \code{"full"} (aggressive \code{cancel}/\code{posify}/\code{simplify}/\code{factor}
 pipeline; slower but more compact). Version "1.2" only.}
 
+\item{solveQuadratic}{Logical. When \code{TRUE}, the solver attempts a closed-form
+quadratic state-side resolution (positive root of \code{a*X^2 + b*X + c = 0})
+before falling back to a flux-parameter pivot for any cycle whose final
+ODE is quadratic-in-self after upstream linear substitutions. Keeps the
+pivoted flux parameter (and the chain of substituted upstream rate
+constants) out of \code{mysteadies}, at the cost of emitting \code{sqrt(...)}
+expressions. Default \code{FALSE}; some workflows cannot consume \code{sqrt(...)}
+in their parameter trafos. Version "1.2" only.}
+
 \item{version}{Character, AlyssaPetit backend version. One of
 \code{"1.0"} (original), \code{"1.1"} (adds \code{testSteady}), or
 \code{"1.2"} (default; sink-cluster detection, \code{walltime},
-priority-table cycle breaking, end-of-pipeline \code{simplify} toggle).}
+priority-table cycle breaking, end-of-pipeline \code{simplify} toggle,
+optional quadratic state-side solve).}
 }
 \value{
 Named character vector of steady-state equations (dMod compatible).

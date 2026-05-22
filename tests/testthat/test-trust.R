@@ -131,6 +131,47 @@ test_that("trust honors parupper on one component while leaving the other free",
 
 ## ---- blather returns the per-iter trace ------------------------------
 
+## ---- Near-singular Hessian: stay within trust radius ------------------
+
+test_that("trust step stays inside the trust radius when the Hessian is near-singular", {
+  # Construct an objective whose Hessian has eigenvalues spanning ~20 orders
+  # of magnitude (4e-3 down to 1e-21). LAPACK's smallest eigenvalue then
+  # comes back as tiny negative numerical noise, which previously sent the
+  # subproblem into the hard-hard branch and produced steps thousands of
+  # times larger than the trust radius. The proper Moré-Sorensen easy
+  # branch keeps ||p|| ~ r.
+  K <- 7
+  # Eigenvalues spanning many orders of magnitude.
+  vals <- c(4.4e-3, 6.0e-4, 1.9e-5, 9.6e-7, 8.0e-10, 8.2e-19, 9.4e-21)
+  set.seed(42)
+  Q <- qr.Q(qr(matrix(rnorm(K * K), K, K)))    # random orthogonal basis
+  H <- Q %*% diag(vals) %*% t(Q)
+  H <- 0.5 * (H + t(H))
+  g <- as.numeric(Q %*% c(0.5, 0.6, 0.4, 0.3, 0.2, 0.0, 0.0))
+  par_target <- setNames(rep(0, K), paste0("p", seq_len(K)))
+  init       <- setNames(rep(0.1, K), paste0("p", seq_len(K)))
+
+  # A static objective with constant H and gradient g + H * (p - init).
+  # Minimum is wherever H(p) = -g; with H near-singular many minima are
+  # acceptable. We only care that trust does not blow up.
+  objfun <- function(p, ...) {
+    dp <- p - init
+    list(value    = sum(g * dp) + 0.5 * as.numeric(t(dp) %*% H %*% dp),
+         gradient = as.numeric(g + H %*% dp),
+         hessian  = H)
+  }
+
+  fit <- suppressWarnings(
+    trust(objfun, init, rinit = 0.1, rmax = 10, iterlim = 50,
+          blather = TRUE, printIter = FALSE))
+  expect_true(all(is.finite(fit$argument)))
+  # Every accepted/proposed step must stay within rmax (and the per-iter
+  # radius). Without the fix this assertion fails by ~5 orders of magnitude.
+  expect_true(all(fit$stepnorm <= fit$r + 1e-6))
+  expect_true(all(fit$stepnorm <= 10 + 1e-6))
+})
+
+
 test_that("trust(blather = TRUE) returns all trace fields with finite numbers", {
   target <- c(a = 1.0, b = -0.5, c = 2.3)
   obj <- .quadratic_objfn(target)

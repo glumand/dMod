@@ -96,25 +96,28 @@
   
   # 5. Create ODE model -----------------------------------------------------
   model <- odemodel(
-    f = el
+    f = el,
+    compile = FALSE
   )
   x <- Xs(
     odemodel = model
   )
-  
-  
+
+
   # 6. Observation function -------------------------------------------------
   g <- Y(
     g = observables,
-    f = el
+    f = el,
+    compile = FALSE
   )
-  
-  
+
+
   # 7. Compile error model --------------------------------------------------
   e <- Y(
     g = errors,
     f = c(as.eqnvec(el), observables),
-    states = names(observables) 
+    states = names(observables),
+    compile = FALSE
   )
   
   
@@ -135,10 +138,15 @@
   trafoList <- insert(trafoList, "x~10^(x)", x = .currentSymbols)
   
   p <- P(
-    trafo = trafoList
+    trafo = trafoList,
+    compile = FALSE
   )
-  
-  
+
+  # Compile all native code together via dMod's compile() so the build
+  # uses the -w convention and avoids cOde's default -Wall noise.
+  compile(g, x, p, e)
+
+
   # 9. Compile prediction function ------------------------------------------
   prdFunc <- Reduce("*", list(g, x, p))
   

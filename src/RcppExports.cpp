@@ -132,6 +132,24 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// focei_eval_one_subject
+List focei_eval_one_subject(Function model_cb, Function err_cb, NumericVector pars_full, Nullable<NumericVector> fixed, List meta_i, NumericVector eta_block, NumericMatrix Omega_inv, double Omega_log_det);
+RcppExport SEXP _dMod_focei_eval_one_subject(SEXP model_cbSEXP, SEXP err_cbSEXP, SEXP pars_fullSEXP, SEXP fixedSEXP, SEXP meta_iSEXP, SEXP eta_blockSEXP, SEXP Omega_invSEXP, SEXP Omega_log_detSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Function >::type model_cb(model_cbSEXP);
+    Rcpp::traits::input_parameter< Function >::type err_cb(err_cbSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type pars_full(pars_fullSEXP);
+    Rcpp::traits::input_parameter< Nullable<NumericVector> >::type fixed(fixedSEXP);
+    Rcpp::traits::input_parameter< List >::type meta_i(meta_iSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type eta_block(eta_blockSEXP);
+    Rcpp::traits::input_parameter< NumericMatrix >::type Omega_inv(Omega_invSEXP);
+    Rcpp::traits::input_parameter< double >::type Omega_log_det(Omega_log_detSEXP);
+    rcpp_result_gen = Rcpp::wrap(focei_eval_one_subject(model_cb, err_cb, pars_full, fixed, meta_i, eta_block, Omega_inv, Omega_log_det));
+    return rcpp_result_gen;
+END_RCPP
+}
 // focei_inner_trust
 List focei_inner_trust(Function model_cb, Function err_cb, NumericVector pars_full, NumericMatrix eta_warmstart, List subject_meta, NumericMatrix Omega_inv_mat, double Omega_log_det, Nullable<NumericVector> fixed, List control);
 RcppExport SEXP _dMod_focei_inner_trust(SEXP model_cbSEXP, SEXP err_cbSEXP, SEXP pars_fullSEXP, SEXP eta_warmstartSEXP, SEXP subject_metaSEXP, SEXP Omega_inv_matSEXP, SEXP Omega_log_detSEXP, SEXP fixedSEXP, SEXP controlSEXP) {
@@ -192,6 +210,72 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// mcmc_chain_run
+Rcpp::List mcmc_chain_run(Rcpp::Function objfun, Rcpp::NumericVector parinit, int n, int warmup, int moveType, Rcpp::List control, Rcpp::List bounds, Rcpp::NumericVector parscale_, Rcpp::Nullable<Rcpp::Function> dG_cb_opt);
+RcppExport SEXP _dMod_mcmc_chain_run(SEXP objfunSEXP, SEXP parinitSEXP, SEXP nSEXP, SEXP warmupSEXP, SEXP moveTypeSEXP, SEXP controlSEXP, SEXP boundsSEXP, SEXP parscale_SEXP, SEXP dG_cb_optSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::Function >::type objfun(objfunSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type parinit(parinitSEXP);
+    Rcpp::traits::input_parameter< int >::type n(nSEXP);
+    Rcpp::traits::input_parameter< int >::type warmup(warmupSEXP);
+    Rcpp::traits::input_parameter< int >::type moveType(moveTypeSEXP);
+    Rcpp::traits::input_parameter< Rcpp::List >::type control(controlSEXP);
+    Rcpp::traits::input_parameter< Rcpp::List >::type bounds(boundsSEXP);
+    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type parscale_(parscale_SEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::Function> >::type dG_cb_opt(dG_cb_optSEXP);
+    rcpp_result_gen = Rcpp::wrap(mcmc_chain_run(objfun, parinit, n, warmup, moveType, control, bounds, parscale_, dG_cb_opt));
+    return rcpp_result_gen;
+END_RCPP
+}
+// mcmc_smc_reweight
+Rcpp::List mcmc_smc_reweight(const Rcpp::NumericVector& logL, const Rcpp::NumericVector& logwPrev, double betaOld, double betaNew);
+RcppExport SEXP _dMod_mcmc_smc_reweight(SEXP logLSEXP, SEXP logwPrevSEXP, SEXP betaOldSEXP, SEXP betaNewSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type logL(logLSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type logwPrev(logwPrevSEXP);
+    Rcpp::traits::input_parameter< double >::type betaOld(betaOldSEXP);
+    Rcpp::traits::input_parameter< double >::type betaNew(betaNewSEXP);
+    rcpp_result_gen = Rcpp::wrap(mcmc_smc_reweight(logL, logwPrev, betaOld, betaNew));
+    return rcpp_result_gen;
+END_RCPP
+}
+// mcmc_stratified_resample
+IntegerVector mcmc_stratified_resample(const NumericVector& weights);
+RcppExport SEXP _dMod_mcmc_stratified_resample(SEXP weightsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const NumericVector& >::type weights(weightsSEXP);
+    rcpp_result_gen = Rcpp::wrap(mcmc_stratified_resample(weights));
+    return rcpp_result_gen;
+END_RCPP
+}
+// mcmc_residual_resample
+IntegerVector mcmc_residual_resample(const NumericVector& weights);
+RcppExport SEXP _dMod_mcmc_residual_resample(SEXP weightsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const NumericVector& >::type weights(weightsSEXP);
+    rcpp_result_gen = Rcpp::wrap(mcmc_residual_resample(weights));
+    return rcpp_result_gen;
+END_RCPP
+}
+// mcmc_multinomial_resample
+IntegerVector mcmc_multinomial_resample(const NumericVector& weights);
+RcppExport SEXP _dMod_mcmc_multinomial_resample(SEXP weightsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const NumericVector& >::type weights(weightsSEXP);
+    rcpp_result_gen = Rcpp::wrap(mcmc_multinomial_resample(weights));
+    return rcpp_result_gen;
+END_RCPP
+}
 // normL2_kernel
 List normL2_kernel(List prediction, Nullable<List> err_list_opt, List meta_list, CharacterVector par_names_global, double bessel, bool deriv2_requested, int threads, std::string bloq_mode);
 RcppExport SEXP _dMod_normL2_kernel(SEXP predictionSEXP, SEXP err_list_optSEXP, SEXP meta_listSEXP, SEXP par_names_globalSEXP, SEXP besselSEXP, SEXP deriv2_requestedSEXP, SEXP threadsSEXP, SEXP bloq_modeSEXP) {
@@ -210,16 +294,33 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// sparse_grid_gh
-List sparse_grid_gh(int K, int level, int deriv_mode);
-RcppExport SEXP _dMod_sparse_grid_gh(SEXP KSEXP, SEXP levelSEXP, SEXP deriv_modeSEXP) {
+// prior_omega_kernel
+List prior_omega_kernel(NumericVector omegaVec, IntegerMatrix cholLoc, LogicalVector isDiag, int K, double lkjEta, double scaleSD, int kindFlag);
+RcppExport SEXP _dMod_prior_omega_kernel(SEXP omegaVecSEXP, SEXP cholLocSEXP, SEXP isDiagSEXP, SEXP KSEXP, SEXP lkjEtaSEXP, SEXP scaleSDSEXP, SEXP kindFlagSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericVector >::type omegaVec(omegaVecSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type cholLoc(cholLocSEXP);
+    Rcpp::traits::input_parameter< LogicalVector >::type isDiag(isDiagSEXP);
+    Rcpp::traits::input_parameter< int >::type K(KSEXP);
+    Rcpp::traits::input_parameter< double >::type lkjEta(lkjEtaSEXP);
+    Rcpp::traits::input_parameter< double >::type scaleSD(scaleSDSEXP);
+    Rcpp::traits::input_parameter< int >::type kindFlag(kindFlagSEXP);
+    rcpp_result_gen = Rcpp::wrap(prior_omega_kernel(omegaVec, cholLoc, isDiag, K, lkjEta, scaleSD, kindFlag));
+    return rcpp_result_gen;
+END_RCPP
+}
+// sparseGridGH
+List sparseGridGH(int K, int level, int derivMode);
+RcppExport SEXP _dMod_sparseGridGH(SEXP KSEXP, SEXP levelSEXP, SEXP derivModeSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< int >::type K(KSEXP);
     Rcpp::traits::input_parameter< int >::type level(levelSEXP);
-    Rcpp::traits::input_parameter< int >::type deriv_mode(deriv_modeSEXP);
-    rcpp_result_gen = Rcpp::wrap(sparse_grid_gh(K, level, deriv_mode));
+    Rcpp::traits::input_parameter< int >::type derivMode(derivModeSEXP);
+    rcpp_result_gen = Rcpp::wrap(sparseGridGH(K, level, derivMode));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -261,9 +362,86 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// smc_log_sum_exp
+double smc_log_sum_exp(const NumericVector& x);
+RcppExport SEXP _dMod_smc_log_sum_exp(SEXP xSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const NumericVector& >::type x(xSEXP);
+    rcpp_result_gen = Rcpp::wrap(smc_log_sum_exp(x));
+    return rcpp_result_gen;
+END_RCPP
+}
+// smc_ess
+double smc_ess(const NumericVector& logw);
+RcppExport SEXP _dMod_smc_ess(SEXP logwSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const NumericVector& >::type logw(logwSEXP);
+    rcpp_result_gen = Rcpp::wrap(smc_ess(logw));
+    return rcpp_result_gen;
+END_RCPP
+}
+// smc_systematic_resample
+IntegerVector smc_systematic_resample(const NumericVector& weights, double u);
+RcppExport SEXP _dMod_smc_systematic_resample(SEXP weightsSEXP, SEXP uSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const NumericVector& >::type weights(weightsSEXP);
+    Rcpp::traits::input_parameter< double >::type u(uSEXP);
+    rcpp_result_gen = Rcpp::wrap(smc_systematic_resample(weights, u));
+    return rcpp_result_gen;
+END_RCPP
+}
+// smc_beta_bisect
+double smc_beta_bisect(const NumericVector& logL, const NumericVector& logwPrev, double betaOld, double targetESS, double tol, int maxIter);
+RcppExport SEXP _dMod_smc_beta_bisect(SEXP logLSEXP, SEXP logwPrevSEXP, SEXP betaOldSEXP, SEXP targetESSSEXP, SEXP tolSEXP, SEXP maxIterSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const NumericVector& >::type logL(logLSEXP);
+    Rcpp::traits::input_parameter< const NumericVector& >::type logwPrev(logwPrevSEXP);
+    Rcpp::traits::input_parameter< double >::type betaOld(betaOldSEXP);
+    Rcpp::traits::input_parameter< double >::type targetESS(targetESSSEXP);
+    Rcpp::traits::input_parameter< double >::type tol(tolSEXP);
+    Rcpp::traits::input_parameter< int >::type maxIter(maxIterSEXP);
+    rcpp_result_gen = Rcpp::wrap(smc_beta_bisect(logL, logwPrev, betaOld, targetESS, tol, maxIter));
+    return rcpp_result_gen;
+END_RCPP
+}
+// trustL1_impl
+List trustL1_impl(Function objfun, NumericVector parinit, NumericVector mu, NumericVector lambda, bool one_sided, double rinit, double rmax, Nullable<NumericVector> parscale, int iterlim, double fterm, double mterm, bool minimize, bool blather, Nullable<NumericVector> parupper, Nullable<NumericVector> parlower, bool printIter, Nullable<CharacterVector> traceFile);
+RcppExport SEXP _dMod_trustL1_impl(SEXP objfunSEXP, SEXP parinitSEXP, SEXP muSEXP, SEXP lambdaSEXP, SEXP one_sidedSEXP, SEXP rinitSEXP, SEXP rmaxSEXP, SEXP parscaleSEXP, SEXP iterlimSEXP, SEXP ftermSEXP, SEXP mtermSEXP, SEXP minimizeSEXP, SEXP blatherSEXP, SEXP parupperSEXP, SEXP parlowerSEXP, SEXP printIterSEXP, SEXP traceFileSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Function >::type objfun(objfunSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type parinit(parinitSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type mu(muSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type lambda(lambdaSEXP);
+    Rcpp::traits::input_parameter< bool >::type one_sided(one_sidedSEXP);
+    Rcpp::traits::input_parameter< double >::type rinit(rinitSEXP);
+    Rcpp::traits::input_parameter< double >::type rmax(rmaxSEXP);
+    Rcpp::traits::input_parameter< Nullable<NumericVector> >::type parscale(parscaleSEXP);
+    Rcpp::traits::input_parameter< int >::type iterlim(iterlimSEXP);
+    Rcpp::traits::input_parameter< double >::type fterm(ftermSEXP);
+    Rcpp::traits::input_parameter< double >::type mterm(mtermSEXP);
+    Rcpp::traits::input_parameter< bool >::type minimize(minimizeSEXP);
+    Rcpp::traits::input_parameter< bool >::type blather(blatherSEXP);
+    Rcpp::traits::input_parameter< Nullable<NumericVector> >::type parupper(parupperSEXP);
+    Rcpp::traits::input_parameter< Nullable<NumericVector> >::type parlower(parlowerSEXP);
+    Rcpp::traits::input_parameter< bool >::type printIter(printIterSEXP);
+    Rcpp::traits::input_parameter< Nullable<CharacterVector> >::type traceFile(traceFileSEXP);
+    rcpp_result_gen = Rcpp::wrap(trustL1_impl(objfun, parinit, mu, lambda, one_sided, rinit, rmax, parscale, iterlim, fterm, mterm, minimize, blather, parupper, parlower, printIter, traceFile));
+    return rcpp_result_gen;
+END_RCPP
+}
 // trust_impl
-List trust_impl(Function objfun, NumericVector parinit, double rinit, double rmax, Nullable<NumericVector> parscale, int iterlim, double fterm, double mterm, bool minimize, bool blather, Nullable<NumericVector> parupper, Nullable<NumericVector> parlower, bool printIter, Nullable<CharacterVector> traceFile, Nullable<Function> on_step);
-RcppExport SEXP _dMod_trust_impl(SEXP objfunSEXP, SEXP parinitSEXP, SEXP rinitSEXP, SEXP rmaxSEXP, SEXP parscaleSEXP, SEXP iterlimSEXP, SEXP ftermSEXP, SEXP mtermSEXP, SEXP minimizeSEXP, SEXP blatherSEXP, SEXP parupperSEXP, SEXP parlowerSEXP, SEXP printIterSEXP, SEXP traceFileSEXP, SEXP on_stepSEXP) {
+List trust_impl(Function objfun, NumericVector parinit, double rinit, double rmax, Nullable<NumericVector> parscale, int iterlim, double fterm, double mterm, bool minimize, bool blather, Nullable<NumericVector> parupper, Nullable<NumericVector> parlower, bool printIter, Nullable<CharacterVector> traceFile);
+RcppExport SEXP _dMod_trust_impl(SEXP objfunSEXP, SEXP parinitSEXP, SEXP rinitSEXP, SEXP rmaxSEXP, SEXP parscaleSEXP, SEXP iterlimSEXP, SEXP ftermSEXP, SEXP mtermSEXP, SEXP minimizeSEXP, SEXP blatherSEXP, SEXP parupperSEXP, SEXP parlowerSEXP, SEXP printIterSEXP, SEXP traceFileSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -281,8 +459,7 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< Nullable<NumericVector> >::type parlower(parlowerSEXP);
     Rcpp::traits::input_parameter< bool >::type printIter(printIterSEXP);
     Rcpp::traits::input_parameter< Nullable<CharacterVector> >::type traceFile(traceFileSEXP);
-    Rcpp::traits::input_parameter< Nullable<Function> >::type on_step(on_stepSEXP);
-    rcpp_result_gen = Rcpp::wrap(trust_impl(objfun, parinit, rinit, rmax, parscale, iterlim, fterm, mterm, minimize, blather, parupper, parlower, printIter, traceFile, on_step));
+    rcpp_result_gen = Rcpp::wrap(trust_impl(objfun, parinit, rinit, rmax, parscale, iterlim, fterm, mterm, minimize, blather, parupper, parlower, printIter, traceFile));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -295,14 +472,26 @@ static const R_CallMethodDef CallEntries[] = {
     {"_dMod_datapointL2_kernel", (DL_FUNC) &_dMod_datapointL2_kernel, 9},
     {"_dMod_constraintL2_mvn_kernel", (DL_FUNC) &_dMod_constraintL2_mvn_kernel, 11},
     {"_dMod_focei_kernel_ping", (DL_FUNC) &_dMod_focei_kernel_ping, 4},
+    {"_dMod_focei_eval_one_subject", (DL_FUNC) &_dMod_focei_eval_one_subject, 8},
     {"_dMod_focei_inner_trust", (DL_FUNC) &_dMod_focei_inner_trust, 9},
     {"_dMod_focei_outer_objfn", (DL_FUNC) &_dMod_focei_outer_objfn, 12},
     {"_dMod_focei_run", (DL_FUNC) &_dMod_focei_run, 9},
+    {"_dMod_mcmc_chain_run", (DL_FUNC) &_dMod_mcmc_chain_run, 9},
+    {"_dMod_mcmc_smc_reweight", (DL_FUNC) &_dMod_mcmc_smc_reweight, 4},
+    {"_dMod_mcmc_stratified_resample", (DL_FUNC) &_dMod_mcmc_stratified_resample, 1},
+    {"_dMod_mcmc_residual_resample", (DL_FUNC) &_dMod_mcmc_residual_resample, 1},
+    {"_dMod_mcmc_multinomial_resample", (DL_FUNC) &_dMod_mcmc_multinomial_resample, 1},
     {"_dMod_normL2_kernel", (DL_FUNC) &_dMod_normL2_kernel, 8},
-    {"_dMod_sparse_grid_gh", (DL_FUNC) &_dMod_sparse_grid_gh, 3},
+    {"_dMod_prior_omega_kernel", (DL_FUNC) &_dMod_prior_omega_kernel, 7},
+    {"_dMod_sparseGridGH", (DL_FUNC) &_dMod_sparseGridGH, 3},
     {"_dMod_residual_kernel_aloq", (DL_FUNC) &_dMod_residual_kernel_aloq, 9},
     {"_dMod_residual_kernel_bloq", (DL_FUNC) &_dMod_residual_kernel_bloq, 9},
-    {"_dMod_trust_impl", (DL_FUNC) &_dMod_trust_impl, 15},
+    {"_dMod_smc_log_sum_exp", (DL_FUNC) &_dMod_smc_log_sum_exp, 1},
+    {"_dMod_smc_ess", (DL_FUNC) &_dMod_smc_ess, 1},
+    {"_dMod_smc_systematic_resample", (DL_FUNC) &_dMod_smc_systematic_resample, 2},
+    {"_dMod_smc_beta_bisect", (DL_FUNC) &_dMod_smc_beta_bisect, 6},
+    {"_dMod_trustL1_impl", (DL_FUNC) &_dMod_trustL1_impl, 17},
+    {"_dMod_trust_impl", (DL_FUNC) &_dMod_trust_impl, 14},
     {NULL, NULL, 0}
 };
 

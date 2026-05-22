@@ -193,7 +193,7 @@ test_that("hand-built case-0001 fixture produces solution-matching llh", {
   reactions <- addReaction(reactions, "B", "A", "k2*B", "rev")
 
   ode <- odemodel(reactions, modelname = "petab_fixture_ode",
-                  solver = "deSolve")
+                  solver = "deSolve", compile = FALSE)
   x <- Xs(ode)
 
   # Observation function: obs_a = A.
@@ -207,7 +207,8 @@ test_that("hand-built case-0001 fixture produces solution-matching llh", {
   trafo <- structure(innerpars, names = innerpars)
   trafo["A"] <- "a0"
   trafo["B"] <- "b0"
-  p <- P(trafo, condition = "c0", modelname = "petab_fixture_trafo")
+  p <- P(trafo, condition = "c0", modelname = "petab_fixture_trafo", compile = FALSE)
+  compile(x, g, p)
 
   # Data exactly matching _measurements.tsv.
   data <- as.datalist(data.frame(

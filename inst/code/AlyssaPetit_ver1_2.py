@@ -141,7 +141,7 @@ def FindLCL(M, X):
             vec=SolveSymbLES(M[rowlisteTry,colliste],M[rowlisteTry,i])
         if(shufflecounter==100):
             print('Problems while finding conserved quantities!',flush=True)
-            return(0,0)
+            return([],0)
         counter=counter+1
         try:
             mat=[states[l] for l in colliste]
@@ -320,6 +320,95 @@ def _try_positive_direct_solve(SM, F, X):
         if (In_cls=='+' and Out_cls=='-') or (In_cls=='-' and Out_cls=='+'):
             sol=cancel(-In/Out)
             return (i, y, sol)
+    return None
+
+def _simplify_with_sqrt(expr):
+    # Decompose a rational expression with at most one sqrt subterm into
+    # (P + Q*sqrt(D))/R, factor each piece independently, and recombine.
+    # SymPy's generic simplify/factor treats sqrt(.) as an opaque atom and
+    # therefore can't reduce expressions of this shape — it just leaves the
+    # numerator as a giant sum mixing rational and irrational monomials.
+    # The decomposition below catches the structure the quadratic solver
+    # actually produces and reliably compacts it.
+    expr = cancel(expr)
+    sqrts = [s for s in expr.atoms(sympy.Pow) if s.exp == sympy.S.Half]
+    if not sqrts:
+        n, d = fraction(expr)
+        return factor(n)/factor(d)
+    if len(sqrts) != 1:
+        return expr
+    sq = sqrts[0]
+    try:
+        poly = sympy.Poly(expr, sq)
+    except sympy.PolynomialError:
+        return expr
+    if poly.degree() > 1:
+        return expr
+    coeffs = poly.all_coeffs()
+    if len(coeffs) == 1:
+        n, d = fraction(coeffs[0])
+        return factor(n)/factor(d)
+    Q_part, P_part = coeffs[0], coeffs[1]
+    P_n, P_d = fraction(cancel(P_part))
+    Q_n, Q_d = fraction(cancel(Q_part))
+    R = sympy.lcm(P_d, Q_d)
+    P_scaled = cancel(P_n * R / P_d)
+    Q_scaled = cancel(Q_n * R / Q_d)
+    D_factored = factor(sq.args[0])
+    sq_factored = sympy.sqrt(D_factored)
+    return (factor(P_scaled) + factor(Q_scaled)*sq_factored) / factor(R)
+
+def _try_positive_quadratic_solve(SM, F, X):
+    # Find a state y whose ODE is exactly quadratic in y (after multiplying out
+    # rational denominators) with sign structure
+    #     a*y^2 + b*y + c = 0,    sign(a) = +,  sign(c) = -
+    # so the product of roots c/a is negative and exactly one root is positive.
+    # Emits the closed-form positive root
+    #     y = (-b + sqrt(b^2 - 4*a*c)) / (2*a)
+    # directly, avoiding sympy.solve() (which explodes on coupled systems).
+    # Sign analysis assumes all free symbols are positive — same convention as
+    # _try_positive_direct_solve and _rational_sign_class.
+    #
+    # Used AFTER _try_positive_direct_solve exhausts its linear candidates,
+    # so that R2-style cycles (where the last cycle state's ODE becomes
+    # quadratic in itself after upstream linear solves) can be resolved as a
+    # STATE rather than via a flux-parameter pivot — keeping rate constants
+    # out of mysteadies entries and the chain-substitution of neglect
+    # parameters contained to state expressions.
+    for i in range(len(X)):
+        y=X[i]
+        eq=sympy.S.Zero
+        row=SM.row(i)
+        for k in range(SM.cols):
+            if row[k]!=0:
+                eq=eq+row[k]*F[k]
+        if eq==0:
+            continue
+        # Multiply through any rational denominators: at a biologically
+        # meaningful steady state, the denominator is a positive sum and
+        # cannot vanish, so zeros of `eq` and zeros of `num` coincide.
+        num, _den = sympy.fraction(sympy.together(eq))
+        try:
+            poly = sympy.Poly(num, y)
+        except sympy.PolynomialError:
+            continue
+        if poly.degree() != 2:
+            continue
+        a, b, c = poly.all_coeffs()
+        a_cls=_rational_sign_class(a)
+        c_cls=_rational_sign_class(c)
+        # Normalise so a is positive (multiplying the whole equation by -1
+        # flips every coefficient and leaves the roots unchanged).
+        if a_cls=='-' and c_cls=='+':
+            a, b, c = -a, -b, -c
+            a_cls, c_cls = '+', '-'
+        if a_cls!='+' or c_cls!='-':
+            # Sign structure doesn't guarantee a unique positive root —
+            # fall back to the existing flux-parameter-pivot pipeline.
+            continue
+        disc = b**2 - 4*a*c
+        sol = cancel((-b + sympy.sqrt(disc)) / (2*a))
+        return (i, y, sol)
     return None
 
 def checkNegRows(M):
@@ -838,7 +927,8 @@ def Alyssa(filename,
           outputFormat='R',
           testSteady='T',
           walltime=0,
-          simplify=True):
+          simplify=True,
+          solveQuadratic=False):
     filename=str(filename)
     _start_time = time.time()
     def _check_walltime():
@@ -864,16 +954,26 @@ def Alyssa(filename,
             L.remove(L[i-counter])
             counter=counter+1       
     
-##### Define flux vector F	
+##### Define flux vector F
+    # Track which fluxes were zeroed *by an injection substitution*. Those
+    # fluxes pull their participating states out of the analysis (mirrors
+    # v1.1 semantics: a state driven only by a forcing is treated as an
+    # exogenous quantity, not as a candidate for steady-state resolution
+    # nor for sink-cluster annihilation downstream).
     F=[]
-    
+    flux_zeroed_by_injection=[]
+
     for i in range(1,len(L)):
         F.append(L[i][1])
-        #print(F)
         F[i-1]=F[i-1].replace('^','**')
         F[i-1]=parse_expr(F[i-1])
+        zeroed_by_inj=False
         for inj in injections:
-            F[i-1]=F[i-1].subs(parse_expr(inj),0)
+            new_expr=F[i-1].subs(parse_expr(inj),0)
+            if new_expr!=F[i-1] and new_expr==0:
+                zeroed_by_inj=True
+            F[i-1]=new_expr
+        flux_zeroed_by_injection.append(zeroed_by_inj)
     F=Matrix(F)
     #print(F)
 ##### Define state vector X
@@ -900,24 +1000,38 @@ def Alyssa(filename,
 
     
 ##### Check for zero fluxes
+    # Two distinct cases:
+    #  * Flux was zeroed by an injection (forcing) substitution: also drop
+    #    the participating state ROWS. Restores the v1.1 semantics that
+    #    forcing-driven states are treated as exogenous (this is what users
+    #    rely on when calling steadyStates(..., forcings = ...)).
+    #  * Flux is identically zero for any other reason: only drop the
+    #    column. Participating states must stay in the analysis because
+    #    they appear in other reactions and the NegRows / PosRows /
+    #    FindSinkCluster machinery is what's meant to flag a species
+    #    without any source as zero in steady state.
     icounter=0
     jcounter=0
-    for i in range(len(F)):
-        if(F[i-icounter]==0):
-            F.row_del(i-icounter)
-            for j in range(len(SM.col(i-icounter))):
-                if(SM[j-jcounter,i-icounter]!=0):
-                    #UsedRC.append(X[j-jcounter])
-                    X.row_del(j-jcounter)
-                    SM.row_del(j-jcounter)
-                    SMorig.row_del(j-jcounter)
-                    jcounter=jcounter+1
-            SM.col_del(i-icounter)
-            SMorig.col_del(i-icounter)
+    n_flux_orig=len(F)
+    for i in range(n_flux_orig):
+        idx=i-icounter
+        if F[idx]==0:
+            from_injection=flux_zeroed_by_injection[i] if i<len(flux_zeroed_by_injection) else False
+            F.row_del(idx)
+            if from_injection:
+                # v1.1-style row removal: any state with a non-zero
+                # stoichiometric entry in this flux column drops out.
+                col=SM.col(idx)
+                rows_to_drop=[r for r in range(SM.rows) if col[r]!=0]
+                for r in sorted(rows_to_drop, reverse=True):
+                    X.row_del(r)
+                    SM.row_del(r)
+                    SMorig.row_del(r)
+            SM.col_del(idx)
+            SMorig.col_del(idx)
             icounter=icounter+1
-    
+
     print('Removed '+str(icounter)+' fluxes that are a priori zero!',flush=True)
-    nrspecies=nrspecies-icounter
     #printmatrix(SM)
     #print(F)
     #print(X)
@@ -1189,65 +1303,105 @@ def Alyssa(filename,
     gesnew=0
     eqOut=[]
 
+    def _apply_state_solve(row_idx, y, sol, label):
+        # Shared post-solve bookkeeping: back-substitute earlier solves into
+        # `sol`, record `sol` in eqOut, lock baked-in flux parameters,
+        # forward-substitute into prior eqOut entries, and propagate into F.
+        # `label` is just for the log line.
+        for prev_eq in eqOut:
+            lhs_str, rhs_str = prev_eq.split(' = ', 1)
+            lhs_sym=parse_expr(lhs_str)
+            if sol.has(lhs_sym):
+                sol=cancel(sol.subs(lhs_sym, parse_expr(rhs_str)))
+        eqOut.append(str(y)+' = '+str(sol))
+        print('   Solved '+label+': '+str(y),flush=True)
+        sol_sym_names={str(s) for s in sol.free_symbols}
+        for nm, sym in fluxpar_str_to_sym.items():
+            if nm in sol_sym_names:
+                locked_fluxpars.add(sym)
+        for i in range(len(eqOut)):
+            lhs_str, rhs_str = eqOut[i].split(' = ', 1)
+            rhs_expr=parse_expr(rhs_str)
+            if rhs_expr.has(y):
+                rhs_expr=cancel(rhs_expr.subs(y, sol))
+                eqOut[i]=lhs_str+' = '+str(rhs_expr)
+        for k in range(len(F)):
+            F[k]=cancel(F[k].subs(y, sol))
+        X.row_del(row_idx)
+        SM.row_del(row_idx)
+
     def _do_direct_positive_solve():
         # Run one sweep of direct-positive-solves until no more applicable
         # states remain, updating F, SM, X, SSgraph, and locked_fluxpars.
         # Returns True if at least one state was solved this sweep.
+        # See _try_positive_direct_solve for why back-substitution matters:
+        # without it, sol would reference a state name that dMod's P() treats
+        # as its init-default parameter instead of the SS expression —
+        # producing initial conditions that are not actually at steady state.
         found=False
         while True:
             direct=_try_positive_direct_solve(SM, F, X)
             if direct is None:
                 break
             row_idx, y, sol = direct
-            # Back-substitute any state that was direct-solved earlier but
-            # still appears as a symbol in `sol` (this can happen when the
-            # greedy direct-solve picks a later state first). Without this,
-            # sol would reference a state name that dMod's P() treats as
-            # its init-default parameter instead of the SS expression —
-            # producing initial conditions that are not actually at steady
-            # state (drift in the simulation).
-            for prev_eq in eqOut:
-                lhs_str, rhs_str = prev_eq.split(' = ', 1)
-                lhs_sym=parse_expr(lhs_str)
-                if sol.has(lhs_sym):
-                    sol=cancel(sol.subs(lhs_sym, parse_expr(rhs_str)))
-            eqOut.append(str(y)+' = '+str(sol))
-            print('   Solved directly (positive): '+str(y),flush=True)
-            # Record which flux parameters got baked into `sol`; they must
-            # not be reparameterized by any later cycle-break step.
-            sol_sym_names={str(s) for s in sol.free_symbols}
-            for nm, sym in fluxpar_str_to_sym.items():
-                if nm in sol_sym_names:
-                    locked_fluxpars.add(sym)
-            # Forward-substitute: solving y may unblock a cleaner form for
-            # previously-solved states whose expression still referenced y.
-            for i in range(len(eqOut)):
-                lhs_str, rhs_str = eqOut[i].split(' = ', 1)
-                rhs_expr=parse_expr(rhs_str)
-                if rhs_expr.has(y):
-                    rhs_expr=cancel(rhs_expr.subs(y, sol))
-                    eqOut[i]=lhs_str+' = '+str(rhs_expr)
-            # Substitute y in every flux expression and drop its row/state.
-            for k in range(len(F)):
-                F[k]=cancel(F[k].subs(y, sol))
-            X.row_del(row_idx)
-            SM.row_del(row_idx)
+            _apply_state_solve(row_idx, y, sol, 'directly')
             found=True
         return found
 
+    def _do_quadratic_state_solve():
+        # After _do_direct_positive_solve exhausts its linear-in-self
+        # candidates, this attempts quadratic-in-self states (e.g. the last
+        # remaining state in an R1<->R2<->R1_R2-style cycle whose ODE becomes
+        # quadratic after upstream linear substitutions). When the
+        # sign-structure guarantees a unique positive root, we emit the
+        # closed-form quadratic formula and resolve the state as a STATE —
+        # this is the only way to break the cycle without pivoting on a flux
+        # parameter and therefore dragging that flux parameter (and the
+        # transitive chain of substituted upstream rate constants) into
+        # mysteadies. See _try_positive_quadratic_solve for the sign analysis.
+        # Cubic-and-higher cycles still fall through to flux-parameter pivots.
+        # Off by default — emits sqrt expressions that some downstream
+        # workflows can't consume. Opt in via `solveQuadratic=True`.
+        if not solveQuadratic:
+            return False
+        found=False
+        while True:
+            quad=_try_positive_quadratic_solve(SM, F, X)
+            if quad is None:
+                break
+            row_idx, y, sol = quad
+            _apply_state_solve(row_idx, y, sol, 'quadratically')
+            found=True
+        return found
+
+    def _drain_positive_solves():
+        # Alternate linear and quadratic positive-solves until neither
+        # finds anything new. Linear is tried first (it's cheap and never
+        # introduces sqrt); each linear sweep may unblock a quadratic, and
+        # each quadratic sweep may unblock further linears (the sqrt-bearing
+        # substitution can simplify other states' ODEs to linear-in-self).
+        any_progress=False
+        while True:
+            lin=_do_direct_positive_solve()
+            quad=_do_quadratic_state_solve()
+            if not lin and not quad:
+                break
+            any_progress=True
+        return any_progress
+
     if cycles_list:
         print('\nDirect positive-solve pass ...',flush=True)
-        if _do_direct_positive_solve():
+        if _drain_positive_solves():
             SSgraph=DetermineGraphStructure(SM, F, X, neglect)
             priority_rows, cycles_list = genPriorityTable(SM, F, fluxpars, X, LCLs, SSgraph, neglect, locked_fluxpars)
         else:
             print('   (nothing resolvable positively up-front)',flush=True)
 
     while cycles_list:
-        # Re-check direct-positive-solve before every cycle-break: an earlier
+        # Re-check positive-solves before every cycle-break: an earlier
         # pivot's substitution may have turned a previously-nonlinear state
-        # into a linear-in-itself, positive-solvable one.
-        if _do_direct_positive_solve():
+        # into a linear-in-itself or quadratic-with-positive-root one.
+        if _drain_positive_solves():
             SSgraph=DetermineGraphStructure(SM, F, X, neglect)
             priority_rows, cycles_list = genPriorityTable(SM, F, fluxpars, X, LCLs, SSgraph, neglect, locked_fluxpars)
             if not cycles_list:
@@ -1516,10 +1670,7 @@ def Alyssa(filename,
 #### Solve remaining equations
     eqOut.reverse()
     print('Solving remaining equations ...\n',flush=True)
-    _solve_count=0
-    _total_nodes=len(SSgraph)
     while(SSgraph!={}):
-        _t_solve=time.time()
         node=FindNodeToSolve(SSgraph, SM, F, X)
         if node is None:
             print('   WARNING: no solvable leaf left — aborting solve phase.',flush=True)
@@ -1556,8 +1707,7 @@ def Alyssa(filename,
         for k in SSgraph:
             if node in SSgraph[k]:
                 SSgraph[k].remove(node)
-        _solve_count+=1
-        print(f'   Solved {node} ({_solve_count}/{_total_nodes}, {time.time()-_t_solve:.1f}s)',flush=True)
+        print(f'   Solved {node}',flush=True)
 
 #### Optional final simplification (applied once per expression, after the loop)
     # simplify:
@@ -1581,19 +1731,31 @@ def Alyssa(filename,
                       f'expressions — leaving the rest un-simplified.',flush=True)
                 _simplify_aborted=True
                 break
-            _t_simp=time.time()
             ls, rs = eqOut[i].split(' = ', 1)
+            e_raw = parse_expr(rs)
+            has_sqrt = e_raw.has(sympy.sqrt)
             if _full:
-                e=cancel(parse_expr(rs))
-                e_pos, reps=posify(e)
-                e_pos=_simplify(e_pos, ratio=oo, rational=True)
-                n, d=fraction(e_pos)
-                e_pos=factor(n)/factor(d)
-                rs_simp=str(e_pos.subs(reps))
+                if has_sqrt:
+                    # Decompose into (P + Q*sqrt(D))/R and factor each piece.
+                    e_pos, reps = posify(e_raw)
+                    e_pos = _simplify_with_sqrt(e_pos)
+                    rs_simp = str(e_pos.subs(reps))
+                else:
+                    e=cancel(e_raw)
+                    e_pos, reps=posify(e)
+                    e_pos=_simplify(e_pos, ratio=oo, rational=True)
+                    n, d=fraction(e_pos)
+                    e_pos=factor(n)/factor(d)
+                    rs_simp=str(e_pos.subs(reps))
             else:
-                rs_simp=str(_simplify(parse_expr(rs)))
+                if has_sqrt:
+                    e_pos, reps = posify(e_raw)
+                    e_pos = _simplify_with_sqrt(e_pos)
+                    rs_simp = str(e_pos.subs(reps))
+                else:
+                    rs_simp=str(_simplify(e_raw))
             eqOut[i]=ls+' = '+rs_simp
-            print(f'   Simplified {ls} ({i+1}/{len(eqOut)}, {time.time()-_t_simp:.1f}s)',flush=True)
+            print(f'   Simplified {ls}',flush=True)
     
 #### Test Solution
     if(testSteady=='T'):

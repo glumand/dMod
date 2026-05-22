@@ -3,16 +3,28 @@
 \name{plotTrace}
 \alias{plotTrace}
 \alias{plotTrace.nlmeFit}
+\alias{plotTrace.mcmcResultSequential}
+\alias{plotTrace.mcmcResultSingle}
+\alias{plotTrace.mcmcResultBlocked}
 \title{ECM convergence trace (OFV, |delta-psi|) per stage}
 \usage{
 plotTrace(x, ...)
 
 \method{plotTrace}{nlmeFit}(x, ...)
+
+\method{plotTrace}{mcmcResultSequential}(x, ...)
+
+\method{plotTrace}{mcmcResultSingle}(x, parameters = NULL, ...)
+
+\method{plotTrace}{mcmcResultBlocked}(x, parameters = NULL, ...)
 }
 \arguments{
 \item{x}{An \link{nlmeFit} with \code{method = "quadrature"}. Errors otherwise.}
 
 \item{...}{Ignored.}
+
+\item{parameters}{Optional character vector restricting which parameter
+panels are drawn.}
 }
 \value{
 A ggplot.
@@ -23,4 +35,11 @@ A ggplot.
 Four-panel trace of OFV, structural-parameter step
 \verb{|delta psi|}, max softmax weight, and minimum effective node count
 across ECM iterations. Quadrature-method nlmeFit only.
+
+Method for \code{\link[=mcmc]{mcmc()}} sequential / SMC outputs: shows the
+adaptive tempering schedule (beta vs level), the post-resample ESS,
+and per-level acceptance.
+
+Method for \code{\link[=mcmc]{mcmc()}} single-chain outputs: per-parameter
+trace of the chain across iterations.
 }

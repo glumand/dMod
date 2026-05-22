@@ -331,9 +331,8 @@ getFluxes <- function(eqnlist, type = c("conc", "amount")) {
 
   if (is.null(SMatrix)) return()
 
-  # Defensive fallback: an eqnlist constructed outside our constructor may have
-  # NULL compartment info. Treat every state as living in an implicit "defaultComp"
-  # compartment with volume "1" — matches legacy behavior.
+  # Fallback when compartment info was not populated: treat every state as
+  # living in an implicit "defaultComp" compartment with volume "1".
   if (is.null(compartments) || is.null(compartmentOf)) {
     compOf <- setNames(rep("defaultComp", length(variables)), variables)
     compartments <- list(defaultComp = list(volume = "1", rule = NULL))
@@ -384,8 +383,7 @@ getFluxes <- function(eqnlist, type = c("conc", "amount")) {
     destin_vol <- volumes[[j]]
 
     # Uniform flux formula: flux_X = stoich_X * rate * V_ref / V_X for every
-    # species in every reaction. For single-educt-compartment reactions this
-    # is equivalent to the legacy asymmetric formula.
+    # species in every reaction.
     switch(type,
            conc = {
              volumes.ratios <- paste0("*(", vref_vol, "/", destin_vol, ")")
@@ -652,9 +650,8 @@ print.eqnlist <- function(x, pander = FALSE, ...) {
 
 
 # Internal: render a compact compartment summary for print.eqnlist.
-# Returns character(0) when the model has exactly one compartment whose volume
-# is "1" and no rule (the implicit-default case for models that never used
-# the compartment feature), so legacy output stays unchanged.
+# Returns character(0) when the model has exactly one default-volume
+# compartment so prints stay short.
 .format_compartments <- function(compartments, compartmentOf) {
   if (is.null(compartments) || is.null(compartmentOf)) return(character(0))
   if (length(compartments) == 1L) {
@@ -886,9 +883,10 @@ print.eqnvec <- function(x, width = 140, pander = FALSE, ...) {
   m_frontWidth <- m_odrWidth + m_speciesWidth + m_relWidth + m_sepWidth
   m_eqnWidth <- m_lineWidth - m_frontWidth
   
-  # Order of states for alphabetical for print out
+  # Order of states for alphabetical for print out. The Idx column is the
+  # sequential print order (1, 2, 3, ...), not the pre-sort position.
   m_eqnOrder <- order(m_species)
-  
+
   # Iterate over species
   m_msgEqn <- do.call(c, mapply(function(eqn, spec, odr) {
     return(paste0(
@@ -899,7 +897,8 @@ print.eqnvec <- function(x, width = 140, pander = FALSE, ...) {
       str_wrap(string = gsub(x = eqn, pattern = " ", replacement = "", fixed = TRUE),
                width = m_eqnWidth, exdent = m_frontWidth)
     ))
-  }, eqn = eqnvec[m_eqnOrder], spec = m_species[m_eqnOrder], odr = m_eqnOrder, SIMPLIFY = FALSE))
+  }, eqn = eqnvec[m_eqnOrder], spec = m_species[m_eqnOrder],
+     odr = seq_along(m_eqnOrder), SIMPLIFY = FALSE))
   
   # Print to command line or to pander
   if (!pander) {

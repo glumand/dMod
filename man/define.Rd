@@ -4,7 +4,7 @@
 \alias{define}
 \alias{insert}
 \alias{branch}
-\title{Construct parameter transformations}
+\title{Construct and modify parameter transformations}
 \usage{
 define(trafo, expr, ..., conditionMatch = NULL)
 
@@ -18,44 +18,36 @@ branch(
 )
 }
 \arguments{
-\item{trafo}{A named character vector, an object of class \code{eqnvec}, or a list
-thereof representing parameter transformations.}
+\item{trafo}{Named character / \link{eqnvec}, or a list thereof.}
 
-\item{expr}{Character string of the form \code{"lhs ~ rhs"} defining a symbolic
-transformation or substitution.}
+\item{expr}{\code{"lhs ~ rhs"} formula string.}
 
-\item{...}{Named values used to substitute symbols occurring in \code{expr}.}
+\item{...}{Named values to substitute into \code{expr} symbols.}
 
-\item{conditionMatch}{Optional character string (regular expression). If provided, the operation
-is applied only to conditions whose names match this expression.}
+\item{conditionMatch}{Regex on condition names; restricts the operation.}
 
-\item{table}{Optional data frame specifying condition-specific substitutions. Rownames
-identify conditions; columns correspond to parameter names.}
+\item{table}{Condition table (row per condition, column per parameter)
+carried as the \code{tree} attribute when branching.}
 
-\item{conditions}{Character vector of condition names. If supplied, overrides
-\code{rownames(table)}.}
+\item{conditions}{Condition names; default \code{rownames(table)}.}
 
-\item{apply}{Character string specifying whether and how entries of \code{table} are
-applied when branching:
-\describe{
-\item{"nothing"}{Only duplicate the transformation (default).}
-\item{"insert"}{Apply entries via \code{\link[=insert]{insert()}}.}
-\item{"define"}{Apply entries via \code{\link[=define]{define()}}.}
-}}
+\item{apply}{One of \code{"nothing"}, \code{"insert"}, \code{"define"}; how the
+\code{table} entries are folded into each branch.}
 }
 \value{
-An object of the same type as \code{trafo}, possibly expanded to a list if
-branching has been applied.
+Same shape as \code{trafo} (or a per-condition list if branched).
 }
 \description{
-Symbolic helpers to build and modify parameter transformations used by
-\code{\link[=P]{P()}} and \code{\link[=Xs]{Xs()}}:
-\describe{
-\item{define}{Reset or redefine a transformation rule.}
-\item{insert}{Apply symbolic substitutions to existing rules.}
-\item{branch}{Duplicate a transformation per condition with optional
-condition-specific substitutions; the condition table is stored as
-attribute \code{"tree"}.}
+Symbolic helpers used by \code{\link[=P]{P()}} and \code{\link[=Xs]{Xs()}} to build, substitute, and
+branch transformation rules. The condition table from \code{\link[=branch]{branch()}} is
+stored on \code{attr(., "tree")}.
+}
+\details{
+\itemize{
+\item \code{define} resets the LHS of \code{expr} to its RHS.
+\item \code{insert} substitutes the RHS for the LHS wherever it occurs.
+\item \code{branch} duplicates a trafo across conditions, optionally applying
+per-condition substitutions taken from \code{table}.
 }
 }
 \examples{

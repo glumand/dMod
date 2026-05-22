@@ -442,6 +442,55 @@ static EvalResult eval_one_subject(
 }
 
 
+// Rcpp-exported wrapper around eval_one_subject. Used by the joint-block
+// Bayesian sampler (Pfad B / Particle-Gibbs) to evaluate the per-subject
+// conditional posterior p(eta_i | y_i, theta, Omega) as an objlist:
+//   value    = data NLL_i(eta_i) + eta_i^T Omega^-1 eta_i + log|Omega|
+//   gradient = 2 J^T r / sigma^2 + 2 Omega^-1 eta_i (Fisher info + prior)
+//   hessian  = 2 J^T (1/sigma^2) J + 2 Omega^-1     (Gauss-Newton + prior)
+// All over the K eta entries of subject i.
+//
+// `pars_full` must contain placeholders for ALL parameters consumed by
+// model_cb (typically prdfn = g * x * p): structural pars + the K eta_i
+// for this subject. The eta slots are filled from `eta_block`.
+// [[Rcpp::export]]
+List focei_eval_one_subject(
+    Function model_cb,
+    Function err_cb,
+    NumericVector pars_full,
+    Nullable<NumericVector> fixed,
+    List meta_i,
+    NumericVector eta_block,
+    NumericMatrix Omega_inv,
+    double Omega_log_det) {
+
+  NumericVector pars_copy = clone(pars_full);
+  IntegerVector eta_idx_in_pars = meta_i["eta_idx_in_pars"];
+  const int K = eta_block.size();
+  if ((int)eta_idx_in_pars.size() != K)
+    stop("focei_eval_one_subject: eta_block length mismatch.");
+  if (Omega_inv.nrow() != K || Omega_inv.ncol() != K)
+    stop("focei_eval_one_subject: Omega_inv shape mismatch.");
+
+  EvalResult er = eval_one_subject(
+      model_cb, err_cb, pars_copy, fixed, meta_i,
+      eta_block.begin(), Omega_inv.begin(), Omega_log_det);
+
+  NumericVector grad(K);
+  for (int k = 0; k < K; ++k) grad[k] = er.grad[k];
+  NumericMatrix H(K, K);
+  for (int c = 0; c < K; ++c) for (int r = 0; r < K; ++r)
+    H(r, c) = er.hess[r + K * c];
+  CharacterVector eta_names = meta_i["eta_names"];
+  grad.attr("names") = eta_names;
+  H.attr("dimnames") = List::create(eta_names, eta_names);
+
+  return List::create(_["value"] = er.value,
+                      _["gradient"] = grad,
+                      _["hessian"]  = H);
+}
+
+
 // Per-subject inner trust using eval_one_subject. Returns the same
 // InnerResult shape as inner_trust_one_subject().
 static InnerResult inner_trust_one_subject(

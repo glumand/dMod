@@ -12,7 +12,6 @@
 ##   Rscript scripts/check.R                # full R CMD check
 ##   Rscript scripts/check.R --tests-only   # just devtools::test() (faster)
 ##
-## On Windows, the wrapper `scripts/check.ps1` is the convenient entry point.
 ## ---------------------------------------------------------------------------
 
 args <- commandArgs(trailingOnly = TRUE)

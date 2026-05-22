@@ -24,11 +24,13 @@ dosing <- eventlist() %>%
 # when the model contains many model parameters but only a few of them
 # are estimated. Otherwise, sensitivity equations will be computed for all
 # possible derivatives.
-model <- odemodel(ODEs, events = dosing, modelname = "PKPD", 
-                  estimate = c("EC50", "EMAX", "GR", "hill", "PL", "RATE"))
+model <- odemodel(ODEs, events = dosing, modelname = "PKPD",
+                  estimate = c("EC50", "EMAX", "GR", "hill", "PL", "RATE"),
+                  compile = FALSE)
 
 # A prediction function with sensitivities can be built from the model
 prdfn <- Xs(model)
+compile(prdfn)
 
 
 # The prediction function needs to be called with times and parameters

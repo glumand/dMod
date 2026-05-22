@@ -204,9 +204,8 @@
 #' the right `em` internally and runs a solver; use `emObjfn` directly only
 #' if you need to evaluate the objective by hand.
 #'
-#' The Laplace approximation that was historically available here as
-#' `method = "laplace"` has been folded into the C++ FOCEI kernel exposed by
-#' [nlmeFit] with `method = "focei"`. Call `nlmeFit` directly.
+#' For the Laplace approximation of the marginal likelihood, use [nlmeFit()]
+#' with `method = "focei"`.
 #'
 #' @param obj An \code{objfn}, typically
 #'   `normL2(data, g*x*p, errmodel = err) + constraintL2(mu = 0, Omega = om)`.
@@ -214,9 +213,7 @@
 #' @param prdfn A `prdfn` (`g*x*p`). Required.
 #' @param data A [datalist]. Required.
 #' @param errfn Optional obsfn defining a parameter-dependent error model.
-#' @param method Character. Only `"quadrature"` is supported. Retained for
-#'   forward compatibility; the historical `"laplace"` path now lives inside
-#'   the C++ FOCEI kernel reached via [nlmeFit] with `method = "focei"`.
+#' @param method Character. Only `"quadrature"` is supported.
 #' @param control Named list with `level` (Smolyak depth, default 4) and
 #'   `cores` (default 1).
 #'
@@ -246,13 +243,13 @@ emObjfn <- function(obj, omega,
 
 
 
-## Internal quadrature-method emObjfn constructor (Phase 4b).
+## Internal quadrature-method emObjfn constructor.
 ##
-## Closure state separates frozen E-step (nodes_per_subject, etaModes,
-## chol_value, current_level) from the trust-varying structural pars. The
-## orchestrator (nlmeFit) calls attr(em, "rebuildQuadrature")(psiFull, level)
-## to update the frozen state, then runs trust(em, init = psi_structural) to
-## step over structural params while the integration grid stays fixed.
+## Closure state separates the frozen E-step (nodes_per_subject, etaModes,
+## chol_value, current_level) from the trust-varying structural pars. Callers
+## refresh the frozen state via attr(em, "rebuildQuadrature")(psiFull, level)
+## between outer iterations and run trust(em, init = psi_structural) with the
+## integration grid held fixed.
 .emObjfn_quadrature <- function(obj, omega, prdfn, data, errfn,
                                 level, cores) {
   if (!inherits(obj, "objfn"))
@@ -806,7 +803,7 @@ nlmeFit_make <- function(argument, value, gradient, hessian, Omega, etaModes,
         em, parinit = psi[structural_names], fixed = fixed,
         rinit = cm1$rinit, rmax = cm1$rmax,
         iterlim = maxCm1Iter,
-        fterm = cm1$fterm, mterm = cm1$mterm, on_step = NULL))
+        fterm = cm1$fterm, mterm = cm1$mterm))
       psi[structural_names] <- cm1_fit$argument
       out_after_cm1 <- em(psi[structural_names], fixed = fixed, deriv = FALSE)
       diag_after    <- attr(out_after_cm1, "emDiag")
@@ -877,11 +874,12 @@ nlmeFit_make <- function(argument, value, gradient, hessian, Omega, etaModes,
 #' @param data The [datalist] used for `obj`. Required.
 #' @param errfn Optional obsfn defining a parameter-dependent error model.
 #' @param fixed Optional named-numeric of fixed parameters.
-#' @param method Estimator. \code{"focei"} runs the C++ FOCEI kernel
-#'   (Laplace + trust + eager Stage-2 correction); \code{"quadrature"} runs
-#'   adaptive sparse-grid Gauss-Hermite + ECM with a cold start;
-#'   \code{"foceiQuadrature"} runs FOCEI first and uses the converged
-#'   structural pars and modes as warmstart for the quadrature polish.
+#' @param method Estimator. \code{"focei"} runs FOCEI (Laplace + trust with
+#'   the analytical \eqn{\partial \log |H_i| / \partial \theta} correction);
+#'   \code{"quadrature"} runs adaptive sparse-grid Gauss-Hermite + ECM with a
+#'   cold start; \code{"foceiQuadrature"} runs FOCEI first and uses the
+#'   converged structural pars and modes as a warmstart for the quadrature
+#'   polish.
 #' @param control Nested list of method-specific knobs. Entries:
 #'   \describe{
 #'     \item{`$focei`}{Recognised keys: `innerControl`, `trustControl`.}
@@ -1206,11 +1204,10 @@ ecmEvaluateSubject <- function(subjIdx, psiFull, etaModes,
 #' Multi-start nonlinear mixed-effects fit
 #'
 #' Runs [nlmeFit()] from many starting points in parallel, returning a
-#' [parlist] of fits sorted-ready for [as.parframe()] / [summary()]. The
-#' design mirrors [mstrust()]: `center` is either a named-numeric (perturbed
-#' by `samplefun` per fit) or a [parframe] (each row used as a starting
-#' point). Use this to characterise the multi-modality of the marginal
-#' likelihood and pick the best optimum.
+#' [parlist] of fits sorted-ready for [as.parframe()] / [summary()]. `center`
+#' is either a named-numeric (perturbed by `samplefun` per fit) or a
+#' [parframe] (each row used as a starting point). Use this to characterise
+#' the multi-modality of the marginal likelihood and pick the best optimum.
 #'
 #' @param obj An `objfn` passed straight to [nlmeFit()] (typically
 #'   `normL2(data, g*x*p) + constraintL2(mu = 0, Omega = om)`).
@@ -1308,7 +1305,7 @@ msnlmeFit <- function(obj, omega, center,
   cores <- min(fits, cores)
 
   # Optional on-disk dump (crash-resilient): one .Rda per fit + a final
-  # parameterList.Rda. Mirrors mstrust()'s folder layout.
+  # parameterList.Rda.
   interResultFolder <- NULL
   resultFolder      <- NULL
   if (output) {

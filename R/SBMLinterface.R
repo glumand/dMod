@@ -354,7 +354,7 @@ export_sbml <- function(eqnlist, parameters = NULL, inits = NULL, filepath,
     # `python-libsbml` was declared via reticulate::py_require() in
     # .onLoad(). py_exe() materialises the managed env (downloads Python +
     # installs the requirement on first call) and returns the interpreter
-    # path so the existing system2() invocations downstream keep working.
+    # path used by the system2() calls below.
     tryCatch(reticulate::py_exe(), error = function(e) {
       stop("Could not provision a Python with python-libsbml via ",
            "reticulate (", conditionMessage(e), "). Set ",

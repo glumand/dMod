@@ -38,9 +38,8 @@ detectFreeCores <- function(machine = NULL) {
     }
     
     # Floor at 1: callers feed `free` straight into mclapply(mc.cores = ...)
-    # which rejects 0. On a CI runner under heavy compile load the 1-min load
-    # average can exceed nCores, which previously gave free = 0 and crashed
-    # downstream. Reporting 1 instead of 0 here means "serialise, don't die".
+    # which rejects 0. Under heavy load the 1-min average can exceed nCores;
+    # reporting 1 means "serialise, don't die" instead of crashing.
     list(free = max(1L, round(nCores - occupied)), nCores = nCores, occupied = occupied)
   }
   

@@ -113,23 +113,23 @@ static void enumerate_compositions(int K, int q,
 // For non-nested 1D rules (GH is non-nested), Smolyak weights are mixed-sign.
 // Dedup merges weights at coincident nodes; remaining sign mixture is handled
 // downstream via signed log-sum-exp in the per-subject evaluator.
-//' @name sparse_grid_gh
+//' @name sparseGridGH
 //' @title Sparse-grid Gauss-Hermite quadrature nodes (Smolyak rule)
 //' @description Builds the K-dimensional Smolyak sparse grid for physicists'
 //'   Gauss-Hermite at depth `level`. Returns nodes `[B, K]` in z-space and
 //'   signed weights (length `B`).
 //' @param K Integer >= 1, problem dimension.
 //' @param level Integer >= K, Smolyak depth (K+1..K+3 is the useful range).
-//' @param deriv_mode Reserved for future Genz-Keister / adaptive refinement;
+//' @param derivMode Reserved for future Genz-Keister / adaptive refinement;
 //'   currently ignored.
 //' @return A list with `nodes` (B x K, batch-first), `weights` (length B,
 //'   signed), and `K`, `level`.
 //' @export
 // [[Rcpp::export]]
-List sparse_grid_gh(int K, int level, int deriv_mode = 0) {
-  (void) deriv_mode;
-  if (K < 1)     Rcpp::stop("sparse_grid_gh: K must be >= 1.");
-  if (level < 1) Rcpp::stop("sparse_grid_gh: level must be >= 1.");
+List sparseGridGH(int K, int level, int derivMode = 0) {
+  (void) derivMode;
+  if (K < 1)     Rcpp::stop("sparseGridGH: K must be >= 1.");
+  if (level < 1) Rcpp::stop("sparseGridGH: level must be >= 1.");
 
   /* K = 1 short-circuit: the only contributing multi-index is (level),
      so the grid is just the level-L 1D rule. */
@@ -173,7 +173,7 @@ List sparse_grid_gh(int K, int level, int deriv_mode = 0) {
   int lo = std::max(K, level - K + 1);
   int hi = level;
   if (lo > hi) {
-    Rcpp::stop("sparse_grid_gh: level (%d) is below dimension K (%d); the "
+    Rcpp::stop("sparseGridGH: level (%d) is below dimension K (%d); the "
                "minimum useful level is K (single-node grid). Increase `level`.",
                level, K);
   }

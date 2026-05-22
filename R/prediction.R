@@ -611,8 +611,8 @@ Xd <- function(data, condition = NULL) {
 }
 
 
-#' Observation functions. 
-#' 
+#' Observation functions
+#'
 #' @description 
 #' Creates an object of type [obsfn] that evaluates an observation function
 #' and, if requested, its first and second derivatives based on the output of a model 
@@ -642,9 +642,11 @@ Xd <- function(data, condition = NULL) {
 #'   forward-mode AD; faster for many parameters; requires compiled native
 #'   code) or `"symbolic"` (SymPy Jacobian + chain rule against upstream
 #'   `dX`/`dP`; pure R).
+#' @param deriv Logical. If `TRUE` (default), attach the first-order
+#'   sensitivity `attr(., "deriv")` of shape `[time, observable, theta]`.
 #' @param deriv2 Logical. If `TRUE`, attach a second-order derivative
 #'   `attr(., "deriv2")` array of shape `[time, observable, theta, theta]`.
-#'   Default `FALSE`.
+#'   Requires `deriv = TRUE`. Default `FALSE`.
 #'
 #' @return
 #' An object of class [obsfn], i.e. a function  `g(..., fixed = NULL, deriv = TRUE, condition = NULL, env = NULL)`
@@ -658,10 +660,14 @@ Xd <- function(data, condition = NULL) {
 Y <- function(g, f = NULL, states = NULL, parameters = NULL,
               condition = NULL, attach.input = TRUE,
               compile = FALSE, modelname = NULL, verbose = FALSE,
-              deriv2 = FALSE,
+              deriv = TRUE, deriv2 = FALSE,
               derivMode = c("dual", "symbolic")) {
 
   derivMode <- match.arg(derivMode)
+  emit_d1 <- isTRUE(deriv)
+  emit_d2 <- isTRUE(deriv2)
+  if (emit_d2 && !emit_d1)
+    stop("Y(deriv2 = TRUE) requires deriv = TRUE.", call. = FALSE)
 
   if (is.null(f) && is.null(states) && is.null(parameters))
     stop("Not all three arguments f, states and parameters can be NULL")
@@ -714,7 +720,8 @@ Y <- function(g, f = NULL, states = NULL, parameters = NULL,
       verbose    = verbose,
       convenient = FALSE,
       derivMode  = derivMode,
-      deriv2     = deriv2
+      deriv      = emit_d1,
+      deriv2     = emit_d2
     )
   )
 
@@ -723,7 +730,6 @@ Y <- function(g, f = NULL, states = NULL, parameters = NULL,
   ghess      <- gEval$hess
   gevaluate  <- gEval$evaluate
   use_ad     <- derivMode == "dual"
-  emit_d2    <- isTRUE(deriv2)
 
   controls <- list(attach.input = attach.input)
 
@@ -731,7 +737,8 @@ Y <- function(g, f = NULL, states = NULL, parameters = NULL,
   X2Y <- function(out, pars, fixed = NULL, deriv = TRUE, deriv2 = FALSE) {
 
     if (deriv2 && !emit_d2)
-      stop("Y() was built with deriv2 = FALSE; rebuild Y() with deriv2 = TRUE.")
+      stop("Y() was built with deriv2 = FALSE; rebuild Y() with deriv2 = TRUE.", call. = FALSE)
+    if (!emit_d1) deriv <- FALSE
     if (deriv2 && !deriv) deriv <- TRUE
 
     attach.input <- controls$attach.input
@@ -769,9 +776,9 @@ Y <- function(g, f = NULL, states = NULL, parameters = NULL,
       if (attach.input) values <- cbind(values, submatrix(out, cols = -1))
       myderivs <- ad_out$dy
       myderivs2 <- if (deriv2) ad_out$d2y else NULL
-      # Append pass-through state sensitivities so dimnames(myderivs)[[2]]
-      # mirrors the attached values; the AD path only sees obsStates and
-      # therefore drops the non-consumed state rows.
+      # Append pass-through state sensitivities for states that are attached
+      # but not consumed by the observables; the AD path only emits sensitivities
+      # for obsStates and would otherwise leave those rows missing.
       if (attach.input && !is.null(myderivs) && !is.null(dX_full)) {
         theta <- dimnames(myderivs)[[3]]
         outer_theta <- theta %||% dimnames(dX_full)[[3]]

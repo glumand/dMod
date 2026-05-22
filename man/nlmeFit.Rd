@@ -35,11 +35,12 @@ Required.}
 
 \item{fixed}{Optional named-numeric of fixed parameters.}
 
-\item{method}{Estimator. \code{"focei"} runs the C++ FOCEI kernel
-(Laplace + trust + eager Stage-2 correction); \code{"quadrature"} runs
-adaptive sparse-grid Gauss-Hermite + ECM with a cold start;
-\code{"foceiQuadrature"} runs FOCEI first and uses the converged
-structural pars and modes as warmstart for the quadrature polish.}
+\item{method}{Estimator. \code{"focei"} runs FOCEI (Laplace + trust with
+the analytical \eqn{\partial \log |H_i| / \partial \theta} correction);
+\code{"quadrature"} runs adaptive sparse-grid Gauss-Hermite + ECM with a
+cold start; \code{"foceiQuadrature"} runs FOCEI first and uses the
+converged structural pars and modes as a warmstart for the quadrature
+polish.}
 
 \item{control}{Nested list of method-specific knobs. Entries:
 \describe{

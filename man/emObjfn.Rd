@@ -26,9 +26,7 @@ emObjfn(
 
 \item{errfn}{Optional obsfn defining a parameter-dependent error model.}
 
-\item{method}{Character. Only \code{"quadrature"} is supported. Retained for
-forward compatibility; the historical \code{"laplace"} path now lives inside
-the C++ FOCEI kernel reached via \link{nlmeFit} with \code{method = "focei"}.}
+\item{method}{Character. Only \code{"quadrature"} is supported.}
 
 \item{control}{Named list with \code{level} (Smolyak depth, default 4) and
 \code{cores} (default 1).}
@@ -47,9 +45,8 @@ the right \code{em} internally and runs a solver; use \code{emObjfn} directly on
 if you need to evaluate the objective by hand.
 }
 \details{
-The Laplace approximation that was historically available here as
-\code{method = "laplace"} has been folded into the C++ FOCEI kernel exposed by
-\link{nlmeFit} with \code{method = "focei"}. Call \code{nlmeFit} directly.
+For the Laplace approximation of the marginal likelihood, use \code{\link[=nlmeFit]{nlmeFit()}}
+with \code{method = "focei"}.
 }
 \seealso{
 \link{nlmeFit}, \link{omega}

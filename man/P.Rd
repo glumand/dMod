@@ -13,6 +13,8 @@ P(
   method = NULL,
   cores = NULL,
   verbose = FALSE,
+  deriv = TRUE,
+  deriv2 = FALSE,
   ...
 )
 }
@@ -36,6 +38,13 @@ and \code{"explicit"} for all others.}
 Windows.}
 
 \item{verbose}{Print out information during compilation}
+
+\item{deriv}{Logical, attach first-order parameter sensitivities to the
+result. Default \code{TRUE}.}
+
+\item{deriv2}{Logical, additionally attach the second-order sensitivity
+\code{attr(., "deriv2")} of shape \verb{[innerPar, outerPar, outerPar]}. Requires
+\code{deriv = TRUE}. Default \code{FALSE}.}
 
 \item{...}{Additional arguments passed to the underlying transformation function
 (\link{Pexpl}, \link{Pimpl}, or \link{Pequil}).}

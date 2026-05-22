@@ -59,19 +59,24 @@ fx_decay_compiled <- function() {
     reactions <- addReaction(eqnlist(), from = "A", to = "",
                              rate = "k*A",
                              description = "linear decay")
-    m <- odemodel(reactions, modelname = "fx_decay", compile = TRUE)
+    # Compile via dMod's `compile()` instead of cOde's internal compileAndLoad
+    # so the build flags include -w; otherwise R's default -Wall surfaces a
+    # constant pile of unused-variable noise from cOde-generated code.
+    m <- odemodel(reactions, modelname = "fx_decay", compile = FALSE)
     xfn <- Xs(m)
 
     gfn <- Y(c(y = "A"), f = xfn, condition = NULL, attach.input = FALSE,
-             modelname = "fx_decay_obs", compile = TRUE)
+             modelname = "fx_decay_obs", compile = FALSE)
 
     trafo_id  <- eqnvec(A = "A",         k = "k")
     trafo_log <- eqnvec(A = "exp(A_log)", k = "exp(k_log)")
 
     pfn_id <- P(trafo_id,  condition = "C1",
-                modelname = "fx_decay_p_id",  compile = TRUE)
+                modelname = "fx_decay_p_id",  compile = FALSE)
     pfn_log <- P(trafo_log, condition = "C1",
-                 modelname = "fx_decay_p_log", compile = TRUE)
+                 modelname = "fx_decay_p_log", compile = FALSE)
+
+    compile(xfn, gfn, pfn_id, pfn_log, cores = 1)
 
     cache$decay <- list(
       m           = m,

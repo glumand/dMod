@@ -17,52 +17,54 @@ Pequil(
   compile = FALSE,
   modelname = NULL,
   verbose = FALSE,
+  deriv = TRUE,
   deriv2 = FALSE,
   ...
 )
 }
 \arguments{
-\item{trafo}{An \code{\link{eqnlist}}, \code{\link{eqnvec}},
-or named character vector.}
+\item{trafo}{Named character / \link{eqnvec} / \link{eqnlist}.}
 
-\item{parameters}{Character vector of independent parameters.}
+\item{parameters}{Outer parameter names. States listed here are not
+integrated; they act as initial conditions and pass through.}
 
-\item{forcings}{Character vector of forcing names replaced by zero.}
+\item{forcings}{Forcing names; replaced by 0.}
 
-\item{condition}{Character label for the condition.}
+\item{condition}{Condition label.}
 
-\item{attach.input}{Logical. Append pass-through parameters to output.}
+\item{attach.input}{Append pass-through inputs to the output.}
 
-\item{start.time}{Numeric. Start time of the equilibration integration
-(default \code{-1e7}).}
+\item{start.time, end.time}{Integration window; the root event fires at
+\code{end.time} if the steady state has not been reached.}
 
-\item{end.time}{Numeric. End time at which the steady state is read off
-(default \code{0}).}
+\item{keep.root}{Warm-start subsequent calls from the cached steady
+state, its sensitivities, and re-use the previous result if the
+inputs are unchanged.}
 
-\item{keep.root}{Logical. Cache steady state for warm-starting.}
+\item{controlsODE}{Overrides for the ODE solver controls.}
 
-\item{controlsODE}{Named list of ODE solver options, accessible via
-\code{\link{controls}()}.}
+\item{compile, modelname, verbose}{Forwarded to \link[CppODE:CppODE]{CppODE::CppODE}.}
 
-\item{compile}{Logical. Compile the C++ ODE model.}
+\item{deriv}{If \code{TRUE} (default), attach first-order parameter
+sensitivities \code{attr(., "deriv")} of the steady state.}
 
-\item{modelname}{Character, base name for C++ code files.}
+\item{deriv2}{Emit second-order sensitivities \code{attr(., "deriv2")};
+requires the model to be compiled with deriv2 support and
+\code{deriv = TRUE}.}
 
-\item{verbose}{Logical. Print compiler output.}
-
-\item{deriv2}{Logical. Emit second-order sensitivities. Default \code{FALSE}.}
-
-\item{...}{Additional arguments passed to \code{\link[CppODE]{CppODE}}.}
+\item{...}{Forwarded to \link[CppODE:CppODE]{CppODE::CppODE}.}
 }
 \value{
-A function of class \code{\link{parfn}}.
+A \link{parfn}.
 }
 \description{
-Finds steady states by integrating the ODE to equilibrium.
-All states are integrated directly without conserved-quantity
-elimination. Initial values for each state are taken from the
-input parameter vector.
+Returns a \link{parfn} that maps outer parameters to the steady state found
+by integrating the ODE from \code{start.time} to \code{end.time}. Conserved
+quantities are not eliminated; pick the basin of attraction by choosing
+the dependent-state initial values in the input parvec. The Jacobian
+(and optional Hessian) come from CppODE's analytical sensitivity
+integration; the chain rule with incoming \code{dP}/\code{dP2} is applied here.
 }
 \seealso{
-\link{Pexpl}, \link{Pimpl}, \link{P}
+\link{Pexpl}, \link{Pimpl}, \link{P}.
 }

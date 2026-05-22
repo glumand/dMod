@@ -3,16 +3,19 @@ library(dplyr)
 
 setwd(tempdir())
 
-# Define Model and error model
-x <- eqnvec(A = "k*A - exp(-time)") %>% odemodel(modelname = "testBLOQ") %>% Xs()
-e <- eqnvec(A = "sigma_rel * A") %>% Y(x, attach.input = FALSE, modelname = "errmodel", compile = TRUE)
+# Define Model and error model (compile via dMod's compile() so all native
+# code goes through the same -w build path).
+x <- eqnvec(A = "k*A - exp(-time)") %>% odemodel(modelname = "testBLOQ", compile = FALSE) %>% Xs()
+e <- eqnvec(A = "sigma_rel * A") %>% Y(x, attach.input = FALSE, modelname = "errmodel", compile = FALSE)
 
 innerpars <- getParameters(x, e)
 times <- seq(0, 15, .1)
 p <- eqnvec() %>%
-  define("pars~pars", pars = innerpars) %>% 
-  define("pars~exp(pars)", pars = innerpars) %>% 
-  P(condition = "C1")
+  define("pars~pars", pars = innerpars) %>%
+  define("pars~exp(pars)", pars = innerpars) %>%
+  P(condition = "C1", compile = FALSE)
+
+compile(x, e, p)
 
 # Simulate data
 timesD <- 1:15

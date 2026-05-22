@@ -2,32 +2,26 @@
 % Please edit documentation in R/parameters.R
 \name{.detect_and_substitute_cq}
 \alias{.detect_and_substitute_cq}
-\title{Detect conserved quantities and substitute eliminated species}
+\title{Substitute conserved quantities into ODE rates}
 \usage{
 .detect_and_substitute_cq(smatrix, f, states, parameters)
 }
 \arguments{
-\item{smatrix}{Stoichiometric matrix (or NULL).}
+\item{smatrix}{Stoichiometric matrix, or \code{NULL} (then only warns if
+parameter-states still occur unsubstituted).}
 
-\item{f}{Named character vector / eqnvec of equations.}
-
-\item{states}{Character vector of state names.}
-
-\item{parameters}{Character vector of user-specified parameters (modified in place).}
+\item{f, states, parameters}{Equation set, state names, user parameters.}
 }
 \value{
-A list with components:
-\item{f}{Modified equations with substitutions applied.}
-\item{parameters}{Updated parameter vector (eliminated species added).}
-\item{cq_info}{List of per-CQ info: \code{total_name}, \code{elim_state},
-\code{recon_expr} (the reconstruction expression as eqnvec for \link[CppODE:funCpp]{CppODE::funCpp}),
-\code{recon_vars} (dependent species appearing in reconstruction),
-\code{recon_parms} (parameters appearing in reconstruction, including total).}
-\item{elim_states}{Character vector of all eliminated state names.}
+\code{list(f, parameters, cq_info, elim_states)}.
 }
 \description{
-For each conserved quantity (e.g. A + B = const), one species is eliminated
-from the equations by substitution. The eliminated species is replaced by
-\code{(total_i - rest)}, where \code{total_i} becomes a new parameter.
+Each independent conservation law \verb{sum_k c_k * x_k = total_i} removes one
+degree of freedom from the system: exactly one species \code{x_e} is eliminated
+and substituted as \code{x_e = total_i - (rest_of_CQ)} throughout \code{f}. Species
+already eliminated by a previous CQ are skipped (a CQ with no remaining
+eliminatable species is redundant and dropped). When the user lists
+species in \code{parameters} they are kept as pass-through inputs and the
+eliminator picks a different candidate from the same CQ when possible.
 }
 \keyword{internal}

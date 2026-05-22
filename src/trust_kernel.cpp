@@ -1,31 +1,10 @@
-// dMod trust-region optimizer (full C++ implementation).
-//
-// User-facing entry point is `trust()` (exported via Rcpp::export and
-// auto-roxygen below). Replaces the previous R-level `trust()` wrapper
-// in R/trust.R. Closed-form Moré-Sorensen subproblem on a working
-// reduced space that drops coordinates pinned at a bound where the
-// gradient pushes further into the bound (active-set treatment matching
-// the legacy dMod::trust() semantics).
-//
-// Features supported in C++:
-//   - rinit / rmax adaptive radius
-//   - fterm / mterm termination
-//   - minimize = TRUE/FALSE
-//   - parscale rescaling (g and H divided by parscale and outer(ps, ps))
-//   - parupper / parlower box bounds with name-or-scalar broadcast
-//   - on_step(rho, accepted, iter, r) R callback per step decision
-//   - printIter console logging
-//   - traceFile CSV log (iter,value,p1,p2,...)
-//   - blather per-iteration trace (argpath, argtry, steptype, accept,
-//     r, rho, valpath, valtry, preddiff, stepnorm)
-//
-// objfun is an R closure: trust() does not accept `...`; bind any
-// extra arguments in the closure on the R side.
+// trust-region optimiser (Moré-Sorensen subproblem on a working
+// reduced space with active-set treatment for box bounds).
 
 #include <Rcpp.h>
+#include "trust_subproblem.h"
 #include <vector>
 #include <cmath>
-#include <stdexcept>
 #include <limits>
 #include <fstream>
 #include <iomanip>
@@ -33,188 +12,10 @@
 #include <algorithm>
 
 using namespace Rcpp;
-
-extern "C" {
-  void dsyevr_(const char* jobz, const char* range, const char* uplo,
-               const int* n, double* a, const int* lda,
-               const double* vl, const double* vu,
-               const int* il, const int* iu,
-               const double* abstol, int* m, double* w, double* z,
-               const int* ldz, int* isuppz,
-               double* work, const int* lwork,
-               int* iwork, const int* liwork, int* info);
-}
-
-namespace {
-
-// Symmetric K×K eigen via LAPACK dsyevr. `vals` (K, ascending),
-// `vecs` (K*K, column-major). A is read-only (copied internally).
-void eigen_sym_local(const double* A, int K, double* vals, double* vecs) {
-  std::vector<double> A_copy(A, A + (std::size_t) K * K);
-  std::vector<int>    isuppz(2 * K);
-  int info = 0, m_out = 0;
-  double abstol = 0.0;
-  double wkopt;
-  int    iwkopt;
-  int    lwork  = -1;
-  int    liwork = -1;
-  dsyevr_("V", "A", "U", &K, A_copy.data(), &K,
-          NULL, NULL, NULL, NULL, &abstol, &m_out,
-          vals, vecs, &K, isuppz.data(),
-          &wkopt, &lwork, &iwkopt, &liwork, &info);
-  if (info != 0) throw std::runtime_error("trust: dsyevr workspace query failed");
-  lwork  = static_cast<int>(wkopt);
-  liwork = iwkopt;
-  std::vector<double> work(lwork);
-  std::vector<int>    iwork(liwork);
-  std::copy(A, A + (std::size_t) K * K, A_copy.begin());
-  dsyevr_("V", "A", "U", &K, A_copy.data(), &K,
-          NULL, NULL, NULL, NULL, &abstol, &m_out,
-          vals, vecs, &K, isuppz.data(),
-          work.data(), &lwork, iwork.data(), &liwork, &info);
-  if (info != 0) throw std::runtime_error("trust: dsyevr failed");
-}
-
-// Moré-Sorensen trust-region subproblem.
-// Minimize g^T p + 1/2 p^T H p subject to ||p|| <= r, where H is given
-// implicitly by its eigendecomposition (vals ascending, vecs column-major).
-// Outputs:
-//   p_out          : step (length K)
-//   predicted_red  : -m(p) where m(p) = g^T p + 0.5 p^T H p  (positive
-//                    for descent in the working frame)
-//   is_newton      : true if the unconstrained Newton step lies in TR
-//   is_hard        : true if the "hard case" branch was taken
-//   is_easy        : true if the "easy" sub-branch of hard case was taken
-//                    (only meaningful when is_hard is also true)
-void trust_sub(int K, const double* g,
-               const double* vals, const double* vecs,
-               double r, double* p_out, double* predicted_red,
-               bool* is_newton, bool* is_hard, bool* is_easy) {
-  *is_newton = false;
-  *is_hard   = false;
-  *is_easy   = false;
-
-  // q = V^T g  (decompose gradient along eigenbasis)
-  std::vector<double> q(K, 0.0);
-  for (int j = 0; j < K; ++j) {
-    double s = 0.0;
-    for (int i = 0; i < K; ++i) s += vecs[i + j * K] * g[i];
-    q[j] = s;
-  }
-
-  // Try the Newton step if H positive definite.
-  double lam_min = vals[0];
-  if (lam_min > 1e-12) {
-    std::vector<double> y(K);
-    double pn2 = 0.0;
-    for (int j = 0; j < K; ++j) {
-      y[j] = -q[j] / vals[j];
-      pn2 += y[j] * y[j];
-    }
-    if (std::sqrt(pn2) <= r) {
-      for (int i = 0; i < K; ++i) {
-        double s = 0.0;
-        for (int j = 0; j < K; ++j) s += vecs[i + j * K] * y[j];
-        p_out[i] = s;
-      }
-      double pred = 0.0;
-      for (int j = 0; j < K; ++j) pred += 0.5 * q[j] * q[j] / vals[j];
-      *predicted_red = pred;
-      *is_newton = true;
-      return;
-    }
-  }
-
-  // Constrained: find sigma >= max(-lam_min, 0) such that ||p(sigma)|| = r.
-  // Diagnose hard-vs-easy: lam_min <= 0 AND the eigenvector of lam_min is
-  // (nearly) orthogonal to g (q_min ≈ 0) → hard case.
-  // Otherwise the standard "easy" Lagrange-multiplier branch.
-  //
-  // Index set of eigenvalues at the minimum (within fuzz):
-  std::vector<int> imin;
-  for (int j = 0; j < K; ++j) {
-    if (std::fabs(vals[j] - lam_min) < 1e-12 * (std::fabs(lam_min) + 1.0)) imin.push_back(j);
-  }
-  double C2 = 0.0;
-  for (int j : imin) C2 += q[j] * q[j];
-
-  if (lam_min <= 0.0 && C2 < 1e-24) {
-    // True "hard-hard" case: lam_min <= 0 and q_min ≈ 0.
-    *is_hard = true;
-    *is_easy = false;
-
-    // Set p as the constrained minimizer in the lam > lam_min subspace, then
-    // shift by sqrt(r^2 - ||p||^2) along the lam_min eigenvector.
-    std::vector<double> w(K, 0.0);
-    for (int j = 0; j < K; ++j) {
-      double beta = vals[j] - lam_min;
-      if (beta > 1e-12) w[j] = -q[j] / beta;
-    }
-    double pn2 = 0.0;
-    for (int j = 0; j < K; ++j) pn2 += w[j] * w[j];
-    double extra2 = r * r - pn2;
-    if (extra2 > 0.0 && !imin.empty()) {
-      w[imin[0]] += std::sqrt(extra2);
-    }
-    for (int i = 0; i < K; ++i) {
-      double s = 0.0;
-      for (int j = 0; j < K; ++j) s += vecs[i + j * K] * w[j];
-      p_out[i] = s;
-    }
-    double m_val = 0.0;
-    for (int j = 0; j < K; ++j) m_val += q[j] * w[j] + 0.5 * vals[j] * w[j] * w[j];
-    *predicted_red = -m_val;
-    return;
-  }
-
-  // "Hard-easy" branch is the standard bracketed root-find on sigma.
-  // We can't easily distinguish hard-easy from easy-easy without a
-  // separate analytic check; convention from upstream trust:
-  //   - hard case (lam_min <= 0) but C2 > 0 → "hard-easy"
-  //   - lam_min > 0 → "easy-easy"
-  if (lam_min <= 0.0) { *is_hard = true; *is_easy = true; }
-  else                { *is_hard = false; *is_easy = false; }
-
-  double sigma_lo = std::max(-lam_min, 0.0) + 1e-12;
-  double sigma_hi = sigma_lo + 1.0;
-  for (int it = 0; it < 50; ++it) {
-    double pn2 = 0.0;
-    for (int j = 0; j < K; ++j) {
-      double d = vals[j] + sigma_hi;
-      pn2 += (q[j] / d) * (q[j] / d);
-    }
-    if (std::sqrt(pn2) <= r) break;
-    sigma_hi *= 2.0;
-  }
-  double sigma = 0.0;
-  for (int it = 0; it < 60; ++it) {
-    sigma = 0.5 * (sigma_lo + sigma_hi);
-    double pn2 = 0.0;
-    for (int j = 0; j < K; ++j) {
-      double d = vals[j] + sigma;
-      pn2 += (q[j] / d) * (q[j] / d);
-    }
-    double pn = std::sqrt(pn2);
-    if (std::fabs(pn - r) < 1e-10 * r) break;
-    if (pn > r) sigma_lo = sigma; else sigma_hi = sigma;
-  }
-  std::vector<double> y(K);
-  for (int j = 0; j < K; ++j) y[j] = -q[j] / (vals[j] + sigma);
-  for (int i = 0; i < K; ++i) {
-    double s = 0.0;
-    for (int j = 0; j < K; ++j) s += vecs[i + j * K] * y[j];
-    p_out[i] = s;
-  }
-  double m_val = 0.0;
-  for (int j = 0; j < K; ++j) m_val += q[j] * y[j] + 0.5 * vals[j] * y[j] * y[j];
-  *predicted_red = -m_val;
-}
-
-}  // namespace
+using dmod::trust_internal::eigen_sym_local;
+using dmod::trust_internal::trust_sub;
 
 
-// Internal kernel. User-facing `trust()` lives in R/trust.R and calls
-// this entry point after capturing `...` into a closure around objfun.
 // [[Rcpp::export]]
 List trust_impl(Function objfun,
            NumericVector parinit,
@@ -229,8 +30,7 @@ List trust_impl(Function objfun,
            Nullable<NumericVector>  parupper  = R_NilValue,
            Nullable<NumericVector>  parlower  = R_NilValue,
            bool   printIter = false,
-           Nullable<CharacterVector> traceFile = R_NilValue,
-           Nullable<Function>       on_step    = R_NilValue) {
+           Nullable<CharacterVector> traceFile = R_NilValue) {
 
   const int K = parinit.size();
   if (K == 0) stop("trust: parinit must be non-empty");
@@ -521,15 +321,6 @@ List trust_impl(Function objfun,
       for (int j = 0; j < K; ++j)
         for (int i = 0; i < K; ++i)
           H_full[i + (std::size_t) j * K] = Htry_mat(i, j);
-    }
-
-    // ---- on_step callback ----
-    if (on_step.isNotNull()) {
-      Function cb(on_step);
-      cb(Named("rho")      = rho,
-         Named("accepted") = accept,
-         Named("iter")     = iter,
-         Named("r")        = r);
     }
 
     // ---- Blather record (post-step) ----

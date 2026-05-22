@@ -91,13 +91,9 @@ constraintExp2 <- function(p, mu, sigma = 1, k = 0.05, fixed=NULL) {
 #'
 #' @description
 #' Computes the negative-log-likelihood residual contribution of a single
-#' condition (with optional error model). Lifted out of [normL2] so the ECM
-#' per-subject node-loop in [nlmeFit] / `emObjfn(method="quadrature")` can reuse
-#' the exact contract without re-routing through normL2's multi-condition
-#' machinery and parameter-name binding for every quadrature node.
-#'
-#' Behavior matches the inner closure that previously lived inside `normL2`
-#' verbatim; `normL2` now calls this helper.
+#' condition (with optional error model). Exposed so quadrature node-loops
+#' can evaluate one condition without paying the per-call cost of
+#' [normL2]'s multi-condition setup.
 #'
 #' @param dataI datalist entry for one condition (data.frame with
 #'   `name`, `time`, `value`, `sigma` columns).
@@ -314,10 +310,8 @@ normL2 <- function(data, x, errmodel = NULL, times = NULL,
 
   class(myfn) <- c("objfn", "fn")
   attr(myfn, "conditions") <- d.cond
-  # Expose union of prediction-fn parameters and errmodel parameters so
-  # downstream estimators (focei / ecmFit) see sigma_* in their joint_pars
-  # and route them through outer_input correctly. Without this the errmodel
-  # parameters would be silently dropped from full_pars on the inner solver.
+  # Union of prediction-fn and errmodel parameters so the errmodel's sigma
+  # parameters survive when the inner solver reads `full_pars`.
   err_pars <- if (!is.null(errmodel)) attr(errmodel, "parameters") else character(0)
   attr(myfn, "parameters") <- union(attr(x, "parameters"), err_pars)
   attr(myfn, "modelname") <- modelname(x, errmodel)

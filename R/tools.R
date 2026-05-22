@@ -457,11 +457,10 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
   is_cpp  <- vapply(objs, function(o) !is.null(attr(o, "srcfile")), logical(1))
 
   ## Collect per-file build info.
-  ## Primary source is `attr(o, "compileInfo")` which flows through from
-  ## odemodel()/Xs()/Y()/P() and carries (srcfile, compileArgs, linkArgs) as
-  ## reported by cOde/CppODE/CVODE. Falls back to modelname-based file
-  ## discovery for legacy objects that were built before compileInfo existed,
-  ## and to the bare `srcfile` attribute for raw CppODE objects.
+  ## Primary source is `attr(o, "compileInfo")` carrying
+  ## (srcfile, compileArgs, linkArgs) as reported by cOde/CppODE/CVODE.
+  ## Falls back to modelname-based file discovery for objects that lack
+  ## compileInfo, and to the bare `srcfile` attribute for raw CppODE objects.
   info_from_compileInfo <- unlist(
     lapply(objs, function(o) attr(o, "compileInfo")),
     recursive = FALSE
@@ -536,9 +535,20 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
   base_libs <- paste(klu_lib, cfg("LAPACK_LIBS"), cfg("BLAS_LIBS"))
   cppflags  <- paste0("-I", system.file("include", package = "CppODE"))
 
+  ## Compiler invocation bits cached up front so parallel forks don't each
+  ## re-spawn R-CMD-config. Used by compile_one_obj() for the direct
+  ## $CC/$CXX -c path.
+  cc_bin      <- cfg("CC")
+  cxx_bin     <- cfg("CXX")
+  cflags_R    <- cfg("CFLAGS")
+  cxxflags_R  <- cfg("CXXFLAGS")
+  cpicflags   <- cfg("CPICFLAGS")
+  cxxpicflags <- cfg("CXXPICFLAGS")
+  r_inc       <- paste0("-I", shQuote(R.home("include")))
+
   ## toolchain report (use a representative entry for display)
-  if (any(grepl("\\.c$",   files))) cat(sprintf("using C compiler:   %s [%s]\n", strip(cfg("CC")),  trimws(base)))
-  if (any(grepl("\\.cpp$", files))) cat(sprintf("using C++ compiler: %s [%s]\n", strip(cfg("CXX")), trimws(cxx_base)))
+  if (any(grepl("\\.c$",   files))) cat(sprintf("using C compiler:   %s [%s]\n", strip(cc_bin),  trimws(base)))
+  if (any(grepl("\\.cpp$", files))) cat(sprintf("using C++ compiler: %s [%s]\n", strip(cxx_bin), trimws(cxx_base)))
 
   ## unload stale DLLs
   loaded <- getLoadedDLLs()
@@ -565,14 +575,63 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
       stop("Compilation failed: ", entry$srcfile)
   }
 
+  ## Compile a single source to a .o object only, via a direct $CC/$CXX -c
+  ## invocation. Used by the combined-output path so the per-file compile
+  ## phase can run in parallel; the subsequent R CMD SHLIB link then sees
+  ## the .o files are up-to-date and skips recompilation.
+  compile_one_obj <- function(entry) {
+    src     <- entry$srcfile
+    extra_c <- entry$compileArgs %||% ""
+    is_cpp  <- grepl("\\.cpp$", src, ignore.case = TRUE)
+    obj     <- sub("\\.[^.]+$", ".o", src)
+
+    if (is_cpp) {
+      cmd <- paste(
+        cxx_bin, r_inc, cppflags,
+        trimws(paste(cxx_base, extra_c)),
+        cxxpicflags, cxxflags_R,
+        "-c", shQuote(src),
+        "-o", shQuote(obj)
+      )
+    } else {
+      cmd <- paste(
+        cc_bin, r_inc, cppflags,
+        trimws(paste(base, extra_c)),
+        cpicflags, cflags_R,
+        "-c", shQuote(src),
+        "-o", shQuote(obj)
+      )
+    }
+
+    if (verbose) cat(cmd, "\n")
+    if (system(cmd, ignore.stdout = !verbose, ignore.stderr = !verbose) != 0)
+      stop("Compilation failed: ", src)
+    obj
+  }
+
   if (is.null(output)) {
     if (.Platform$OS.type == "unix" && cores > 1)
       parallel::mclapply(info, compile_one, mc.cores = cores)
     else for (e in info) compile_one(e)
     for (r in roots_full) dyn.load(paste0(r, so))
   } else {
-    ## Combined output: link all files together. Union of every entry's
-    ## linkArgs (dedup) so Sundials-dependent files still pull their libs.
+    ## Combined output: per-file compile to .o (parallel on Unix when cores>1,
+    ## serial otherwise — including on Windows), then a single R CMD SHLIB
+    ## link over the original sources. Because every .o is freshly written
+    ## above, make sees them as up-to-date and only runs the link recipe;
+    ## passing the source list lets SHLIB pick the C++ linker when any
+    ## source is .cpp, which a .o-only invocation would miss. The pre-compile
+    ## also has to run on Windows: the single-call SHLIB (compile + link in
+    ## one go) was occasionally producing .dll files that LoadLibrary
+    ## couldn't resolve when the source pulled in BLAS via the symbolic-
+    ## mode chain wrapper -- splitting compile and link sidesteps that.
+    if (.Platform$OS.type == "unix" && cores > 1)
+      parallel::mclapply(info, compile_one_obj, mc.cores = cores)
+    else
+      for (e in info) compile_one_obj(e)
+
+    ## Link step: union of every entry's linkArgs (dedup) so Sundials-dependent
+    ## files still pull their libs.
     all_link <- unique(unlist(lapply(info, function(e) strsplit(trimws(e$linkArgs %||% ""), "\\s+")[[1]])))
     all_link <- all_link[nzchar(all_link)]
     all_compile <- unique(unlist(lapply(info, function(e) strsplit(trimws(e$compileArgs %||% ""), "\\s+")[[1]])))
@@ -591,8 +650,24 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
     if (file.exists(out)) unlink(out)
     cmd <- paste(Rbin, "CMD SHLIB", paste(shQuote(files), collapse = " "), "-o", shQuote(out))
     if (verbose) cat(cmd, "\n")
-    if (system(cmd, ignore.stdout = !verbose, ignore.stderr = !verbose) != 0)
-      stop("Compilation failed")
+    ## Capture SHLIB output and strip its compiler banner: on this path the
+    ## .o files are already fresh from compile_one_obj, so make only runs
+    ## the link recipe and the "using C/C++ compiler:" line would be
+    ## misleading. Stderr is folded into stdout via shell redirection so
+    ## error messages still surface when verbose = TRUE.
+    out_lines <- suppressWarnings(
+      system(paste(cmd, "2>&1"), intern = TRUE)
+    )
+    status <- attr(out_lines, "status")
+    if (verbose) {
+      out_lines <- out_lines[!grepl("^using (C|C\\+\\+) compiler:", out_lines)]
+      writeLines(out_lines)
+    }
+    if (!is.null(status) && status != 0L)
+      stop("Compilation failed:\n", paste(out_lines, collapse = "\n"))
+    if (!file.exists(out))
+      stop("R CMD SHLIB returned exit 0 but did not produce ", out, ":\n",
+           paste(out_lines, collapse = "\n"))
     dyn.load(out)
     for (i in which(is_dmod))
       eval.parent(parse(text = paste0("modelname(", obj.names[i], ") <- '", output, "'")))
@@ -784,8 +859,51 @@ print0 <- function(x, list_attributes = TRUE ) {
   if (list_attributes == TRUE) {
     cat("List of all attributes: ", names(attributes(x)), "\n")
   }
-  
+
   print.default(attrs(x))
 }
+
+
+# Cross-platform parallel-apply. Unix forks via doParallel; Windows uses a
+# PSOCK cluster with explicit library-path + variable export. Driven through
+# foreach::%dopar% so the caller body is the same on both platforms.
+.parallelLapply <- function(X, FUN, cores = 1L,
+                            extraExports = character(0),
+                            envir = parent.frame()) {
+
+  cores <- max(1L, as.integer(cores))
+  if (cores == 1L)
+    return(lapply(X, FUN))
+
+  is_windows <- Sys.info()[["sysname"]] == "Windows"
+
+  if (is_windows) {
+    cluster <- parallel::makeCluster(cores)
+    on.exit({
+      parallel::stopCluster(cluster)
+      doParallel::stopImplicitCluster()
+    }, add = TRUE)
+    doParallel::registerDoParallel(cl = cluster)
+    parallel::clusterCall(cl = cluster, function(x) .libPaths(x), .libPaths())
+    parallel::clusterEvalQ(cluster, suppressMessages(library(dMod)))
+    if (length(extraExports) > 0L)
+      parallel::clusterExport(cluster, envir = envir,
+                              varlist = extraExports)
+  } else {
+    doParallel::registerDoParallel(cores = cores)
+    on.exit(doParallel::stopImplicitCluster(), add = TRUE)
+  }
+
+  i <- NULL  # silence R CMD check NSE warning
+  loaded_packages <- .packages()
+  out <- foreach::foreach(i = seq_along(X),
+                          .packages = loaded_packages) %dopar% {
+    FUN(X[[i]])
+  }
+  out
+}
+
+
+`%dopar%` <- foreach::`%dopar%`
 
 

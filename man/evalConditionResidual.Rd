@@ -50,11 +50,7 @@ An \link{objlist} for the single condition's contribution.
 }
 \description{
 Computes the negative-log-likelihood residual contribution of a single
-condition (with optional error model). Lifted out of \link{normL2} so the ECM
-per-subject node-loop in \link{nlmeFit} / \code{emObjfn(method="quadrature")} can reuse
-the exact contract without re-routing through normL2's multi-condition
-machinery and parameter-name binding for every quadrature node.
-
-Behavior matches the inner closure that previously lived inside \code{normL2}
-verbatim; \code{normL2} now calls this helper.
+condition (with optional error model). Exposed so quadrature node-loops
+can evaluate one condition without paying the per-call cost of
+\link{normL2}'s multi-condition setup.
 }

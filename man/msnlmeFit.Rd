@@ -94,11 +94,10 @@ as \code{list(error = ..., value = NA, converged = FALSE, ...)}.
 }
 \description{
 Runs \code{\link[=nlmeFit]{nlmeFit()}} from many starting points in parallel, returning a
-\link{parlist} of fits sorted-ready for \code{\link[=as.parframe]{as.parframe()}} / \code{\link[=summary]{summary()}}. The
-design mirrors \code{\link[=mstrust]{mstrust()}}: \code{center} is either a named-numeric (perturbed
-by \code{samplefun} per fit) or a \link{parframe} (each row used as a starting
-point). Use this to characterise the multi-modality of the marginal
-likelihood and pick the best optimum.
+\link{parlist} of fits sorted-ready for \code{\link[=as.parframe]{as.parframe()}} / \code{\link[=summary]{summary()}}. \code{center}
+is either a named-numeric (perturbed by \code{samplefun} per fit) or a
+\link{parframe} (each row used as a starting point). Use this to characterise
+the multi-modality of the marginal likelihood and pick the best optimum.
 }
 \seealso{
 \code{\link[=nlmeFit]{nlmeFit()}}, \code{\link[=mstrust]{mstrust()}}, \code{\link[=msParframe]{msParframe()}}, \link{parlist}.

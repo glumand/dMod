@@ -1,14 +1,13 @@
 #' Non-linear optimisation via a trust-region method
 #'
-#' Minimise (or maximise) an objective function for which value, gradient,
-#' and Hessian are available. Uses a Moré-Sorensen subproblem on a working
-#' reduced space that drops coordinates pinned at a bound where the
-#' gradient pushes further into the bound (active-set treatment).
-#'
-#' The numerical kernel is implemented in C++ (see
-#' \code{src/trust_kernel.cpp}). This R-level wrapper only captures
-#' \code{...} into a closure around \code{objfun} so that callers can
-#' continue to pass extra named arguments through to the objective.
+#' \code{trust} minimises (or maximises) a smooth objective function for which
+#' value, gradient and Hessian are available. \code{trustL1} additionally adds
+#' an L1 (lasso-style) penalty \code{lambda * sum(|p - mu|)} on a user-selected
+#' subset of parameters, with kink-aware step handling. Both routines use a
+#' Moré-Sorensen trust-region subproblem on a reduced working space that drops
+#' coordinates pinned at a bound where the gradient pushes further into the
+#' bound (active-set treatment). \code{trustL1} additionally drops parameters
+#' pinned at their L1 kink.
 #'
 #' @param objfun R function whose first argument is a numeric vector of
 #'   parameters. Must return a list with components \code{value},
@@ -40,10 +39,6 @@
 #'   value to the console at each function evaluation.
 #' @param traceFile Optional path. If non-\code{NULL}, CSV-log per
 #'   evaluation \code{iter, value, p1, p2, ...}.
-#' @param on_step Optional R callback
-#'   \code{function(rho, accepted, iter, r)} invoked once per step
-#'   decision. Return value is ignored. Used by \code{\link{nlmeFit}}
-#'   to invalidate cached FOCEI corrections on rejected steps.
 #' @param ... Additional named arguments forwarded to \code{objfun}.
 #'
 #' @return A list with components \code{argument}, \code{value},
@@ -65,7 +60,6 @@ trust <- function(objfun, parinit, rinit, rmax,
                   parlower  = NULL,
                   printIter = FALSE,
                   traceFile = NULL,
-                  on_step   = NULL,
                   ...) {
   dots <- list(...)
   fn <- if (length(dots) > 0L) {
@@ -75,5 +69,5 @@ trust <- function(objfun, parinit, rinit, rmax,
   }
   trust_impl(fn, parinit, rinit, rmax, parscale, as.integer(iterlim),
              fterm, mterm, minimize, blather,
-             parupper, parlower, printIter, traceFile, on_step)
+             parupper, parlower, printIter, traceFile)
 }

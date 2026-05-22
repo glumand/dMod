@@ -2,7 +2,7 @@
 % Please edit documentation in R/parameters.R
 \name{Pexpl}
 \alias{Pexpl}
-\title{Parameter transformation (explicit)}
+\title{Parameter transformation (explicit, algebraic)}
 \usage{
 Pexpl(
   trafo,
@@ -12,47 +12,41 @@ Pexpl(
   compile = FALSE,
   modelname = NULL,
   verbose = FALSE,
+  deriv = TRUE,
   deriv2 = FALSE,
   derivMode = c("dual", "symbolic")
 )
 }
 \arguments{
-\item{trafo}{\code{eqnvec} or named character vector.
-Names correspond to \strong{inner parameters}; each element defines how it depends
-on \strong{outer parameters}.}
+\item{trafo}{Named character or \link{eqnvec}. Names are inner parameters,
+values are expressions in the outer parameters.}
 
-\item{parameters}{Character vector of outer parameter names. If omitted,
-all symbols in \code{trafo} are used.}
+\item{parameters}{Outer-parameter names. Defaults to \code{getSymbols(trafo)}.}
 
-\item{attach.input}{Logical. If \code{TRUE}, include unchanged input parameters
-in the output vector (identity mapping).}
+\item{attach.input}{If \code{TRUE}, append the outer inputs to the output.}
 
-\item{condition}{Character label for which the transformation is generated.}
+\item{condition}{Condition label.}
 
-\item{compile}{Logical. If \code{TRUE}, compile the transformation via \link[CppODE:funCpp]{CppODE::funCpp}
-for faster evaluation.}
+\item{compile, modelname, verbose}{Forwarded to \link[CppODE:funCpp]{CppODE::funCpp}.}
 
-\item{modelname}{Base name for generated C++ code if \code{compile = TRUE}.}
+\item{deriv}{If \code{TRUE} (default), attach the Jacobian \code{attr(., "deriv")}
+of shape \verb{[p, theta]}.}
 
-\item{verbose}{Logical. Print compiler messages.}
+\item{deriv2}{If \code{TRUE}, attach the Hessian \code{attr(., "deriv2")} of
+shape \verb{[p, theta, theta]}. Requires \code{deriv = TRUE}.}
 
-\item{deriv2}{Logical. If \code{TRUE}, attach a second-order derivative
-\code{attr(., "deriv2")} array of shape \verb{[p, theta, theta]}. Default \code{FALSE}.}
-
-\item{derivMode}{Character. Jacobian backend: \code{"dual"} (default,
-forward-mode AD; requires compiled native code) or \code{"symbolic"}
-(SymPy Jacobian; pure R).}
+\item{derivMode}{\code{"dual"} (forward-mode AD, needs \code{compile = TRUE}) or
+\code{"symbolic"} (SymPy + analytic chain rule).}
 }
 \value{
-A function of class \link{parfn}.
+A \link{parfn}.
 }
 \description{
-Constructs an explicit, algebraic mapping
-\eqn{p_{\text{inner}} = \mathrm{parfn}(p_{\text{outer}})} from symbolic
-expressions. The Jacobian is obtained by symbolic differentiation and
-attached as \code{attr(., "deriv")} on each evaluation.
+Builds \code{p_inner = f(p_outer)} from symbolic expressions and returns a
+\link{parfn} whose evaluation attaches the Jacobian (and optionally the
+Hessian). Backed by \link[CppODE:funCpp]{CppODE::funCpp} in either forward-mode AD or
+SymPy mode.
 }
 \seealso{
-\link{Pimpl} for implicit (steady-state) parameter transformations,
-\link{P} for automatic mode selection.
+\link{Pimpl}, \link{Pequil}, \link{P}.
 }

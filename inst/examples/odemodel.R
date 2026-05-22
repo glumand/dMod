@@ -6,7 +6,8 @@
 ## Files will be generated in your working directory!
 
 f <- eqnvec(A = "-k*A + switch*F")
-model <- odemodel(f, forcings = "F", fixed = "switch")
+model <- odemodel(f, forcings = "F", fixed = "switch", compile = FALSE)
+compile(Xs(model))
 print(model)
 
 ## Generate the same model from an equation list
@@ -14,7 +15,8 @@ f <- addReaction(NULL, from = "", to = "A", rate = "switch*F", description = "pr
 f <- addReaction(f   , from = "A", to = "", rate = "k*A", description = "degradation")
 print(f)
 
-model <- odemodel(f, forcings = "F", fixed = "switch")
+model <- odemodel(f, forcings = "F", fixed = "switch", compile = FALSE)
+compile(Xs(model))
 print(model)
 
 
