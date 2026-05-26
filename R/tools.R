@@ -532,7 +532,19 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
     base     <- paste(base,     extra_args)
     cxx_base <- paste(cxx_base, extra_args)
   }
-  base_libs <- paste(klu_lib, cfg("LAPACK_LIBS"), cfg("BLAS_LIBS"))
+  ## BLAS/LAPACK: on Windows `R CMD config BLAS_LIBS` returns a value with
+  ## unexpanded `$(R_HOME)`/`$(R_ARCH)` references. Those go into PKG_LIBS as
+  ## an env var, and make should re-expand them, but in practice the
+  ## expansion is unreliable inside SHLIB-generated link commands -- the
+  ## final g++ invocation comes out without any BLAS libs. We sidestep that
+  ## by building an absolute -L path here and skipping `R CMD config`.
+  if (.Platform$OS.type == "windows") {
+    r_bin   <- file.path(R.home("bin"), .Platform$r_arch)
+    blaslapack <- paste0("-L", shQuote(r_bin), " -lRlapack -lRblas")
+  } else {
+    blaslapack <- paste(cfg("LAPACK_LIBS"), cfg("BLAS_LIBS"))
+  }
+  base_libs <- paste(klu_lib, blaslapack)
   cppflags  <- paste0("-I", system.file("include", package = "CppODE"))
 
   ## Compiler invocation bits cached up front so parallel forks don't each
@@ -637,12 +649,36 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
     all_compile <- unique(unlist(lapply(info, function(e) strsplit(trimws(e$compileArgs %||% ""), "\\s+")[[1]])))
     all_compile <- all_compile[nzchar(all_compile)]
 
+    pkg_cflags   <- trimws(paste(base,     paste(all_compile, collapse = " ")))
+    pkg_cxxflags <- trimws(paste(cxx_base, paste(all_compile, collapse = " ")))
+    pkg_libs     <- trimws(paste(base_libs, paste(all_link, collapse = " ")))
     Sys.setenv(
-      PKG_CFLAGS   = trimws(paste(base,     paste(all_compile, collapse = " "))),
-      PKG_CXXFLAGS = trimws(paste(cxx_base, paste(all_compile, collapse = " "))),
+      PKG_CFLAGS   = pkg_cflags,
+      PKG_CXXFLAGS = pkg_cxxflags,
       PKG_CPPFLAGS = cppflags,
-      PKG_LIBS     = trimws(paste(base_libs, paste(all_link, collapse = " ")))
+      PKG_LIBS     = pkg_libs
     )
+
+    ## Belt-and-suspenders for Windows: env-imported PKG_LIBS has been
+    ## observed to vanish from SHLIB's generated link command on some R/rtools
+    ## combinations, leaving the .dll unlinked against BLAS/LAPACK. Drop a
+    ## per-link Makevars(.win) alongside the source files so make picks it up
+    ## even if the environment doesn't make it through. We clean it up after
+    ## the link so the directory state stays hermetic.
+    mv_dir  <- dirname(files[1])
+    mv_name <- if (.Platform$OS.type == "windows") "Makevars.win" else "Makevars"
+    mv_path <- file.path(mv_dir, mv_name)
+    mv_pre  <- if (file.exists(mv_path)) readLines(mv_path, warn = FALSE) else NULL
+    writeLines(c(
+      paste("PKG_CFLAGS =",   pkg_cflags),
+      paste("PKG_CXXFLAGS =", pkg_cxxflags),
+      paste("PKG_CPPFLAGS =", cppflags),
+      paste("PKG_LIBS =",     pkg_libs)
+    ), mv_path)
+    on.exit({
+      if (is.null(mv_pre)) try(unlink(mv_path), silent = TRUE)
+      else                 try(writeLines(mv_pre, mv_path), silent = TRUE)
+    }, add = TRUE)
 
     output <- sub(paste0("\\", so, "$"), "", output)
     out <- file.path(dirname(files[1]), paste0(output, so))

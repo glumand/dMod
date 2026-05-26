@@ -6,9 +6,10 @@ test_that("Basic ODE model integration with forcings", {
   withr::local_dir(tempdir())
 
   ## Generate the same model from an equation list
-  f <- addReaction(NULL, from = "", to = "A", rate = "switch*F", description = "production")
+  f <- addReaction(NULL, from = "", to = "A", rate = "scale*F", description = "production")
   f <- addReaction(f   , from = "A", to = "", rate = "k*A", description = "degradation")
-  model <- odemodel(f, forcings = "F", fixed = "switch", compile = FALSE)
+  model <- odemodel(f, forcings = "F", fixed = "scale", solver = "deSolve",
+                    compile = FALSE)
   compile(Xs(model))
   
   # create forcings

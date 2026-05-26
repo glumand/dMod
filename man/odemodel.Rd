@@ -10,12 +10,9 @@ odemodel(
   deriv2 = FALSE,
   forcings = NULL,
   events = NULL,
-  outputs = NULL,
   fixed = NULL,
-  estimate = NULL,
   modelname = "odemodel",
-  solver = c("deSolve", "CppODE", "Sundials"),
-  gridpoints = NULL,
+  solver = c("CppODE", "Sundials", "deSolve"),
   verbose = FALSE,
   ...
 )
@@ -29,16 +26,7 @@ Defaults to \code{TRUE}.}
 
 \item{deriv2}{Logical. If \code{TRUE}, also generate second-order sensitivities
 (requires \code{solver = "CppODE"}). Implies \code{deriv = TRUE}. Defaults to
-\code{FALSE}. The CVODE backend (\code{solver = "Sundials"}) does not support
-second-order sensitivities.
-
-When \code{deriv2 = TRUE}, three native artefacts are emitted:
-\verb{<modelname>} (value only), \verb{<modelname>_s} (1st-order sensitivities,
-AD path) and \verb{<modelname>_s2} (1st + 2nd-order sensitivities, AD2 path).
-Downstream prediction functions then dispatch on the call's \code{deriv2}
-flag, so callers can keep simulating / fitting at the cheaper
-1st-order cost via \verb{deriv = TRUE, deriv2 = FALSE} even when the model
-was built with \code{deriv2 = TRUE}.}
+\code{FALSE}.}
 
 \item{forcings}{Character vector with the names of external forcings.}
 
@@ -46,26 +34,17 @@ was built with \code{deriv2 = TRUE}.}
 Must be defined here — not on \code{\link[=Xs]{Xs()}} — so that the sensitivity equations
 are extended consistently.}
 
-\item{outputs}{Named character vector for additional output variables.}
-
 \item{fixed}{Character vector with the names of parameters (initial values and dynamic)
 for which no sensitivities are required (this speeds up integration).}
-
-\item{estimate}{Character vector specifying parameters (initial values and dynamic)
-for which sensitivities are returned. If specified, \code{estimate} overwrites \code{fixed}.}
 
 \item{modelname}{Character. The base name of the generated C/C++ file.}
 
 \item{solver}{Character string specifying the solver backend.
-One of \code{"deSolve"}, \code{"CppODE"} or \code{"Sundials"}.}
-
-\item{gridpoints}{Integer specifying the minimum number of internal time points
-where the ODE is evaluated.}
+One of \code{"CppODE"}, \code{"Sundials"} or \code{"deSolve"}.}
 
 \item{verbose}{Logical. If \code{TRUE}, print compiler output to the R console.}
 
-\item{...}{Additional arguments passed to \code{\link[cOde:funC]{cOde::funC()}} or
-\code{\link[CppODE:CppODE]{CppODE::CppODE()}}.}
+\item{...}{Additional arguments passed to \code{\link[CppODE:CppODE]{CppODE::CppODE()}} or \code{\link[cOde:funC]{cOde::funC()}}.}
 }
 \value{
 list with \code{func} (ODE object) and \code{extended} (ODE+Sensitivities object).
@@ -90,7 +69,8 @@ or to \code{\link[CppODE:CppODE]{CppODE::CppODE()}} (for \code{solver = "CppODE"
 ## Files will be generated in your working directory!
 
 f <- eqnvec(A = "-k*A + switch*F")
-model <- odemodel(f, forcings = "F", fixed = "switch")
+model <- odemodel(f, forcings = "F", fixed = "switch", compile = FALSE)
+compile(Xs(model))
 print(model)
 
 ## Generate the same model from an equation list
@@ -98,7 +78,8 @@ f <- addReaction(NULL, from = "", to = "A", rate = "switch*F", description = "pr
 f <- addReaction(f   , from = "A", to = "", rate = "k*A", description = "degradation")
 print(f)
 
-model <- odemodel(f, forcings = "F", fixed = "switch")
+model <- odemodel(f, forcings = "F", fixed = "switch", compile = FALSE)
+compile(Xs(model))
 print(model)
 
 

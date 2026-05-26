@@ -116,7 +116,7 @@ test_that("sigma from data column == sigma from errmodel (constant case, no bess
   pars_em <- c(bench$outerpars_id, sigma_y = sigma_const)
 
   for_each_backend(function(cpp) {
-    o_col <- normL2(data_col, bench$prd_id, use.bessel = FALSE)(bench$outerpars_id)
+    o_col <- normL2(data_col, ec$prd, use.bessel = FALSE)(pars_em)
     o_em  <- normL2(data_em,  ec$prd, errmodel = ec$e,
                     use.bessel = FALSE)(pars_em)
     expect_equal(o_em$value, o_col$value, tolerance = 1e-10,
@@ -448,10 +448,16 @@ test_that("rows with explicit sigma keep it; NA rows fall through to errmodel", 
 
   data_na <- data; data_na$C1 <- data_na$C1[is.na(data$C1$sigma), ]
   data_ex <- data; data_ex$C1 <- data_ex$C1[!is.na(data$C1$sigma), ]
+  # Use a common time grid across all three so the adaptive integrator
+  # produces bit-identical predictions at the shared data times.
+  all_times <- sort(unique(data$C1$time))
   with_cpp_backend(FALSE, {
-    v_full <- normL2(data,    ec$prd, errmodel = ec$e, use.bessel = FALSE)(pars)$value
-    v_na   <- normL2(data_na, ec$prd, errmodel = ec$e, use.bessel = FALSE)(pars)$value
-    v_ex   <- normL2(data_ex, ec$prd, errmodel = ec$e, use.bessel = FALSE)(pars)$value
+    v_full <- normL2(data,    ec$prd, errmodel = ec$e, times = all_times,
+                     use.bessel = FALSE)(pars)$value
+    v_na   <- normL2(data_na, ec$prd, errmodel = ec$e, times = all_times,
+                     use.bessel = FALSE)(pars)$value
+    v_ex   <- normL2(data_ex, ec$prd, errmodel = ec$e, times = all_times,
+                     use.bessel = FALSE)(pars)$value
   })
   expect_equal(v_full, v_na + v_ex, tolerance = 1e-9)
 })

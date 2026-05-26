@@ -18,7 +18,7 @@ test_that("steady_states_are_steady", {
   mysteadies <- steadyStates(reactions)
   #-! print(mysteadies)
 
-  x <- Xs(odemodel(reactions, compile = FALSE))
+  x <- Xs(odemodel(reactions, modelname = "ssTest", compile = FALSE))
   compile(x)
 
   parameters <- getParameters(x)
@@ -37,7 +37,7 @@ test_that("steady_states_are_steady", {
   is_steady <- function(prediction) {
     mypred <- wide2long(prediction)
     steady_conds <- sapply(split(mypred, mypred[c("name", "condition")]), function(i) {
-      zapsmall(var(i$value)) == 0
+      sd(i$value) <= 1e-8 * max(abs(i$value), 1)
     })
     return(all(steady_conds))
   }

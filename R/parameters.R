@@ -1438,12 +1438,14 @@ define <- function(trafo, expr, ..., conditionMatch = NULL) {
 
   dots <- substitute(alist(...))
   out  <- lapply(seq_along(mytrafo), function(i) {
+    .currentTrafo   <- mytrafo[[i]]
+    .currentSymbols <- if (is.null(.currentTrafo)) NULL else getSymbols(.currentTrafo)
     row <- if (is.list(trafo)) tree[names(mytrafo)[i], , drop = FALSE]
            else tree[1, , drop = FALSE]
     if (!is.null(conditionMatch) && !str_detect(rownames(row), conditionMatch))
-      return(mytrafo[[i]])
+      return(.currentTrafo)
     with(row, do.call(repar,
-      c(list(expr = expr, trafo = mytrafo[[i]], reset = TRUE), eval(dots))))
+      c(list(expr = expr, trafo = .currentTrafo, reset = TRUE), eval(dots))))
   })
   names(out) <- names(mytrafo)
   if (!is.list(trafo)) out <- out[[1]]
@@ -1465,23 +1467,24 @@ insert <- function(trafo, expr, ..., conditionMatch = NULL) {
 
   dots <- substitute(alist(...))
   out  <- lapply(seq_along(mytrafo), function(i) {
-    cur <- mytrafo[[i]]
+    .currentTrafo   <- mytrafo[[i]]
+    .currentSymbols <- if (is.null(.currentTrafo)) NULL else getSymbols(.currentTrafo)
     row <- if (is.list(trafo)) tree[names(mytrafo)[i], , drop = FALSE]
            else tree[1, , drop = FALSE]
     if (!is.null(conditionMatch) && !str_detect(rownames(row), conditionMatch))
-      return(cur)
+      return(.currentTrafo)
     with(row, {
       ## Caller may pass logical dots to gate substitution per condition,
       ## and non-logical dots to substitute symbols in `expr`. Logical dots
       ## are stripped before forwarding to `repar`.
       .apply <- function() {
         d <- eval(dots)
-        if (!length(d)) return(do.call(repar, list(expr = expr, trafo = cur)))
+        if (!length(d)) return(do.call(repar, list(expr = expr, trafo = .currentTrafo)))
         d_eval  <- lapply(d, function(x) eval.parent(x, 3))
         is_log  <- vapply(d_eval, is.logical, logical(1))
         gate    <- do.call(c, d[is_log])
-        if (!is.null(gate) && any(!gate)) return(cur)
-        do.call(repar, c(list(expr = expr, trafo = cur), d_eval[!is_log]))
+        if (!is.null(gate) && any(!gate)) return(.currentTrafo)
+        do.call(repar, c(list(expr = expr, trafo = .currentTrafo), d_eval[!is_log]))
       }
       .apply()
     })

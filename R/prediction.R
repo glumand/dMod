@@ -248,13 +248,9 @@ Xs.CppODE <- function(odemodel, forcings = NULL, events = NULL, names = NULL, co
     # Pick the cheapest extension that satisfies the requested derivative order.
     sens_model <- if (deriv2) extended2 else extended
 
-    fixedNames <- intersect(names(fixed),controls$sensnames)
     params <- c(unclass(pars), unclass(fixed))
     forcings <- controls$forcings
     names <- controls$names
-    sensnames <- setdiff(controls$sensnames, fixedNames)
-    nvars <- length(names)
-    nsens <- length(sensnames)
     optionsOde <- controls$optionsOde
     optionsSens <- controls$optionsSens
 
@@ -262,7 +258,6 @@ Xs.CppODE <- function(odemodel, forcings = NULL, events = NULL, names = NULL, co
     dX2 <- NULL
     if (!deriv) {
 
-      # Evaluate model without sensitivities
       out <- CppODE::solveODE(func, times, params,
                               sens1ini = NULL, sens2ini = NULL, fixed = NULL,
                               forcings = forcings,
@@ -280,11 +275,24 @@ Xs.CppODE <- function(odemodel, forcings = NULL, events = NULL, names = NULL, co
       colnames(out)[1] <- "time"
 
     } else {
-      sens1ini <- attr(pars, "deriv")[sensnames, ]
-      sens2ini <- if (deriv2) {
-        d2 <- attr(pars, "deriv2")
-        if (!is.null(d2)) d2[sensnames, , , drop = FALSE] else NULL
-      } else NULL
+      phi_rows <- inner_names
+      deriv_in <- attr(pars, "deriv")
+      sens1ini <- NULL
+      sens2ini <- NULL
+      if (!is.null(deriv_in)) {
+        present  <- intersect(rownames(deriv_in), phi_rows)
+        sens1ini <- matrix(0, length(phi_rows), ncol(deriv_in),
+                           dimnames = list(phi_rows, colnames(deriv_in)))
+        sens1ini[present, ] <- deriv_in[present, , drop = FALSE]
+        if (deriv2) {
+          d2 <- attr(pars, "deriv2")
+          if (!is.null(d2)) {
+            sens2ini <- array(0, c(length(phi_rows), dim(d2)[2], dim(d2)[3]),
+                              dimnames = c(list(phi_rows), dimnames(d2)[2:3]))
+            sens2ini[present, , ] <- d2[present, , , drop = FALSE]
+          }
+        }
+      }
 
       outSens <- CppODE::solveODE(sens_model, times, params,
                                   sens1ini = sens1ini,

@@ -65,34 +65,19 @@ print.odemodel <- function(x, ...) {
 #'   Defaults to `TRUE`.
 #' @param deriv2 Logical. If `TRUE`, also generate second-order sensitivities
 #'   (requires `solver = "CppODE"`). Implies `deriv = TRUE`. Defaults to
-#'   `FALSE`. The CVODE backend (`solver = "Sundials"`) does not support
-#'   second-order sensitivities.
-#'
-#'   When `deriv2 = TRUE`, three native artefacts are emitted:
-#'   `<modelname>` (value only), `<modelname>_s` (1st-order sensitivities,
-#'   AD path) and `<modelname>_s2` (1st + 2nd-order sensitivities, AD2 path).
-#'   Downstream prediction functions then dispatch on the call's `deriv2`
-#'   flag, so callers can keep simulating / fitting at the cheaper
-#'   1st-order cost via `deriv = TRUE, deriv2 = FALSE` even when the model
-#'   was built with `deriv2 = TRUE`.
+#'   `FALSE`.
 #' @param forcings Character vector with the names of external forcings.
 #' @param events An [eventlist] (or `data.frame` coercible via [as.eventlist]).
 #'   Must be defined here — not on [Xs()] — so that the sensitivity equations
 #'   are extended consistently.
-#' @param outputs Named character vector for additional output variables.
 #' @param fixed Character vector with the names of parameters (initial values and dynamic)
 #'   for which no sensitivities are required (this speeds up integration).
-#' @param estimate Character vector specifying parameters (initial values and dynamic)
-#'   for which sensitivities are returned. If specified, `estimate` overwrites `fixed`.
 #' @param modelname Character. The base name of the generated C/C++ file.
 #' @param solver Character string specifying the solver backend.
-#'   One of `"deSolve"`, `"CppODE"` or `"Sundials"`.
-#' @param gridpoints Integer specifying the minimum number of internal time points
-#'   where the ODE is evaluated.
+#'   One of `"CppODE"`, `"Sundials"` or `"deSolve"`.
 #' @param verbose Logical. If `TRUE`, print compiler output to the R console.
-#' @param ... Additional arguments passed to [cOde::funC()] or
-#'   [CppODE::CppODE()].
-#'
+#' @param ... Additional arguments passed to [CppODE::CppODE()] or [cOde::funC()].
+#' 
 #' @return list with \code{func} (ODE object) and \code{extended} (ODE+Sensitivities object).
 #'   Carries a \code{"compileInfo"} attribute listing source files and per-file
 #'   compile/link flags collected from \code{func} and \code{extended}. This is
@@ -104,9 +89,9 @@ print.odemodel <- function(x, ...) {
 #'
 #' @example inst/examples/odemodel.R
 #' @export
-odemodel <- function(f, deriv = TRUE, deriv2 = FALSE, forcings=NULL, events = NULL, outputs = NULL,
-                     fixed = NULL, estimate = NULL, modelname = "odemodel", solver = c("deSolve", "CppODE", "Sundials"),
-                     gridpoints = NULL, verbose = FALSE, ...) {
+odemodel <- function(f, deriv = TRUE, deriv2 = FALSE, forcings=NULL, events = NULL,
+                     fixed = NULL, modelname = "odemodel", solver = c("CppODE", "Sundials", "deSolve"),
+                     verbose = FALSE, ...) {
 
   f <- as.eqnvec(f)
   solver <- match.arg(solver)
@@ -118,25 +103,29 @@ odemodel <- function(f, deriv = TRUE, deriv2 = FALSE, forcings=NULL, events = NU
   }
 
   dots <- list(...)
-  if (solver == "deSolve" && "nStack" %in% names(dots)) {
-    warning("'nStack' is only supported for solver = 'CppODE' or 'Sundials' and will be ignored.",
-            call. = FALSE)
-    dots <- dots[setdiff(names(dots), "nStack")]
-  }
 
   if (deriv2 && solver == "deSolve")
     stop("Second-order sensitivities require solver = 'CppODE'.")
   if (deriv2 && solver == "Sundials")
     stop("Second-order sensitivities are not available with CVODE; use solver = 'CppODE'.")
 
+  pick <- function(fn, args) {
+    fm <- names(formals(fn))
+    if ("..." %in% fm) args else args[intersect(names(args), fm)]
+  }
+
   if (solver == "deSolve") {
+    
+    estimate   <- dots$estimate;   dots$estimate   <- NULL
+    outputs    <- dots$outputs;    dots$outputs    <- NULL
+    gridpoints <- dots$gridpoints; dots$gridpoints <- NULL
 
     if (is.null(gridpoints)) gridpoints <- 2
     func <- do.call(cOde::funC,
                     c(list(f, forcings = forcings, events = events, outputs = outputs,
                            fixed = fixed, modelname = modelname, solver = solver,
                            nGridpoints = gridpoints),
-                      dots))
+                      pick(cOde::funC, dots)))
     extended <- NULL
     if (deriv) {
       modelname_s <- paste0(modelname, "_s")
@@ -186,32 +175,18 @@ odemodel <- function(f, deriv = TRUE, deriv2 = FALSE, forcings=NULL, events = NU
                           c(list(fs, forcings = forcings, modelname = modelname_s,
                                  solver = solver, nGridpoints = gridpoints,
                                  events = events, outputs = outputs),
-                            dots))
+                            pick(cOde::funC, dots)))
     }
     out <- list(func = func, extended = extended)
     class(out) <- c("deSolve", "odemodel")
   }
   else {
-    unsupported_args <- list(
-      outputs = outputs,
-      estimate = estimate,
-      gridpoints = gridpoints
-    )
-
-    unsupported <- names(unsupported_args)[
-      sapply(unsupported_args, function(arg) !is.null(arg) && !(is.logical(arg) && arg == FALSE))
-    ]
-
-    if (length(unsupported) > 0) {
-      warning(sprintf("The following arguments are not (yet) supported by CppODE and will be ignored: %s", paste(unsupported, collapse = ", ")), call. = FALSE)
-    }
-    # nStack is a compile-time setting on the sensitivity system only. CppODE
-    # rejects a finite nStack when deriv = FALSE, so strip it from the ...
-    # list used for the func compile and keep it on the extended compile.
-    dots_func <- dots[setdiff(names(dots), "nStack")]
     if (solver == "CppODE") {
+      dots_func <- pick(CppODE::CppODE, dots[setdiff(names(dots), "nStack")])
+      dots_ext  <- pick(CppODE::CppODE, dots)
       func <- do.call(CppODE::CppODE,
-                      c(list(f, events = events, fixed = fixed, modelname = modelname,
+                      c(list(f, events = events, fixed = fixed, forcings = forcings,
+                             modelname = modelname,
                              outdir = getwd(), deriv = FALSE, verbose = verbose),
                         dots_func))
       extended <- NULL
@@ -221,20 +196,23 @@ odemodel <- function(f, deriv = TRUE, deriv2 = FALSE, forcings=NULL, events = NU
                             c(list(f, events = events, fixed = fixed, forcings = forcings,
                                    modelname = paste0(modelname, "_s"), outdir = getwd(),
                                    deriv = TRUE, deriv2 = FALSE, verbose = verbose),
-                              dots))
+                              dots_ext))
         if (deriv2) {
           extended2 <- do.call(CppODE::CppODE,
                                c(list(f, events = events, fixed = fixed, forcings = forcings,
                                       modelname = paste0(modelname, "_s2"), outdir = getwd(),
                                       deriv = TRUE, deriv2 = TRUE, verbose = verbose),
-                                 dots))
+                                 dots_ext))
         }
       }
       out <- list(func = func, extended = extended, extended2 = extended2)
       class(out) <- c("CppODE", "odemodel")
     } else if (solver == "Sundials") {
+      dots_func <- pick(CppODE::CVODE, dots[setdiff(names(dots), "nStack")])
+      dots_ext  <- pick(CppODE::CVODE, dots)
       func <- do.call(CppODE::CVODE,
-                      c(list(f, events = events, fixed = fixed, modelname = modelname,
+                      c(list(f, events = events, fixed = fixed, forcings = forcings,
+                             modelname = modelname,
                              outdir = getwd(), deriv = FALSE, verbose = verbose),
                         dots_func))
       extended <- NULL
@@ -243,7 +221,7 @@ odemodel <- function(f, deriv = TRUE, deriv2 = FALSE, forcings=NULL, events = NU
                             c(list(f, events = events, fixed = fixed, forcings = forcings,
                                    modelname = paste0(modelname, "_s"), outdir = getwd(),
                                    deriv = TRUE, verbose = verbose),
-                              dots))
+                              dots_ext))
       }
       out <- list(func = func, extended = extended)
       class(out) <- c("CppODE", "odemodel")
