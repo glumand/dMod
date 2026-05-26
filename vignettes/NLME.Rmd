@@ -360,36 +360,67 @@ objective at $\psi$:
 
 ## The Stage-2 analytical correction
 
-dMod's Hessian in step 4 is built from the Gauss-Newton form
-$H_{i,\mathrm{GN}} = 2 \nabla_\eta r_i^\top \Sigma_i^{-1} \nabla_\eta r_i + 2 \Omega^{-1}$,
-not the true Newton Hessian. Under the GN form the surrogate
-$\log |H_i|$ is still needed in the objective and its gradient
-$d \log |H_i| / d\psi$ is no longer immediate from the inner solve,
-because the GN approximation introduces a discrepancy that vanishes
-only at a perfect fit.
+dMod's inner Hessian (step 4) uses the Gauss-Newton form
+$$
+H_{i,\mathrm{GN}} \;=\; 2\, \nabla_\eta r_i^{\!\top}\, \Sigma_i^{-1}\, \nabla_\eta r_i \;+\; 2\, \Omega^{-1},
+$$
+not the full Newton Hessian. The surrogate $\log |H_{i,\mathrm{GN}}|$
+still appears in the population objective (step 2), but under the GN
+substitution its gradient $d \log |H_{i,\mathrm{GN}}| / d \psi$ is no
+longer delivered for free by the inner solve: GN drops the
+residual-curvature term that would otherwise cancel against the
+$\hat\eta$-stationarity condition, and the resulting discrepancy
+vanishes only at a perfect fit.
 
-`R/nlme.R::.computeFoceiCorrection` computes the closed-form
-$d \log |H_{i,\mathrm{GN}}| / d\psi$ via
+`R/nlme.R::.computeFoceiCorrection` therefore evaluates the
+closed-form derivative
 
 $$
 \frac{d \log |H_i|}{d \psi_k}
 \;=\;
-\operatorname{tr}\!\left(H_i^{-1} \frac{\partial H_i}{\partial \psi_k}\bigg|_\eta\right)
+\operatorname{tr}\!\left(H_i^{-1}\, \frac{\partial H_i}{\partial \psi_k}\bigg|_\eta\right)
 \;+\;
-\sum_l \operatorname{tr}\!\left(H_i^{-1} \frac{\partial H_i}{\partial \eta_l}\right) \cdot \frac{d \hat\eta_l}{d \psi_k}.
+\sum_l \operatorname{tr}\!\left(H_i^{-1}\, \frac{\partial H_i}{\partial \eta_l}\right) \cdot \frac{d \hat\eta_l}{d \psi_k}.
 $$
 
-The chain term $d \hat\eta / d \psi$ comes from the implicit function
-theorem applied to the inner first-order condition: the exact
+The chain factor $d \hat\eta / d \psi$ is obtained from the implicit
+function theorem applied to the inner first-order condition; the exact
 (Newton) Hessian closes the IFT block, while $H_{i,\mathrm{GN}}^{-1}$
-is used in the traces. The required mixed third derivatives are
-provided by dMod's deriv2 pipeline (`_s2` files emitted by `CppODE`
-and `cOde`).
+is used inside the traces.
+
+### Which sensitivities are required
+
+Writing $G_i = \nabla_\eta y_i$, the GN Hessian is
+$H_{i,\mathrm{GN}} = 2\, G_i^{\!\top} \Sigma_i^{-1} G_i + 2\, \Omega^{-1}$.
+Its derivatives are
+
+$$
+\frac{\partial H_{i,\mathrm{GN}}}{\partial \psi_k}
+\;=\;
+2 \left(\frac{\partial G_i}{\partial \psi_k}\right)^{\!\top}\!\Sigma_i^{-1} G_i \;+\; (\text{symm.}),
+\qquad
+\frac{\partial G_i}{\partial \psi_k} \;=\; \frac{\partial^2 y_i}{\partial \eta\, \partial \psi_k},
+$$
+
+and analogously $\partial H_{i,\mathrm{GN}} / \partial \eta_l$ needs
+$\partial^2 y_i / (\partial \eta\, \partial \eta_l)$. Both are mixed
+*second-order* sensitivities of the prediction. They are supplied by
+the `deriv2` pipeline (`odemodel(..., deriv2 = TRUE)` with the Sens2
+stage in `CppODE`; the legacy `cOde` backend only ships first-order
+sensitivities and is therefore not eligible for FOCEI) and surface in
+the prediction object as `attr(pred, "deriv2")` with axes
+$[t,\, \mathrm{obs},\, \eta,\, \psi]$.
+
+Third-order sensitivities of $y$ are deliberately *not* required: they
+would only enter if the full Newton Hessian, which carries an
+$r_i \cdot \partial^2 y / \partial \eta^2$ term, were the object being
+differentiated. The Gauss-Newton substitution is precisely what keeps
+the Stage-2 correction within the reach of second-order AD, and is
+also why the same `deriv2` machinery powers both the inner-Hessian
+construction and its outer-loop correction.
 
 The correction is recomputed at every outer call so the gradient
-remains exactly the gradient of $F(\psi)$. This matches NONMEM /
-Monolix / `nlmixr2` semantics, and is what cross-tool comparisons
-expect.
+remains exactly the gradient of $F(\psi)$.
 
 ## The C++ FOCEI kernel
 
@@ -411,10 +442,21 @@ Hessian.
 
 ## Why move beyond Laplace
 
-The Laplace approximation \eqref{eq:laplace} treats $\Phi_i$ as
-locally quadratic. Its error is $O(K / n_i)$ per subject and is
-dominated by the third and fourth derivatives of $\Phi_i$ at the
-mode. Two practical scenarios where this matters:
+Recall from section 4 that the E-step has to evaluate the per-subject
+marginal likelihood
+
+$$
+L_i(\psi) \;=\; \int p(y_i \mid \eta_i, \psi)\, p(\eta_i \mid \psi)\, d\eta_i
+\;=\; \int e^{-\tfrac{1}{2}\Phi_i(\eta;\psi)} \, d\eta,
+$$
+
+a $K$-dimensional integral with no closed form because the inner
+likelihood runs through the nonlinear ODE. The Laplace approximation
+\eqref{eq:laplace} replaces this integral by a single evaluation at
+$\hat\eta_i$ plus a $\log|H_i|$ curvature correction, i.e. it treats
+$\Phi_i$ as locally quadratic. Its error is $O(K / n_i)$ per subject
+and is dominated by the third and fourth derivatives of $\Phi_i$ at
+the mode. Two practical scenarios where this matters:
 
 * Datasets with informative-but-short trajectories (oral PK at the
   absorption limit, sparse sampling near saturation) where $\Phi_i$
@@ -424,34 +466,105 @@ mode. Two practical scenarios where this matters:
   likelihood because $|H_i|^{-1/2}$ overweights the peak relative to
   the tails, which biases $\Omega$ downward.
 
-A multi-point quadrature rule integrating $L_i$ exactly when its
-log-density is a polynomial of bounded degree fixes both, at the cost
-of an exponential factor in $K$ if you use a full tensor-product
-grid. The Smolyak construction sidesteps that factor.
+The fix is to replace the one-point Laplace rule with a multi-point
+*cubature rule* that approximates the same integral by
+
+$$
+\int e^{-\tfrac{1}{2}\Phi_i(\eta)}\, d\eta \;\approx\; \sum_{b=1}^{B} W_b \, e^{-\tfrac{1}{2}\Phi_i(\eta_b)},
+$$
+
+evaluated at $B$ nodes $\eta_b$ with weights $W_b$. A well-designed
+rule is exact whenever the integrand is a polynomial in $\eta$ times a
+Gaussian of bounded degree, recovers Laplace as a single-node special
+case, and converges at a rate set by the regularity of $\Phi_i$. The
+remaining design question is how to pick $\{(\eta_b, W_b)\}$ so that
+the node count $B$ does not blow up with the random-effect dimension
+$K$. That is exactly what the Smolyak construction addresses.
 
 ## Smolyak sparse-grid Gauss-Hermite
 
-For fixed dimension $K$ and level $L \geq K$, the Smolyak rule
-combines tensor products of 1D physicists' Gauss-Hermite rules,
+### 1D Gauss-Hermite as the building block
+
+The physicists' Gauss-Hermite rule of level $l$ approximates the
+Gaussian-weighted 1D integral
+
+$$
+\int_{-\infty}^{\infty} g(z)\, e^{-z^2}\, dz \;\approx\; \sum_{j=1}^{m(l)} w_j^{(l)}\, g(z_j^{(l)}),
+\qquad m(l) = 2l-1,
+$$
+
+and is constructed so that the approximation is *exact* whenever $g$
+is a polynomial of degree at most $2 m(l) - 1 = 4l - 3$. Given a
+target precision this is the minimum-node rule with that property.
+The nodes $z_j^{(l)}$ and weights $w_j^{(l)}$ come from a standard
+eigenvalue problem (Golub-Welsch): they are the eigenvalues and the
+squared first components of the eigenvectors of the symmetric
+tridiagonal Hermite Jacobi matrix (diagonal $0$, off-diagonal
+$\sqrt{i/2}$). dMod calls LAPACK `dstev` once at startup to obtain
+them.
+
+### Why tensor products are not enough
+
+Lifting to $K$ dimensions by *tensor product* puts a node at every
+combination $(z_{j_1}^{(l)}, \dots, z_{j_K}^{(l)})$ and multiplies the
+1D weights. The resulting rule is exact for polynomials of degree
+$4l-3$ in *each coordinate separately*, but it uses $m(l)^K$ nodes.
+For $K = 5$ random effects and level $l = 4$ that is $7^5 = 16{,}807$
+ODE solves per subject per outer gradient call, which is infeasible.
+The waste is structural: a polynomial of *total* degree $d$ has far
+fewer monomials than the full product space, but the tensor rule pays
+for all of them.
+
+### The Smolyak combination
+
+Smolyak (1963) recombines tensor products of *different* 1D levels so
+that polynomial exactness in *total* degree is preserved while most
+of the redundant nodes drop out. The level-$L$ sparse rule
+($L \geq K$) is
 
 $$
 A(L, K) \;=\; \sum_{\substack{|\mathbf{i}| = q \\ L-K+1 \leq q \leq L}} (-1)^{L-q} \binom{K-1}{L-q} \; \mathcal{U}^{i_1} \otimes \mathcal{U}^{i_2} \otimes \cdots \otimes \mathcal{U}^{i_K},
 $$
 
-where $\mathcal{U}^l$ is the 1D level-$l$ Gauss-Hermite rule with
-$m(l) = 2l - 1$ nodes and weight $\exp(-z^2)$. 1D nodes and weights
-come from Golub-Welsch: eigendecompose the symmetric tridiagonal
-Hermite Jacobi matrix (diagonal $0$, off-diagonal $\sqrt{i/2}$) using
-LAPACK `dstev`. The node count grows as $O(K^{L - K})$ rather than
-the full-tensor $O(m(L)^K)$.
+where $\mathcal{U}^l$ is the 1D level-$l$ Gauss-Hermite rule from
+above and $\mathbf{i} = (i_1, \dots, i_K)$ controls how many nodes are
+spent on each coordinate. The level $L$ is a single scalar accuracy
+knob, with three operational consequences:
 
-`src/quadrature.cpp::sparse_grid_gh(K, level)` implements this. It
-returns a batch-first $[B, K]$ matrix of $z$-space nodes and a
-length-$B$ vector of signed weights. Signs appear because
-Gauss-Hermite is non-nested: the Smolyak combination of tensor
-products at different levels does not fully cancel at coincident
-nodes. The downstream evaluator handles mixed-sign aggregation via
-signed log-sum-exp; see section 6.4.
+* **Polynomial accuracy.** $A(L, K)$ integrates every polynomial of
+  total degree roughly $2(L - K) + 1$ exactly against the Gaussian
+  weight (see the table below for concrete numbers at $K = 3$).
+  Increasing $L$ by one raises this degree by two.
+* **Cost.** The node count grows as $O(K^{L-K})$ rather than
+  $m(L)^K$. At $K = 3$ a Smolyak rule of level $6$ uses $105$ nodes
+  versus $11^3 = 1{,}331$ for the equivalent tensor product, and the
+  gap widens rapidly with $K$.
+* **Laplace as a limit.** At the lowest admissible level $L = K$ the
+  rule collapses to a single node, which after the affine change of
+  variable in the next subsection coincides exactly with Laplace.
+  Levels $L > K$ are strict refinements: each subject's E-step
+  integral acquires more nodes that probe the non-Gaussian tails of
+  the posterior.
+
+`src/quadrature.cpp::sparse_grid_gh(K, level)` builds the rule once
+per $(K, L)$ pair at startup. It returns a batch-first $[B, K]$
+matrix of $z$-space nodes and a length-$B$ vector of weights.
+
+### Why the weights are signed
+
+Gauss-Hermite is *non-nested*: the node set at level $l+1$ is not a
+superset of the level-$l$ set. The alternating sum in $A(L, K)$
+therefore does not collapse to a positive-weight rule by
+cancellation. Some $W_b$ are negative, and the proof of polynomial
+exactness goes through on the signed combination. The practical
+consequence is that the per-subject log-likelihood
+
+$$
+\log L_i \;\approx\; \log \!\left| \sum_b W_b\, e^{-\tfrac{1}{2}\Phi_i(\eta_b)} \right|
+$$
+
+must be aggregated in log space *with explicit sign tracking*, which
+is what the signed log-sum-exp evaluator in section 6.4 does.
 
 Typical node counts for $K = 3$:
 
@@ -470,33 +583,51 @@ Level & Nodes & Comment \\
 
 ## Adapting to the local posterior
 
-The raw Smolyak rule integrates against the weight
-$\exp(-\mathbf{z}^\top \mathbf{z})$ on $\mathbb{R}^K$. To target the
-subject-specific posterior $p(\eta_i \mid y_i, \psi)$ we recentre and
-rescale around the local Gaussian approximation
-$\mathcal{N}(\hat\eta_i, H_i^{-1})$.
+The Smolyak rule of the previous subsection lives in a standard
+reference frame: its nodes integrate against the weight
+$\exp(-\mathbf{z}^\top \mathbf{z})$ on $\mathbb{R}^K$. The E-step
+integral we actually need is
 
-Let $L_H$ be the lower Cholesky factor of $H_i$. The change of
+$$
+L_i(\psi) \;=\; \int e^{-\tfrac{1}{2}\Phi_i(\eta;\psi)} \, d\eta,
+$$
+
+so the rule has to be transported from $z$-space onto a subject- and
+$\psi$-specific grid in $\eta$-space. The natural choice is the
+local Gaussian approximation $\mathcal{N}(\hat\eta_i, H_i^{-1})$ that
+the FOCEI machinery already computes for free: it is the best
+quadratic match to $\Phi_i$ at the mode, and using it as the
+$z \to \eta$ map is what makes the quadrature *adaptive*. Every outer
+iteration produces fresh $(\hat\eta_i, H_i)$, the nodes follow, and
+the rule remains well-centred even as $\psi$ moves through the
+optimisation.
+
+Let $L_H$ be the lower Cholesky factor of $H_i$. The affine change of
 variable
 
 $$
 \eta \;=\; \hat\eta_i + \sqrt{2} \, L_H^{-\top} \mathbf{z}
 $$
 
-maps $z$-space nodes onto $\eta$-space nodes and folds the Jacobian
-$2^{K/2} / |\det L_H|$ plus the implicit $\exp(\mathbf{z}^\top \mathbf{z})$
-back-correction into augmented weights,
+is precisely the map that sends a standard normal in $z$ onto
+$\mathcal{N}(\hat\eta_i, H_i^{-1})$ in $\eta$ (the $\sqrt 2$ converts
+between the physicists' weight $e^{-z^2}$ and the probabilist
+$e^{-z^2/2}$). It folds the Jacobian $2^{K/2} / |\det L_H|$ together
+with the implicit $\exp(\mathbf{z}^\top \mathbf{z})$ back-correction
+into augmented weights,
 
 $$
 \log |W_b| \;=\; \tfrac{K}{2} \log 2 \;-\; \log |\det L_H| \;+\; \log |w_b^{\mathrm{GH}}| \;+\; \mathbf{z}_b^\top \mathbf{z}_b,
 $$
 
-with sign tracked separately. `R/quadrature.R::makeSubjectNodes`
-performs this transform. The result is a per-subject grid that puts
-most of its mass where the obj posterior actually lives, recovers
-exact answers for products of Gaussians with the local approximation
-as a special case, and reduces gracefully to Laplace at level $K$ (a
-single node at the mode).
+with the sign of $w_b^{\mathrm{GH}}$ tracked separately.
+`R/quadrature.R::makeSubjectNodes` performs this transform. The
+result is the per-subject grid that the E-step expectation is taken
+against: it puts most of its mass where the posterior actually lives,
+returns exact answers when $e^{-\Phi_i/2}$ is a polynomial in $\eta$
+times the local Gaussian, and reduces gracefully to Laplace at the
+lowest level $L = K$ (a single node at $\hat\eta_i$ with weight equal
+to the Laplace normaliser).
 
 ## Signed log-sum-exp aggregation
 
