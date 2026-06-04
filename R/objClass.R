@@ -109,7 +109,7 @@ constraintExp2 <- function(p, mu, sigma = 1, k = 0.05, fixed=NULL) {
 #' @param bessel Bessel correction factor (default 1, matching the
 #'   `use.bessel = FALSE` branch of `normL2`).
 #' @param deriv,deriv2 Logical. Whether to return gradient/Hessian.
-#' @param opt.BLOQ Character. BLOQ likelihood treatment forwarded to [nll()].
+#' @param opt.BLOQ Character. BLOQ likelihood treatment (see [normL2]).
 #'   One of `"M1"`, `"M3"` (default), `"M4NM"`, `"M4BEAL"`.
 #'
 #' @return An [objlist] for the single condition's contribution.
@@ -135,10 +135,30 @@ evalConditionResidual <- function(dataI, predictionI, pars,
     err_cn <- errfn(out = predictionI, pars = pinner,
                     fixed = fixedinner, conditions = cn)[[cn]]
   }
-  nll(res(dataI, predictionI, err_cn),
-      pars = pars, deriv = deriv, deriv2 = deriv2,
-      opt.BLOQ = opt.BLOQ,
-      bessel.correction = bessel)
+
+  key   <- if (is.null(cn)) "cond" else cn
+  pred1 <- setNames(list(predictionI), key)
+  err1  <- if (!is.null(err_cn)) setNames(list(err_cn), key) else NULL
+  meta1 <- .build_normL2_meta(setNames(list(dataI), key), pred1, err1,
+                              key, eCondNames)
+
+  d_dn <- dimnames(attr(predictionI, "deriv"))
+  par_names_global <- if (!is.null(d_dn)) d_dn[[3]] else character(0)
+
+  kr <- normL2_kernel(
+    prediction       = pred1,
+    err_list_opt     = err1,
+    meta_list        = meta1,
+    par_names_global = par_names_global,
+    bessel           = bessel,
+    deriv2_requested = isTRUE(deriv2),
+    threads          = 1L,
+    bloq_mode        = opt.BLOQ
+  )
+  if (deriv)
+    objlist(value = kr$value, gradient = kr$gradient, hessian = kr$hessian)
+  else
+    objlist(value = kr$value, gradient = NULL, hessian = NULL)
 }
 
 
@@ -163,17 +183,13 @@ evalConditionResidual <- function(dataI, predictionI, pars,
 #' @param use.bessel Logical. If TRUE and an error model is provided, applies a
 #'   global Bessel correction to variance estimates to account for finite-sample
 #'   bias. Defaults to TRUE if an error model is supplied, FALSE otherwise.
-#' @param cores Integer. Number of CPU cores used for parallel evaluation over
-#'   conditions. Must be >= 1. Parallelization is configured once when the
-#'   objective function is created.
-#' @param threads Integer. Per-call OpenMP threads passed to the C++ residual
-#'   kernel (used when the `dMod.objfn.cpp` path is active). Capped by
-#'   `getOption("dMod.objfn.threads")`. Default 1.
+#' @param cores Integer. Number of OpenMP threads the C++ residual kernel uses
+#'   to evaluate conditions in parallel. Must be >= 1. Captured once when the
+#'   objective function is created. Default 1.
 #' @param opt.BLOQ Character. NONMEM-style treatment of below-LOQ rows
 #'   (those with `value <= lloq` in the data). One of `"M1"` (drop BLOQ rows
 #'   from the objective), `"M3"` (censored log-likelihood, default), `"M4NM"`
-#'   or `"M4BEAL"` (truncated variants; require non-negative LOQ). Forwarded
-#'   to [nll()] for the R path and to the C++ kernel.
+#'   or `"M4BEAL"` (truncated variants; require non-negative LOQ).
 #'
 #' @return
 #' An object of class `objfn`, i.e. a function
@@ -189,11 +205,10 @@ evalConditionResidual <- function(dataI, predictionI, pars,
 #' @export
 normL2 <- function(data, x, errmodel = NULL, times = NULL,
                    attr.name = "data", use.bessel = !is.null(errmodel),
-                   cores = 1L, threads = 1L,
+                   cores = 1L,
                    opt.BLOQ = c("M3", "M1", "M4NM", "M4BEAL")) {
 
   stopifnot(cores >= 1L)
-  stopifnot(threads >= 1L)
   opt.BLOQ <- match.arg(opt.BLOQ)
 
   timesD <- sort(unique(c(0, unlist(lapply(data, `[[`, "time")), times)))
@@ -217,7 +232,7 @@ normL2 <- function(data, x, errmodel = NULL, times = NULL,
 
   # Force early binding
   force(errmodel); force(bessel); force(conditions); force(timesD)
-  force(threads)
+  force(cores)
 
   # Lazy meta cache for the C++ kernel path. Built on first call; rebuilt
   # if the deriv column set changes (e.g. when `fixed` toggles between
@@ -234,74 +249,47 @@ normL2 <- function(data, x, errmodel = NULL, times = NULL,
     prediction <- x(times = timesD, pars = pars, fixed = fixed,
                     deriv = deriv, deriv2 = deriv2, conditions = conditions)
 
-    use_cpp <- isTRUE(getOption("dMod.objfn.cpp", FALSE)) && deriv
-
-    if (use_cpp) {
-      # Build errmodel output per condition (if any).
-      err_list <- NULL
-      if (!is.null(errmodel)) {
-        err_list <- lapply(conditions, function(cn) {
-          if (!is.null(e.cond) && !(cn %in% e.cond)) return(NULL)
-          pinner     <- getParameters(prediction[[cn]])
-          fixedinner <- pinner[attr(pinner, "fixed")]
-          pinner     <- as.parvec(pinner[setdiff(names(pinner), names(fixed))])
-          fixedinner <- as.parvec(fixedinner, deriv = FALSE, deriv2 = FALSE)
-          errmodel(out = prediction[[cn]], pars = pinner,
-                   fixed = fixedinner, conditions = cn)[[cn]]
-        })
-      }
-
-      # Determine current deriv signature (per-condition local par names).
-      cur_sig <- lapply(prediction, function(pr) dimnames(attr(pr, "deriv"))[[3]])
-      if (is.null(.meta_cache$meta_list) ||
-          !identical(.meta_cache$signature, cur_sig)) {
-        .meta_cache$par_names_global <- unique(unlist(cur_sig))
-        .meta_cache$meta_list <- .build_normL2_meta(
-          data, prediction, err_list, conditions, e.cond)
-        .meta_cache$signature <- cur_sig
-      }
-
-      eff_threads <- max(
-        1L, min(as.integer(threads),
-                as.integer(getOption("dMod.objfn.threads", threads))))
-
-      kr <- normL2_kernel(
-        prediction       = prediction,
-        err_list_opt     = err_list,
-        meta_list        = .meta_cache$meta_list,
-        par_names_global = .meta_cache$par_names_global,
-        bessel           = bessel,
-        deriv2_requested = isTRUE(deriv2),
-        threads          = eff_threads,
-        bloq_mode        = opt.BLOQ
-      )
-      out <- objlist(value    = kr$value,
-                     gradient = kr$gradient,
-                     hessian  = kr$hessian)
-      attr(out, attr.name) <- out$value
-      env$prediction <- prediction
-      attr(out, "env") <- env
-      return(out)
+    # Build errmodel output per condition (if any).
+    err_list <- NULL
+    if (!is.null(errmodel)) {
+      err_list <- lapply(conditions, function(cn) {
+        if (!is.null(e.cond) && !(cn %in% e.cond)) return(NULL)
+        pinner     <- getParameters(prediction[[cn]])
+        fixedinner <- pinner[attr(pinner, "fixed")]
+        pinner     <- as.parvec(pinner[setdiff(names(pinner), names(fixed))])
+        fixedinner <- as.parvec(fixedinner, deriv = FALSE, deriv2 = FALSE)
+        errmodel(out = prediction[[cn]], pars = pinner,
+                 fixed = fixedinner, conditions = cn)[[cn]]
+      })
     }
 
-    # ---- R fallback path (existing behaviour) ----
-    one <- function(cn) {
-      evalConditionResidual(dataI = data[[cn]], predictionI = prediction[[cn]],
-                            pars = pars, errfn = errmodel, fixed = fixed,
-                            cn = cn, eCondNames = e.cond, bessel = bessel,
-                            deriv = deriv, deriv2 = deriv2,
-                            opt.BLOQ = opt.BLOQ)
+    # Determine current deriv signature (per-condition local par names);
+    # empty for value-only (deriv = FALSE) evaluations.
+    cur_sig <- lapply(prediction, function(pr) dimnames(attr(pr, "deriv"))[[3]])
+    if (is.null(.meta_cache$meta_list) ||
+        !identical(.meta_cache$signature, cur_sig)) {
+      .meta_cache$par_names_global <- unique(unlist(cur_sig))
+      .meta_cache$meta_list <- .build_normL2_meta(
+        data, prediction, err_list, conditions, e.cond)
+      .meta_cache$signature <- cur_sig
     }
-    out <- if (cores == 1L) {
-      Reduce(`+`, lapply(conditions, one))
-    } else if (.Platform$OS.type == "windows") {
-      cl <- parallel::makeCluster(cores)
-      on.exit(parallel::stopCluster(cl))
-      Reduce(`+`, parallel::parLapply(cl, conditions, one))
-    } else {
-      Reduce(`+`, parallel::mclapply(conditions, one, mc.cores = cores))
-    }
+    par_names_global <- .meta_cache$par_names_global
+    if (is.null(par_names_global)) par_names_global <- character(0)
 
+    kr <- normL2_kernel(
+      prediction       = prediction,
+      err_list_opt     = err_list,
+      meta_list        = .meta_cache$meta_list,
+      par_names_global = par_names_global,
+      bessel           = bessel,
+      deriv2_requested = isTRUE(deriv2),
+      threads          = as.integer(cores),
+      bloq_mode        = opt.BLOQ
+    )
+    out <- if (deriv)
+      objlist(value = kr$value, gradient = kr$gradient, hessian = kr$hessian)
+    else
+      objlist(value = kr$value, gradient = NULL, hessian = NULL)
     attr(out, attr.name) <- out$value
     env$prediction <- prediction
     attr(out, "env") <- env
@@ -335,11 +323,14 @@ normL2 <- function(data, x, errmodel = NULL, times = NULL,
     pcols <- colnames(prdfI)
     d_dn  <- dimnames(attr(prdfI, "deriv"))
 
+    has_deriv <- !is.null(d_dn)
     t_idx_in_pred  <- match(dataI$time, prdfI[, "time"])
     o_idx_in_pred  <- match(dataI$name, pcols)
-    o_idx_in_deriv <- match(dataI$name, d_dn[[2]])
+    o_idx_in_deriv <- if (has_deriv) match(dataI$name, d_dn[[2]])
+                      else rep(0L, nrow(dataI))
 
-    if (anyNA(t_idx_in_pred) || anyNA(o_idx_in_pred) || anyNA(o_idx_in_deriv)) {
+    if (anyNA(t_idx_in_pred) || anyNA(o_idx_in_pred) ||
+        (has_deriv && anyNA(o_idx_in_deriv))) {
       stop(".build_normL2_meta: data point not found in prediction for condition '",
            cn, "'.", call. = FALSE)
     }
@@ -399,8 +390,6 @@ normL2 <- function(data, x, errmodel = NULL, times = NULL,
 #'   the MVN path and ignores `sigma`.
 #' @param attr.name Character. Name of the attribute storing the constraint value.
 #' @param condition Optional character vector of conditions.
-#' @param threads Integer. Per-call OpenMP threads passed to the C++ constraint
-#'   kernel. Default 1.
 #'
 #' @details
 #' Computes, depending on which path is selected,
@@ -420,21 +409,18 @@ normL2 <- function(data, x, errmodel = NULL, times = NULL,
 #' @return Object of class \code{objfn}.
 #' @export
 constraintL2 <- function(mu, sigma = 1, Omega = NULL,
-                         attr.name = "prior", condition = NULL,
-                         threads = 1L) {
+                         attr.name = "prior", condition = NULL) {
 
   if (!is.null(Omega)) {
     if (missing(mu)) mu <- 0
     return(constraintL2_mvn(mu = mu, Omega = Omega,
-                            attr.name = attr.name, condition = condition,
-                            threads = threads))
+                            attr.name = attr.name, condition = condition))
   }
 
   est <- is.character(sigma)
   if (length(sigma) == 1) sigma <- setNames(rep(sigma, length(mu)), names(mu))
   if (is.null(names(sigma))) names(sigma) <- names(mu)
   sigma <- sigma[names(mu)]
-  force(threads)
 
   myfn <- function(..., fixed = NULL, deriv = TRUE, deriv2 = FALSE, conditions = condition, env = NULL) {
 
@@ -442,7 +428,7 @@ constraintL2 <- function(mu, sigma = 1, Omega = NULL,
     dP <- attr(p, "deriv", exact = TRUE)
     dP2 <- if (deriv2) attr(p, "deriv2", exact = TRUE) else NULL
 
-    use_cpp <- isTRUE(getOption("dMod.objfn.cpp", FALSE)) && deriv
+    use_cpp <- deriv
 
     if (use_cpp) {
       inner_par_names <- names(p)
@@ -540,8 +526,7 @@ constraintL2 <- function(mu, sigma = 1, Omega = NULL,
 # Returns sum_i (eta_i - mu)^T Omega^-1 (eta_i - mu) + N log|Omega| with exact
 # value/gradient and Gauss-Newton Hessian (block-diagonal in eta, exact crosses
 # to the Cholesky parameters; sandwich via dP for chain rule).
-constraintL2_mvn <- function(mu, Omega, attr.name = "prior", condition = NULL,
-                              threads = 1L) {
+constraintL2_mvn <- function(mu, Omega, attr.name = "prior", condition = NULL) {
 
   if (!inherits(Omega, "omegaSpec"))
     stop("`Omega` must be an omegaSpec object built by omega().")
@@ -582,7 +567,7 @@ constraintL2_mvn <- function(mu, Omega, attr.name = "prior", condition = NULL,
     chol_vec <- allp[chol_pars]
     L        <- build_L(chol_vec)
 
-    use_cpp <- isTRUE(getOption("dMod.objfn.cpp", FALSE)) && deriv
+    use_cpp <- deriv
     # The C++ path is correct only when the chol params are HELD FIXED (i.e.
     # none of `chol_pars` is in `names(p)` as a free parameter). When the
     # caller is estimating chol params (ECM workflow), fall back to R.
@@ -750,7 +735,6 @@ constraintL2_mvn <- function(mu, Omega, attr.name = "prior", condition = NULL,
 #' @param attr.name character. The constraint value is additionally returned in an 
 #' attributed with this name
 #' @param condition character, the condition for which the prediction is made.
-#' @param threads Integer. Per-call OpenMP threads passed to the C++ kernel. Default 1.
 #' @return List of class \code{objlist}, i.e. objective value, gradient and Hessian as list.
 #' @seealso [normL2], [constraintL2]
 #' @details Computes the constraint value 
@@ -765,8 +749,7 @@ constraintL2_mvn <- function(mu, Omega, attr.name = "prior", condition = NULL,
 #' vali <- datapointL2(name = "A", time = 0, value = "newpoint", sigma = 1, condition = "a")
 #' vali(pars = c(p0, newpoint = 1), env = .GlobalEnv)
 #' @export
-datapointL2 <- function(name, time, value, sigma = 1, attr.name = "validation", condition,
-                         threads = 1L) {
+datapointL2 <- function(name, time, value, sigma = 1, attr.name = "validation", condition) {
 
   controls <- list(
     mu        = structure(name, names = value)[1], # only one data point is allowed
@@ -774,8 +757,7 @@ datapointL2 <- function(name, time, value, sigma = 1, attr.name = "validation", 
     sigma     = sigma[1],
     attr.name = attr.name
   )
-  force(threads)
-  
+
   myfn <- function(..., fixed = NULL, deriv = TRUE, deriv2 = FALSE, conditions = NULL, env = NULL) {
     mu        <- controls$mu
     t         <- controls$time
@@ -803,7 +785,7 @@ datapointL2 <- function(name, time, value, sigma = 1, attr.name = "validation", 
       stop("datapointL2() requests time point for which no prediction is available. Please add missing time point by the times argument in normL2()")
     withDeriv <- !is.null(attr(prediction[[condition]], "deriv"))
 
-    use_cpp <- isTRUE(getOption("dMod.objfn.cpp", FALSE)) && withDeriv && deriv
+    use_cpp <- withDeriv && deriv
     if (use_cpp) {
       prdf <- prediction[[condition]]
       dpred_attr  <- attr(prdf, "deriv")
@@ -1001,520 +983,6 @@ priorL2 <- function(mu, lambda = "lambda", attr.name = "prior", condition = NULL
   attr(myfn, "parameters") <- names(mu)
   return(myfn)
   
-}
-
-
-#' Compute the negative log-likelihood
-#' 
-#' @description Gaussian Log-likelihood. Supports NONMEM-like BLOQ handling methods M1, M3 and M4 
-#' and estimation of error models with optional Bessel correction for variance parameter bias.
-#' The Hessian is approximated via the Jacobian of the residuals (Gauss-Newton approximation).
-#' Supports different parameter sets per condition - gradients and Hessians are merged by parameter name.
-#' 
-#' @param nout data.frame (result of [res]) or object of class [res].
-#' @param pars Named vector of ALL outer parameters (union across conditions)
-#' @param deriv Logical. If TRUE, compute gradient and hessian.
-#' @param deriv2 Logical. If TRUE, also propagate second-order derivatives.
-#' @param opt.BLOQ Character denoting the method to deal with BLOQ data.
-#' One of "M1", "M3", "M4NM", or "M4BEAL".
-#' @param opt.hessian Named logical vector to include or exclude various 
-#' summands of the hessian matrix.
-#' @param bessel.correction Numeric. Bessel correction factor for variance estimation.
-#' 
-#' @md
-#' @return list with entries value, gradient, and hessian (Gauss-Newton approximation).
-#' @export
-nll <- function(nout, pars, deriv, deriv2 = FALSE,
-                opt.BLOQ = "M3", opt.hessian = c(
-  ALOQ_part1 = TRUE, ALOQ_part2 = TRUE, ALOQ_part3 = TRUE,
-  BLOQ_part1 = TRUE, BLOQ_part2 = TRUE, BLOQ_part3 = TRUE,
-  PD = TRUE), bessel.correction = 1) {
-
-  is.bloq <- nout$bloq
-  nout.bloq <- nout[is.bloq, , drop = FALSE]
-  nout.aloq <- nout[!is.bloq, , drop = FALSE]
-
-  derivs <- attr(nout, "deriv")
-  derivs.bloq <- if (!is.null(derivs)) derivs[is.bloq, , drop = FALSE] else NULL
-  derivs.aloq <- if (!is.null(derivs)) derivs[!is.bloq, , drop = FALSE] else NULL
-
-  derivs.err <- attr(nout, "deriv.err")
-  derivs.err.bloq <- if (!is.null(derivs.err)) derivs.err[is.bloq, , drop = FALSE] else NULL
-  derivs.err.aloq <- if (!is.null(derivs.err)) derivs.err[!is.bloq, , drop = FALSE] else NULL
-
-  derivs2 <- if (deriv2) attr(nout, "deriv2") else NULL
-  derivs2.aloq <- if (!is.null(derivs2)) derivs2[!is.bloq, , , drop = FALSE] else NULL
-  derivs2.bloq <- if (!is.null(derivs2)) derivs2[is.bloq, , , drop = FALSE] else NULL
-
-  derivs2.err <- if (deriv2) attr(nout, "deriv2.err") else NULL
-  derivs2.err.aloq <- if (!is.null(derivs2.err))
-    derivs2.err[!is.bloq, , , drop = FALSE] else NULL
-  derivs2.err.bloq <- if (!is.null(derivs2.err))
-    derivs2.err[is.bloq, , , drop = FALSE] else NULL
-
-  n_pars <- length(pars)
-  par_names <- names(pars)
-
-  mywrss <- {
-    gr <- if (deriv) setNames(numeric(n_pars), par_names) else NULL
-    he <- if (deriv) matrix(0, n_pars, n_pars, dimnames = list(par_names, par_names)) else NULL
-    objlist(value = 0, gradient = gr, hessian = he)
-  }
-
-  # When the caller asked only for the value, drop the deriv matrices so
-  # nll_ALOQ / nll_BLOQ skip the gradient branch entirely. Important for
-  # error models where derivs.err can have NULL colnames (e.g. PEtab case
-  # 0015 with a single symbolic noise parameter), which otherwise trigger
-  # a non-conformable-arrays error in the dwrdp/dlogsdp arithmetic.
-  if (!isTRUE(deriv)) {
-    derivs.aloq <- NULL; derivs.bloq <- NULL
-    derivs.err.aloq <- NULL; derivs.err.bloq <- NULL
-    derivs2.aloq <- NULL; derivs2.bloq <- NULL
-    derivs2.err.aloq <- NULL; derivs2.err.bloq <- NULL
-  }
-
-  nll_ALOQ_result <- NULL
-  if (!all(is.bloq)) {
-    nll_ALOQ_result <- nll_ALOQ(nout.aloq, derivs.aloq, derivs.err.aloq,
-                                derivs2 = derivs2.aloq,
-                                derivs2.err = derivs2.err.aloq,
-                                par_names = par_names,
-                                opt.BLOQ = opt.BLOQ, opt.hessian = opt.hessian,
-                                bessel.correction = bessel.correction)
-  }
-  mywrss <- mywrss + nll_ALOQ_result
-
-  if (any(is.bloq) && opt.BLOQ != "M1") {
-    mywrss <- mywrss + nll_BLOQ(nout.bloq, derivs.bloq, derivs.err.bloq,
-                                derivs2 = derivs2.bloq,
-                                derivs2.err = derivs2.err.bloq,
-                                par_names = par_names,
-                                opt.BLOQ = opt.BLOQ, opt.hessian = opt.hessian)
-  }
-  
-  chisquare <- attr(nll_ALOQ_result, "chisquare")
-  nll_val <- attr(nll_ALOQ_result, "nll")
-  attr(mywrss, "chisquare") <- if (length(chisquare)) chisquare else 0
-  attr(mywrss, "nll") <- if (length(nll_val)) nll_val else 0
-  
-  mywrss
-}
-
-
-#' Non-linear log likelihood for the ALOQ part of the data
-#' 
-#' @param nout output of [res()]
-#' @param derivs,derivs.err matrix of first derivatives (may have subset of parameters)
-#' @param derivs2 Optional 3D array of second prediction derivatives. If `NULL`,
-#'   only first-order contributions through the structural model are propagated.
-#' @param derivs2.err Optional 3D array of second error-model derivatives
-#'   (`d^2 sigma / d theta^2`). If `NULL`, the exact d2sigma Hessian term is
-#'   skipped (mathematically zero when sigma does not depend on parameters).
-#' @param par_names Character vector of ALL parameter names (full set)
-#' @param opt.BLOQ Character denoting the method to deal with BLOQ data
-#' @param opt.hessian Named logical vector for hessian components
-#' @param bessel.correction Numeric. Bessel correction factor.
-#' @md
-#' @importFrom stats pnorm dnorm
-nll_ALOQ <- function(nout, derivs, derivs.err,
-                     derivs2 = NULL,
-                     derivs2.err = NULL,
-                     par_names,
-                     opt.BLOQ = c("M3", "M4NM", "M4BEAL", "M1"),
-                     opt.hessian = c(ALOQ_part1 = TRUE, ALOQ_part2 = TRUE, ALOQ_part3 = TRUE),
-                     bessel.correction = 1) {
-  
-  wr <- nout$weighted.residual
-  w0 <- nout$weighted.0
-  s  <- nout$sigma
-  
-  chisquare_ml <- sum(wr^2)
-  neg2ll_ml <- chisquare_ml + sum(log(2 * pi * s^2))
-  
-  use_bessel <- bessel.correction != 1
-  if (use_bessel) {
-    wr <- wr * bessel.correction
-    w0 <- w0 * bessel.correction
-  }
-  
-  chisquare <- sum(wr^2)
-  obj <- chisquare + sum(log(2 * pi * s^2))
-  
-  if (opt.BLOQ[1] == "M4BEAL") {
-    bloq_term <- 2 * sum(stats::pnorm(w0, log.p = TRUE))
-    obj <- obj + bloq_term
-    neg2ll_ml <- neg2ll_ml + bloq_term
-  }
-  
-  n_pars_full <- length(par_names)
-  grad <- NULL
-  hessian <- NULL
-  
-  if (!is.null(derivs) && nrow(derivs) > 0) {
-    local_pars <- colnames(derivs)
-    local_pars_err <- if (!is.null(derivs.err)) colnames(derivs.err) else character(0)
-    n_local <- length(local_pars)
-    n_data <- nrow(derivs)
-    
-    idx_map <- match(local_pars, par_names)
-    
-    dxdp <- derivs
-    inv_s <- 1 / s
-    
-    # Build aligned dsdp matrix (same columns as dxdp)
-    dsdp <- matrix(0, n_data, n_local)
-    colnames(dsdp) <- local_pars
-    if (length(local_pars_err) > 0) {
-      common <- intersect(local_pars, local_pars_err)
-      if (length(common) > 0) {
-        dsdp[, common] <- derivs.err[, common, drop = FALSE]
-      }
-    }
-    
-    # Compute derivatives of the (possibly bessel-scaled) weighted residual.
-    # We want d wr_scaled / d theta where wr_scaled = bessel * wr_orig:
-    #   d wr_scaled / d theta = bessel * (inv_s * dxdp - wr_orig * inv_s * dsdp)
-    #                         = bessel * inv_s * dxdp - (wr_scaled * inv_s) * dsdp
-    # `wr` carries the SCALED value at this point (see use_bessel block above),
-    # so the dsdp term is correct as is; only the dxdp term needs the bessel
-    # factor. The earlier implementation multiplied the ENTIRE dwrdp by bessel
-    # AFTER the wr-was-scaled formula, which double-applied bessel to the dsdp
-    # term and broke the gradient for parameters that affect sigma (e.g.
-    # `sigma_add` in an additive errmodel). Same fix for dw0dp / BLOQ.
-    if (use_bessel) {
-      dwrdp <- bessel.correction * inv_s * dxdp - (wr * inv_s) * dsdp
-      dw0dp <- bessel.correction * inv_s * dxdp - (w0 * inv_s) * dsdp
-    } else {
-      dwrdp <- inv_s * dxdp - (wr * inv_s) * dsdp
-      dw0dp <- inv_s * dxdp - (w0 * inv_s) * dsdp
-    }
-    dlogsdp <- inv_s * dsdp
-    
-    # Local gradient
-    grad_local <- 2 * (colSums(wr * dwrdp) + colSums(dlogsdp))
-    
-    if (opt.BLOQ[1] == "M4BEAL") {
-      G_by_Phi <- exp(stats::dnorm(w0, log = TRUE) - stats::pnorm(w0, log.p = TRUE))
-      grad_local <- grad_local + 2 * colSums(G_by_Phi * dw0dp)
-    }
-    
-    # Map to full gradient
-    grad <- setNames(numeric(n_pars_full), par_names)
-    grad[idx_map] <- grad_local
-    
-    # Local Hessian (Gauss-Newton)
-    hessian_local <- 2 * crossprod(dwrdp)
-    
-    if (opt.hessian["ALOQ_part1"]) {
-      tmp <- (-wr * inv_s^2) * dxdp
-      hessian_local <- hessian_local + 2 * (crossprod(tmp, dsdp) + crossprod((-wr * inv_s^2) * dsdp, dxdp))
-    }
-    
-    if (opt.hessian["ALOQ_part2"]) {
-      hessian_local <- hessian_local + 4 * crossprod((wr * inv_s) * dsdp)
-    }
-    
-    if (opt.hessian["ALOQ_part3"]) {
-      hessian_local <- hessian_local - 2 * crossprod(dlogsdp)
-    }
-
-    # Exact Hessian: residual second-derivative contribution.
-    # For wr = (pred - val) / s and constant s in theta:
-    # d^2(wr_i)/dtheta^2 = inv_s_i * d^2(pred_i)/dtheta^2
-    # H_exact_addition = 2 * sum_i wr_i * d^2(wr_i)/dtheta^2
-    # (We keep the GN crossprod above; this term is the contribution that
-    # GN drops. Sigma-theta cross terms remain GN-approximated when the
-    # error model shares parameters with the structural model.)
-    if (!is.null(derivs2)) {
-      d2_local_pars <- dimnames(derivs2)[[2]]
-      common_d2 <- intersect(local_pars, d2_local_pars)
-      if (length(common_d2) > 0L) {
-        idx_d2_local <- match(common_d2, local_pars)
-        # weight per residual: 2 * wr_i * inv_s_i
-        wts <- 2 * wr * inv_s
-        # contract first axis (residual index) of derivs2 with weights:
-        # H_add[j,k] = sum_i wts_i * derivs2[i, j, k]
-        d2_sub <- derivs2[, common_d2, common_d2, drop = FALSE]
-        n_common <- length(common_d2)
-        # Use einsum-style contraction via apply or matrix product on flattened
-        # second/third axes. Reshape d2_sub to [n_data, n_common^2] then matmul
-        # against wts and reshape back.
-        flat <- matrix(d2_sub, nrow = nrow(d2_sub), ncol = n_common * n_common)
-        h_add_flat <- crossprod(flat, wts)
-        h_add <- matrix(h_add_flat, n_common, n_common)
-        hessian_local[idx_d2_local, idx_d2_local] <-
-          hessian_local[idx_d2_local, idx_d2_local] + h_add
-      }
-    }
-
-    # Exact Hessian: error-model second-derivative contribution.
-    # From 2*wr*d2wr (which contributes -2 wr^2 / sigma * d2sigma) plus
-    # 2*d2(log sigma) (which contributes +2/sigma * d2sigma), the net weight
-    # on d2sigma is (2/sigma)(1 - wr^2). Skipped when sigma does not depend
-    # on theta (derivs2.err is then either NULL or all zero).
-    if (!is.null(derivs2.err) && length(local_pars_err) > 0L) {
-      d2e_local_pars <- dimnames(derivs2.err)[[2]]
-      common_d2e <- intersect(local_pars, d2e_local_pars)
-      if (length(common_d2e) > 0L) {
-        idx_d2e_local <- match(common_d2e, local_pars)
-        wts_sig <- 2 * inv_s * (1 - wr^2)
-        d2e_sub <- derivs2.err[, common_d2e, common_d2e, drop = FALSE]
-        n_common_e <- length(common_d2e)
-        flat_e <- matrix(d2e_sub, nrow = nrow(d2e_sub),
-                         ncol = n_common_e * n_common_e)
-        h_add_flat_e <- crossprod(flat_e, wts_sig)
-        h_add_e <- matrix(h_add_flat_e, n_common_e, n_common_e)
-        hessian_local[idx_d2e_local, idx_d2e_local] <-
-          hessian_local[idx_d2e_local, idx_d2e_local] + h_add_e
-      }
-    }
-
-    if (opt.BLOQ[1] == "M4BEAL") {
-      G_w0 <- exp(stats::dnorm(w0, log = TRUE) - stats::pnorm(w0, log.p = TRUE))
-      coef <- pmax(0, -w0 * G_w0 - G_w0^2)
-      hessian_local <- hessian_local + 2 * crossprod(sqrt(coef) * dw0dp)
-      
-      tmp_G <- G_w0 * (-inv_s^2)
-      hessian_local <- hessian_local + 2 * (crossprod(tmp_G * dxdp, dsdp) + crossprod(tmp_G * dsdp, dxdp))
-      
-      if (opt.hessian["ALOQ_part1"]) {
-        hessian_local <- hessian_local + 4 * crossprod(sqrt(pmax(0, G_w0 * w0) * inv_s) * dsdp)
-      }
-    }
-    
-    # Map to full Hessian
-    hessian <- matrix(0, n_pars_full, n_pars_full, dimnames = list(par_names, par_names))
-    hessian[idx_map, idx_map] <- hessian_local
-  }
-  
-  out <- objlist(value = obj, gradient = grad, hessian = hessian)
-  attr(out, "chisquare") <- chisquare_ml
-  attr(out, "nll") <- neg2ll_ml
-  attr(out, "besselcorrected") <- use_bessel
-  out
-}
-
-
-#' Non-linear log likelihood for the BLOQ part of the data
-#' @md
-#' @param nout.bloq The bloq output of [res()]
-#' @param derivs.bloq,derivs.err.bloq matrix of first derivatives
-#' @param derivs2,derivs2.err Optional 3D arrays of second prediction and
-#'   error-model derivatives over the BLOQ rows. When non-`NULL`, the exact
-#'   d^2 pred / d^2 sigma contributions to the Hessian are added on top of
-#'   the Gauss-Newton-plus-Parts form.
-#' @param par_names Character vector of ALL parameter names (full set)
-#' @param opt.BLOQ Character denoting the method to deal with BLOQ data
-#' @param opt.hessian Named logical vector for hessian components
-#' @importFrom stats pnorm dnorm
-nll_BLOQ <- function(nout.bloq, derivs.bloq, derivs.err.bloq,
-                     derivs2 = NULL,
-                     derivs2.err = NULL,
-                     par_names,
-                     opt.BLOQ = c("M3", "M4NM", "M4BEAL", "M1"),
-                     opt.hessian = c(BLOQ_part1 = TRUE, BLOQ_part2 = TRUE, BLOQ_part3 = TRUE)) {
-  
-  if (opt.BLOQ[1] %in% c("M4NM", "M4BEAL") && any(nout.bloq$value < 0)) {
-    stop("M4-Method cannot handle LLOQ < 0. Possible solutions:\n",
-         "  * Use M3 which allows negative LLOQ (recommended)\n",
-         "  * If you are working with log-transformed DV, exponentiate DV and LLOQ\n")
-  }
-  
-  wr <- nout.bloq$weighted.residual
-  w0 <- nout.bloq$weighted.0
-  s  <- nout.bloq$sigma
-  inv_s <- 1 / s
-  
-  n_pars_full <- length(par_names)
-  
-  if (opt.BLOQ[1] == "M3") {
-    obj.bloq <- -2 * sum(stats::pnorm(-wr, log.p = TRUE))
-  } else {
-    objvals <- -2 * log(1 - stats::pnorm(wr) / stats::pnorm(w0))
-    bad <- !is.finite(objvals)
-    if (any(bad)) {
-      diff_w <- w0[bad] - wr[bad]
-      intercept <- ifelse(log(diff_w) > 0, 1.8, -1.9 * log(diff_w) + 0.9)
-      lin <- ifelse(log(diff_w) > 0, 0.9, 0.5)
-      objvals[bad] <- intercept + lin * w0[bad] + 0.95 * w0[bad]^2
-    }
-    obj.bloq <- sum(objvals)
-  }
-  
-  grad.bloq <- NULL
-  hessian.bloq <- NULL
-  
-  if (!is.null(derivs.bloq) && nrow(derivs.bloq) > 0) {
-    local_pars <- colnames(derivs.bloq)
-    local_pars_err <- if (!is.null(derivs.err.bloq)) colnames(derivs.err.bloq) else character(0)
-    n_local <- length(local_pars)
-    n_data <- nrow(derivs.bloq)
-    
-    idx_map <- match(local_pars, par_names)
-    
-    dxdp <- derivs.bloq
-    
-    # Build aligned dsdp
-    dsdp <- matrix(0, n_data, n_local)
-    colnames(dsdp) <- local_pars
-    if (length(local_pars_err) > 0) {
-      common <- intersect(local_pars, local_pars_err)
-      if (length(common) > 0) {
-        dsdp[, common] <- derivs.err.bloq[, common, drop = FALSE]
-      }
-    }
-    
-    dwrdp <- inv_s * dxdp - (wr * inv_s) * dsdp
-    dw0dp <- inv_s * dxdp - (w0 * inv_s) * dsdp
-    
-    G_by_Phi <- function(w1, w2 = w1) {
-      exp(stats::dnorm(w1, log = TRUE) - stats::pnorm(w2, log.p = TRUE))
-    }
-    
-    if (opt.BLOQ[1] == "M3") {
-      G_neg_wr <- G_by_Phi(-wr)
-      grad_local <- 2 * colSums(G_neg_wr * dwrdp)
-    } else {
-      c1 <- 1 / (1/G_by_Phi(wr, w0) - 1/G_by_Phi(wr, wr))
-      c2 <- 1 / (1/G_by_Phi(w0, w0) - 1/G_by_Phi(w0, wr))
-      c3 <- G_by_Phi(w0)
-      grad_local <- 2 * colSums(c1 * dwrdp - c2 * dw0dp + c3 * dw0dp)
-    }
-    
-    grad.bloq <- setNames(numeric(n_pars_full), par_names)
-    grad.bloq[idx_map] <- grad_local
-    
-    hessian_local <- matrix(0, n_local, n_local, dimnames = list(local_pars, local_pars))
-    
-    if (opt.BLOQ[1] == "M3") {
-      G_neg_wr <- G_by_Phi(-wr)
-      
-      if (opt.hessian["BLOQ_part1"]) {
-        coef <- -wr * G_neg_wr + G_neg_wr^2
-        hessian_local <- hessian_local + 2 * crossprod(dwrdp, coef * dwrdp)
-      }
-      
-      if (opt.hessian["BLOQ_part2"]) {
-        tmp <- G_neg_wr * inv_s^2
-        hessian_local <- hessian_local - 2 * (crossprod(tmp * dxdp, dsdp) + crossprod(tmp * dsdp, dxdp))
-      }
-      
-      if (opt.hessian["BLOQ_part3"]) {
-        hessian_local <- hessian_local - 2 * crossprod(dsdp, (G_neg_wr * 2 * (-wr) * inv_s^2) * dsdp)
-      }
-      
-    } else {
-      stable <- function(wn, w0, wr) {
-        out <- stats::dnorm(wn) / (stats::pnorm(w0) - stats::pnorm(wr))
-        if (identical(wn, w0)) { out[is.infinite(out)] <- 0; return(out) }
-        if (identical(wn, wr)) { out[is.infinite(out)] <- 1/(w0 - wr) + wr; return(out) }
-        out
-      }
-      
-      A1 <- -wr * stable(wr, w0, wr)
-      A2 <- stable(wr, w0, wr)
-      A3 <- -w0 * stable(w0, w0, wr)
-      A4 <- stable(w0, w0, wr)
-      G_w0 <- G_by_Phi(w0)
-      A5 <- -w0 * G_w0 - G_w0^2
-      A6 <- G_w0
-      
-      if (opt.hessian["BLOQ_part1"]) {
-        hessian_local <- hessian_local + 2 * (
-          crossprod(dwrdp, A1 * dwrdp) +
-            crossprod(dw0dp, A3 * dw0dp) +
-            crossprod(dw0dp, A5 * dw0dp)
-        )
-      }
-      
-      if (opt.hessian["BLOQ_part2"]) {
-        part2_vec <- A2 * dwrdp - A4 * dw0dp
-        hessian_local <- hessian_local - 2 * crossprod(part2_vec)
-        
-        hessian_local <- hessian_local + 2 * (
-          crossprod(A2 * (-inv_s^2) * dxdp, dsdp) + crossprod(A2 * (-inv_s^2) * dsdp, dxdp) +
-            crossprod(A4 * (-inv_s^2) * dxdp, dsdp) + crossprod(A4 * (-inv_s^2) * dsdp, dxdp) +
-            crossprod(A6 * (-inv_s^2) * dxdp, dsdp) + crossprod(A6 * (-inv_s^2) * dsdp, dxdp)
-        )
-      }
-      
-      if (opt.hessian["BLOQ_part3"]) {
-        hessian_local <- hessian_local + 2 * (
-          crossprod(dsdp, (A2 * 2 * wr * inv_s^2) * dsdp) +
-            crossprod(dsdp, (A4 * 2 * w0 * inv_s^2) * dsdp) +
-            crossprod(dsdp, (A6 * 2 * w0 * inv_s^2) * dsdp)
-        )
-      }
-    }
-
-    # Exact Hessian: prediction second-derivative contribution.
-    # See math reference in src/residual_kernel.h.
-    if (!is.null(derivs2)) {
-      d2_local_pars <- dimnames(derivs2)[[2]]
-      common_d2 <- intersect(local_pars, d2_local_pars)
-      if (length(common_d2) > 0L) {
-        idx_d2_local <- match(common_d2, local_pars)
-        if (opt.BLOQ[1] == "M3") {
-          G_neg_wr <- exp(stats::dnorm(-wr, log = TRUE) -
-                          stats::pnorm(-wr, log.p = TRUE))
-          wts <- 2 * G_neg_wr * inv_s
-        } else {
-          # M4*: c1 + c3 - c2 weight on d2pred (both d2wr and d2w0 contribute
-          # inv_s * d2pred).
-          dP    <- stats::pnorm(w0) - stats::pnorm(wr)
-          c1    <- stats::dnorm(wr) / dP
-          c2    <- stats::dnorm(w0) / dP
-          c3    <- exp(stats::dnorm(w0, log = TRUE) -
-                       stats::pnorm(w0, log.p = TRUE))
-          wts   <- 2 * inv_s * (c1 + c3 - c2)
-        }
-        d2_sub <- derivs2[, common_d2, common_d2, drop = FALSE]
-        n_common <- length(common_d2)
-        flat <- matrix(d2_sub, nrow = nrow(d2_sub),
-                       ncol = n_common * n_common)
-        h_add_flat <- crossprod(flat, wts)
-        h_add <- matrix(h_add_flat, n_common, n_common)
-        hessian_local[idx_d2_local, idx_d2_local] <-
-          hessian_local[idx_d2_local, idx_d2_local] + h_add
-      }
-    }
-
-    # Exact Hessian: error-model second-derivative contribution.
-    if (!is.null(derivs2.err) && length(local_pars_err) > 0L) {
-      d2e_local_pars <- dimnames(derivs2.err)[[2]]
-      common_d2e <- intersect(local_pars, d2e_local_pars)
-      if (length(common_d2e) > 0L) {
-        idx_d2e_local <- match(common_d2e, local_pars)
-        if (opt.BLOQ[1] == "M3") {
-          G_neg_wr <- exp(stats::dnorm(-wr, log = TRUE) -
-                          stats::pnorm(-wr, log.p = TRUE))
-          wts_sig <- -2 * wr * G_neg_wr * inv_s
-        } else {
-          dP    <- stats::pnorm(w0) - stats::pnorm(wr)
-          c1    <- stats::dnorm(wr) / dP
-          c2    <- stats::dnorm(w0) / dP
-          c3    <- exp(stats::dnorm(w0, log = TRUE) -
-                       stats::pnorm(w0, log.p = TRUE))
-          # 2 (c1 d2wr + (c3 - c2) d2w0) projects -wr/sigma and -w0/sigma
-          # respectively onto d2sigma: net -2/sigma * (c1*wr + (c3 - c2)*w0).
-          wts_sig <- -2 * inv_s * (c1 * wr + (c3 - c2) * w0)
-        }
-        d2e_sub <- derivs2.err[, common_d2e, common_d2e, drop = FALSE]
-        n_common_e <- length(common_d2e)
-        flat_e <- matrix(d2e_sub, nrow = nrow(d2e_sub),
-                         ncol = n_common_e * n_common_e)
-        h_add_flat_e <- crossprod(flat_e, wts_sig)
-        h_add_e <- matrix(h_add_flat_e, n_common_e, n_common_e)
-        hessian_local[idx_d2e_local, idx_d2e_local] <-
-          hessian_local[idx_d2e_local, idx_d2e_local] + h_add_e
-      }
-    }
-
-    hessian.bloq <- matrix(0, n_pars_full, n_pars_full, dimnames = list(par_names, par_names))
-    hessian.bloq[idx_map, idx_map] <- hessian_local
-  }
-  
-  objlist(value = obj.bloq, gradient = grad.bloq, hessian = hessian.bloq)
 }
 
 

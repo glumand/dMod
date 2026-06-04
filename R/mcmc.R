@@ -394,7 +394,8 @@ metricControl <- function(metricContext = NULL,
 
 .run_smc <- function(target, n_arg, sequenceSchedule, populationSize,
                      reSampling, moveType, moveControl, metricControl,
-                     sequenceControl, bounds, parscale, dG_cb, cores) {
+                     sequenceControl, bounds, parscale, dG_cb, cores,
+                     retry = TRUE, nTries = 10L) {
 
   if (sequenceSchedule == "learned")
     stop("sequenceSchedule = 'learned' is not yet implemented.")
@@ -422,14 +423,27 @@ metricControl <- function(metricContext = NULL,
              error = function(e) NULL)
   }
 
+  max_init_tries <- if (isTRUE(retry)) as.integer(nTries) else 1L
   init_one <- function(i) {
-    out <- call_lik(setNames(particles[i, ], par_names))
-    if (is.null(out) || !is.finite(out$value)) -Inf
-    else -as.numeric(out$value) / 2
+    theta <- setNames(particles[i, ], par_names)
+    out <- call_lik(theta)
+    k <- 1L
+    while ((is.null(out) || !is.finite(out$value)) && k < max_init_tries) {
+      theta <- as.numeric(priorSample(1L))
+      names(theta) <- par_names
+      out <- call_lik(theta)
+      k <- k + 1L
+    }
+    logL_i <- if (is.null(out) || !is.finite(out$value)) -Inf
+              else -as.numeric(out$value) / 2
+    list(theta = theta, logL = logL_i)
   }
-  logL <- unlist(.parallelLapply(seq_len(N), init_one, cores = cores,
-                                  extraExports = c("particles", "par_names",
-                                                    "call_lik")))
+  init_res <- .parallelLapply(seq_len(N), init_one, cores = cores,
+                              extraExports = c("particles", "par_names",
+                                               "call_lik", "priorSample",
+                                               "max_init_tries"))
+  for (i in seq_len(N)) particles[i, ] <- init_res[[i]]$theta
+  logL <- vapply(init_res, `[[`, numeric(1), "logL")
   if (sum(!is.finite(logL)) == N)
     stop(".run_smc: initial likelihood non-finite for all particles.")
 
@@ -853,6 +867,14 @@ metricControl <- function(metricContext = NULL,
 #' @param sequenceControl,moveControl,metricControl Typed control objects
 #'   from the per-axis constructors. Sensible defaults are used when the
 #'   user passes `NULL` (which is the default).
+#' @param retry Logical, only honoured for `sequenceType = "sequential"`
+#'   (SMC). If `TRUE` (default), a particle whose initial likelihood
+#'   evaluation fails (NULL or non-finite) is redrawn from `priorSample`
+#'   up to `nTries` times before being flagged with `-Inf`. Single-chain
+#'   MCMC does not retry: failed proposals are rejected by the
+#'   Metropolis kernel, which is the detailed-balance-correct behaviour.
+#' @param nTries Maximum number of prior draws per particle slot at SMC
+#'   initialisation, including the first. Default `10L`.
 #' @param ... Additional arguments forwarded as dots into the objfn.
 #'
 #' @return An object of class `c("mcmcResult", ...)`, subclassed to
@@ -888,6 +910,8 @@ mcmc <- function(target,
                  sequenceControl  = NULL,
                  moveControl      = NULL,
                  metricControl    = NULL,
+                 retry            = TRUE,
+                 nTries           = 10L,
                  ...) {
 
   sequenceType     <- match.arg(sequenceType)
@@ -986,7 +1010,8 @@ mcmc <- function(target,
     runOne <- function(idx) {
       raw <- .run_smc(target_obj, nIter, sequenceSchedule, populationSize,
                       reSampling, moveType, moveControl, metricControl,
-                      sequenceControl, bounds, parsc, dG_cb, cores)
+                      sequenceControl, bounds, parsc, dG_cb, cores,
+                      retry = retry, nTries = nTries)
       .finish_smc(raw, call_capture, target_obj)
     }
     if (chains > 1L) {

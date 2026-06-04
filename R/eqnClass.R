@@ -66,7 +66,7 @@ is.eqnlist <- function(x) {
              (length(x$reactionCompartment) == length(x$rates) &&
               all(is.na(x$reactionCompartment) | x$reactionCompartment %in% names(x$compartments)))
     if (inherits(x, "eqnlist") &&
-        all(names(x) == expected_names) &&
+        all(expected_names %in% names(x)) &&
         all(names(x$smatrix) == names(x$states)) &&
         dim(x$smatrix)[1] == length(x$rates) &&
         dim(x$smatrix)[2] == length(x$states) &&
@@ -142,6 +142,167 @@ conservedQuantities <- function(S, weight = c("none", "volume"), volumes = NULL)
   return(cq)
 }
 
+
+## ---- Totals (CQ basis) management on eqnlist ------------------------------
+
+## Append `_2`, `_3`, ... until `base` is unique against `taken`.
+#' @keywords internal
+.uniqueName <- function(base, taken) {
+  if (!(base %in% taken)) return(base)
+  i <- 2L
+  while (paste0(base, "_", i) %in% taken) i <- i + 1L
+  paste0(base, "_", i)
+}
+
+## Longest common substring across all strings (empty if none).
+#' @keywords internal
+.lcs <- function(strings) {
+  if (!length(strings)) return("")
+  if (length(strings) == 1L) return(strings[1L])
+  lcs2 <- function(a, b) {
+    na <- nchar(a); nb <- nchar(b)
+    if (na == 0L || nb == 0L) return("")
+    best <- ""
+    for (i in seq_len(na)) for (j in seq_len(nb)) {
+      k <- 0L
+      while (i + k <= na && j + k <= nb &&
+             substr(a, i + k, i + k) == substr(b, j + k, j + k)) k <- k + 1L
+      if (k > nchar(best)) best <- substr(a, i, i + k - 1L)
+    }
+    best
+  }
+  Reduce(lcs2, strings)
+}
+
+## `totalXxx` from LCS of CQ species (require >= 2 chars after trimming
+## underscores), else `total_<index>`. Disambiguated against `used`/`parameters`.
+#' @keywords internal
+.smartTotalName <- function(species, used, parameters, index) {
+  fallback <- .uniqueName(paste0("total_", index), c(used, parameters))
+  if (length(species) < 2L) return(fallback)
+  lcs <- gsub("^_+|_+$", "", .lcs(species))
+  if (nchar(lcs) < 2L) return(fallback)
+  .uniqueName(paste0("total", lcs), c(used, parameters))
+}
+
+## Extract the linear coefficient vector of `expr` over `states` via 1-hot
+## evaluation, then verify linearity by re-evaluating at the all-twos point
+## (linear sum must equal 2 * sum(coefs); any product term breaks this).
+## Returns NULL on unknown symbols or detected nonlinearity.
+#' @keywords internal
+.linearCoefs <- function(expr, states, tol = 1e-8) {
+  syms <- getSymbols(expr)
+  if (length(setdiff(syms, states))) return(NULL)
+  parsed <- parse(text = expr)
+  e0 <- setNames(as.list(rep(0, length(states))), states)
+  base <- tryCatch(eval(parsed, envir = e0), error = function(e) NA_real_)
+  if (!is.finite(base)) return(NULL)
+  v <- setNames(numeric(length(states)), states)
+  for (s in intersect(syms, states)) {
+    e1 <- e0; e1[[s]] <- 1
+    v[s] <- eval(parsed, envir = e1) - base
+  }
+  e2 <- setNames(as.list(rep(2, length(states))), states)
+  check <- tryCatch(eval(parsed, envir = e2), error = function(e) NA_real_)
+  if (!is.finite(check) || abs(check - base - 2 * sum(v)) > tol)
+    return(NULL)
+  v
+}
+
+#' Validate a list of conservation expressions against an eqnlist
+#'
+#' Each expression must be linear in `eqnlist$states` and a true conservation
+#' quantity (its coefficient vector lies in the left null space of the
+#' stoichiometric matrix). The full basis must have rank equal to
+#' `nrow(conservedQuantities(eqnlist$smatrix))`.
+#'
+#' @param totals Named list of conservation expressions.
+#' @param eqnlist The [eqnlist] to validate against.
+#' @param tol Numerical tolerance for the null-space check.
+#' @return `TRUE` on success; otherwise `stop()`s with a descriptive error.
+#' @keywords internal
+.validateTotals <- function(totals, eqnlist, tol = 1e-8) {
+  if (!is.list(totals) || is.null(names(totals)) || any(!nzchar(names(totals))))
+    stop("`totals` must be a fully named list of conservation expressions.",
+         call. = FALSE)
+  states <- eqnlist$states
+  S <- eqnlist$smatrix; S[is.na(S)] <- 0
+
+  V <- matrix(0, length(totals), length(states),
+              dimnames = list(names(totals), states))
+  for (k in seq_along(totals)) {
+    v <- .linearCoefs(totals[[k]], states)
+    if (is.null(v))
+      stop("totals[['", names(totals)[k], "']] is not linear in the model states.",
+           call. = FALSE)
+    if (max(abs(S %*% v)) > tol)
+      stop("totals[['", names(totals)[k], "']] is not a conservation quantity ",
+           "(S %*% v is not zero).", call. = FALSE)
+    V[k, ] <- v
+  }
+
+  auto <- conservedQuantities(S)
+  n_required <- if (is.null(auto)) 0L else nrow(auto)
+  if (length(totals) != n_required)
+    stop("Expected ", n_required, " conservation quantities, got ",
+         length(totals), ".", call. = FALSE)
+  if (n_required > 0L && qr(V)$rank < n_required)
+    stop("Supplied `totals` are linearly dependent; rank ", qr(V)$rank,
+         " < ", n_required, ".", call. = FALSE)
+  TRUE
+}
+
+#' Conservation-quantity basis of an `eqnlist`
+#'
+#' Returns the conservation expressions associated with the model. If the
+#' eqnlist carries user-defined `$totals` (set via [customTotals]) those are
+#' returned verbatim; otherwise the auto-detected basis from
+#' [conservedQuantities()] is rendered with smart `totalXxx` names from the
+#' longest common substring of each CQ's species.
+#'
+#' @param eqnlist An [eqnlist].
+#' @return Named list mapping `total_name` -> conservation expression
+#'   (character). Empty list when the smatrix admits no CQs.
+#' @export
+getTotals <- function(eqnlist) {
+  if (!is.null(eqnlist$totals)) return(eqnlist$totals)
+  S <- eqnlist$smatrix
+  if (is.null(S) || ncol(S) == 0L) return(list())
+  cq <- conservedQuantities(S)
+  if (is.null(cq) || nrow(cq) == 0L) return(list())
+  out <- list()
+  for (i in seq_len(nrow(cq))) {
+    expr <- as.character(cq[i, 1])
+    sp   <- intersect(getSymbols(expr), eqnlist$states)
+    nm   <- .smartTotalName(sp, names(out), eqnlist$states, i)
+    out[[nm]] <- expr
+  }
+  out
+}
+
+#' Set or reset user-defined conservation-quantity totals
+#'
+#' Attaches a named list of conservation expressions to the eqnlist; these
+#' override auto-detection and flow into [Pimpl] / [Pequil] as the new
+#' parameter basis. Each expression is validated against the stoichiometric
+#' matrix (must lie in the left null space of `S`) and the basis as a whole
+#' must have the same rank as `conservedQuantities(S)`. Pass `NULL` or
+#' `list()` to reset to auto-detection.
+#'
+#' @param eqnlist An [eqnlist].
+#' @param totals Named list of expressions, or `NULL` / `list()` to reset.
+#' @return The eqnlist with `$totals` updated.
+#' @export
+customTotals <- function(eqnlist, totals) {
+  if (is.null(totals) || (is.list(totals) && length(totals) == 0L)) {
+    eqnlist$totals <- NULL
+    return(eqnlist)
+  }
+  .validateTotals(totals, eqnlist)
+  attr(totals, "custom") <- TRUE
+  eqnlist$totals <- totals
+  eqnlist
+}
 
 
 #' Generate a table of reactions (data.frame) from an equation list
@@ -302,10 +463,23 @@ addReaction <- function(eqnlist, from, to, rate, description = names(rate),
   reactionCompartment_out <- c(reactionCompartment_in, as.character(rateCompartment))
   if (all(is.na(reactionCompartment_out))) reactionCompartment_out <- NULL
 
-  as.eqnlist(mydata, volumes = volumes,
-             compartments = compartments_out, compartmentOf = compartmentOf_out,
-             reactionCompartment = reactionCompartment_out)
+  new_el <- as.eqnlist(mydata, volumes = volumes,
+                       compartments = compartments_out,
+                       compartmentOf = compartmentOf_out,
+                       reactionCompartment = reactionCompartment_out)
 
+  ## Preserve user-customized totals if they survive the structural change.
+  old_totals <- eqnlist$totals
+  if (!is.null(old_totals) && isTRUE(attr(old_totals, "custom"))) {
+    new_el <- tryCatch(customTotals(new_el, unclass(old_totals)),
+                       error = function(e) {
+                         warning("customTotals invalidated by addReaction(): ",
+                                 conditionMessage(e), ". Resetting to auto.",
+                                 call. = FALSE)
+                         new_el
+                       })
+  }
+  new_el
 }
 
 
@@ -598,11 +772,21 @@ subset.eqnlist <- function(x, ...) {
   reactionCompartment <- if (!is.null(eqnlist$reactionCompartment)) eqnlist$reactionCompartment[select] else NULL
   if (!is.null(reactionCompartment) && all(is.na(reactionCompartment))) reactionCompartment <- NULL
 
-  eqnlist(smatrix, states, rates, volumes, description,
-          compartments = compartments, compartmentOf = compartmentOf,
-          reactionCompartment = reactionCompartment)
+  new_el <- eqnlist(smatrix, states, rates, volumes, description,
+                    compartments = compartments, compartmentOf = compartmentOf,
+                    reactionCompartment = reactionCompartment)
 
-
+  old_totals <- eqnlist$totals
+  if (!is.null(old_totals) && isTRUE(attr(old_totals, "custom"))) {
+    new_el <- tryCatch(customTotals(new_el, unclass(old_totals)),
+                       error = function(e) {
+                         warning("customTotals invalidated by subset(): ",
+                                 conditionMessage(e), ". Resetting to auto.",
+                                 call. = FALSE)
+                         new_el
+                       })
+  }
+  new_el
 }
 
 
@@ -619,18 +803,17 @@ print.eqnlist <- function(x, pander = FALSE, ...) {
 
   eqnlist <- x
 
-  # Entities to print and pander
-  cq <- conservedQuantities(eqnlist$smatrix)
+  totals <- getTotals(eqnlist)
   r <- getReactions(eqnlist)
-
-  # Compartment block: only show when there is a meaningful assignment to
-  # surface (i.e. more than one compartment, or a compartment with non-unit
-  # volume, or any compartment with a rule).
   comp_lines <- .format_compartments(eqnlist$compartments, eqnlist$compartmentOf)
 
-  # Print or pander?
   if (!pander) {
-    print(cq)
+    if (length(totals)) {
+      tag <- if (isTRUE(attr(eqnlist$totals, "custom"))) " (custom)" else ""
+      cat("Conserved quantities", tag, ":\n", sep = "")
+      for (nm in names(totals))
+        cat("  ", nm, " = ", totals[[nm]], "\n", sep = "")
+    }
     if (length(comp_lines) > 0L) {
       cat("\n")
       cat(comp_lines, sep = "\n")

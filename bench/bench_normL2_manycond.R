@@ -117,35 +117,16 @@ pouter <- structure(rep(-1, length(outerpars)), names = outerpars)
 times_b <- sort(unique(c(0, unlist(lapply(big$data, `[[`, "time")))))
 invisible(obj_big(pouter))
 
-## R vs cpp backend: toggled via getOption("dMod.objfn.cpp"), checked per call
-cat("\n=== R vs cpp backend (N = 64, deriv = TRUE) ===\n")
-old_opt <- getOption("dMod.objfn.cpp")
-
-options(dMod.objfn.cpp = TRUE)
-invisible(obj_big(pouter))
-mb_cpp <- microbenchmark(obj_big(pouter), times = 20L, unit = "ms")
-
-options(dMod.objfn.cpp = FALSE)
-invisible(obj_big(pouter))
-mb_r <- microbenchmark(obj_big(pouter), times = 20L, unit = "ms")
-
-options(dMod.objfn.cpp = old_opt)
-
-m_cpp <- median(mb_cpp$time) / 1e6
-m_r   <- median(mb_r$time)   / 1e6
-cat(sprintf("normL2 median: cpp = %.2f ms, R = %.2f ms, speedup R/cpp = %.2fx\n",
-            m_cpp, m_r, m_r / m_cpp))
-
-## sanity check: both backends should agree numerically
-options(dMod.objfn.cpp = TRUE);  o_cpp <- obj_big(pouter)
-options(dMod.objfn.cpp = FALSE); o_r   <- obj_big(pouter)
-options(dMod.objfn.cpp = old_opt)
-cat(sprintf("|value cpp - value R|     = %.3e\n",
-            abs(o_cpp$value - o_r$value)))
-cat(sprintf("max|gradient cpp - R|     = %.3e\n",
-            max(abs(o_cpp$gradient - o_r$gradient))))
-cat(sprintf("max|hessian  cpp - R|     = %.3e\n",
-            max(abs(o_cpp$hessian  - o_r$hessian))))
+## cores scaling: the C++ residual kernel parallelises over conditions via
+## OpenMP, controlled by normL2(..., cores = ).
+cat("\n=== cores scaling (N = 64, deriv = TRUE) ===\n")
+for (nc in c(1L, 2L, 4L)) {
+  obj_nc <- normL2(big$data, prd_big, cores = nc)
+  invisible(obj_nc(pouter))
+  mb <- microbenchmark(obj_nc(pouter), times = 20L, unit = "ms")
+  cat(sprintf("cores = %d: normL2 median = %.2f ms\n",
+              nc, median(mb$time) / 1e6))
+}
 
 cat("\n=== Rprof: 200 obj_big() calls (N_cond = 64, default backend) ===\n")
 pf <- tempfile(fileext = ".out")

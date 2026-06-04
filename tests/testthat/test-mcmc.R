@@ -552,3 +552,77 @@ test_that("plot.mcmcResultMulti returns a ggplot", {
                       "mcmcResult", "list")
   expect_s3_class(plot(chains), "ggplot")
 })
+
+
+# ---- SMC init retry -----------------------------------------------------
+
+# Flaky likelihood: first `fail_first` calls return Inf (logL = -Inf), then
+# revert to a standard Gaussian objective.
+make_flaky_lik <- function(fail_first = 5L) {
+  counter <- 0L
+  fn <- function(pars, fixed = NULL, deriv = TRUE, deriv2 = FALSE, ...) {
+    counter <<- counter + 1L
+    if (counter <= fail_first) {
+      list(value = Inf, gradient = c(a = 0),
+           hessian = matrix(1, 1, 1, dimnames = list("a", "a")))
+    } else {
+      v <- as.numeric(pars["a"])^2
+      list(value = v, gradient = c(a = 2 * pars["a"]),
+           hessian = matrix(2, 1, 1, dimnames = list("a", "a")))
+    }
+  }
+  class(fn) <- c("objfn", "fn")
+  attr(fn, "parameters") <- "a"
+  fn
+}
+
+
+test_that("SMC init retries -Inf particles by redrawing from the prior", {
+  set.seed(42)
+  pop <- 6L
+  likObj  <- make_flaky_lik(fail_first = 3L)
+  pSample <- function(n) matrix(rnorm(n, 0, 1), n, 1L,
+                                dimnames = list(NULL, "a"))
+  tgt <- flatTarget(likObj = likObj, priorSample = pSample)
+
+  chain <- mcmc(target           = tgt,
+                sequenceType     = "sequential",
+                sequenceSchedule = "fixed",
+                populationSize   = pop,
+                moveType         = "langevin",
+                metric           = "euclidean",
+                sequenceControl  = smcControl(schedule = c(0, 1),
+                                              malaSteps = 1L,
+                                              continuousAdaption = FALSE,
+                                              verbose = FALSE),
+                retry = TRUE, nTries = 10L)
+
+  expect_s3_class(chain, "mcmcResultSequential")
+  expect_equal(nrow(chain$samples), pop)
+  expect_true(is.finite(chain$logEvidence))
+})
+
+
+test_that("SMC init with retry = FALSE flags every initial -Inf as failed", {
+  set.seed(7)
+  pop <- 4L
+  likObj  <- make_flaky_lik(fail_first = 10000L)
+  pSample <- function(n) matrix(rnorm(n, 0, 1), n, 1L,
+                                dimnames = list(NULL, "a"))
+  tgt <- flatTarget(likObj = likObj, priorSample = pSample)
+
+  expect_error(
+    mcmc(target           = tgt,
+         sequenceType     = "sequential",
+         sequenceSchedule = "fixed",
+         populationSize   = pop,
+         moveType         = "langevin",
+         metric           = "euclidean",
+         sequenceControl  = smcControl(schedule = c(0, 1),
+                                       malaSteps = 1L,
+                                       continuousAdaption = FALSE,
+                                       verbose = FALSE),
+         retry = FALSE),
+    "initial likelihood non-finite"
+  )
+})

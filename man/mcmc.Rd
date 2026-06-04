@@ -25,6 +25,8 @@ mcmc(
   sequenceControl = NULL,
   moveControl = NULL,
   metricControl = NULL,
+  retry = TRUE,
+  nTries = 10L,
   ...
 )
 }
@@ -83,6 +85,16 @@ Bounds are enforced by immediate rejection of out-of-box proposals.}
 \item{sequenceControl, moveControl, metricControl}{Typed control objects
 from the per-axis constructors. Sensible defaults are used when the
 user passes \code{NULL} (which is the default).}
+
+\item{retry}{Logical, only honoured for \code{sequenceType = "sequential"}
+(SMC). If \code{TRUE} (default), a particle whose initial likelihood
+evaluation fails (NULL or non-finite) is redrawn from \code{priorSample}
+up to \code{nTries} times before being flagged with \code{-Inf}. Single-chain
+MCMC does not retry: failed proposals are rejected by the
+Metropolis kernel, which is the detailed-balance-correct behaviour.}
+
+\item{nTries}{Maximum number of prior draws per particle slot at SMC
+initialisation, including the first. Default \code{10L}.}
 
 \item{...}{Additional arguments forwarded as dots into the objfn.}
 }

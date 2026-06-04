@@ -472,3 +472,26 @@ test_that("getParameters(normL2(..., errmodel = ec$e)) includes errmodel pars", 
   obj <- normL2(data, ec$prd, errmodel = ec$e)
   expect_true("srel" %in% attr(obj, "parameters"))
 })
+
+
+# ============================================================================
+# Cross-backend parity (C++ kernel vs R reference)
+# ============================================================================
+
+test_that("normL2 cpp kernel agrees with R reference on the linear-decay fixture", {
+  testthat::skip_if_not_installed("CppODE")
+  testthat::skip_on_cran()
+  bench <- fx_decay_compiled()
+  data  <- fx_decay_data(sigma = 0.05)
+  pars  <- bench$outerpars_id
+
+  with_cpp_backend(FALSE, {
+    o_R <- normL2(data, bench$prd_id)(pars)
+  })
+  with_cpp_backend(TRUE, {
+    o_C <- normL2(data, bench$prd_id)(pars)
+  })
+  expect_equal(o_C$value,    o_R$value,    tolerance = 1e-9)
+  expect_equal(o_C$gradient, o_R$gradient, tolerance = 1e-8)
+  expect_equal(o_C$hessian,  o_R$hessian,  tolerance = 1e-8)
+})

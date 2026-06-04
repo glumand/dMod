@@ -143,12 +143,15 @@ eqnvec <- function(...) {
 #' @param reactionCompartment Optional character vector of length
 #'   `nrow(smatrix)`. Per-reaction reference compartment ID; use `NA` to infer
 #'   from educts. Required when educts span multiple compartments.
+#' @param totals Optional named list of user-defined conservation-quantity
+#'   expressions, as produced by [customTotals]. `NULL` leaves the basis to be
+#'   auto-detected from the stoichiometric matrix.
 #' @return An object of class `eqnlist`, basically a list.
 #' @example inst/examples/eqnlist.R
 eqnlist <- function(smatrix = NULL, states = colnames(smatrix), rates = NULL,
                     volumes = NULL, description = NULL,
                     compartments = NULL, compartmentOf = NULL,
-                    reactionCompartment = NULL) {
+                    reactionCompartment = NULL, totals = NULL) {
 
   # Dimension checks and preparations for non-empty argument list.
   if (all(!is.null(c(smatrix, states, rates)))) {
@@ -187,7 +190,8 @@ eqnlist <- function(smatrix = NULL, states = colnames(smatrix), rates = NULL,
               description = as.character(description),
               compartments = resolved$compartments,
               compartmentOf = resolved$compartmentOf,
-              reactionCompartment = reactionCompartment)
+              reactionCompartment = reactionCompartment,
+              totals = totals)
   class(out) <- c("eqnlist", "list")
 
   return(out)

@@ -83,17 +83,23 @@ CondInputs gather_one_condition(
   const int n_data = t_idx.size();
   C.n_data = n_data;
 
-  // Resolve par_local via the prdframe's deriv dimnames.
+  // Resolve par_local via the prdframe's deriv dimnames. A value-only
+  // evaluation (deriv = FALSE) carries no deriv attribute; then n_par_local
+  // is 0 and all derivative gathers below are skipped.
   RObject deriv_attr_sexp = prdf.attr("deriv");
-  if (deriv_attr_sexp.isNULL())
-    throw std::runtime_error("normL2_kernel: prdframe has no deriv attribute.");
-  NumericVector dpred_flat(deriv_attr_sexp);
-  IntegerVector deriv_dim = dpred_flat.attr("dim");
-  List deriv_dimnames     = dpred_flat.attr("dimnames");
-  CharacterVector par_local_names = deriv_dimnames[2];
-  const int Dp0 = deriv_dim[0];
-  const int Dp1 = deriv_dim[1];
-  const int n_par_local = par_local_names.size();
+  const bool has_deriv = !deriv_attr_sexp.isNULL();
+  NumericVector dpred_flat;
+  CharacterVector par_local_names;
+  int Dp0 = 0, Dp1 = 0, n_par_local = 0;
+  if (has_deriv) {
+    dpred_flat = NumericVector(deriv_attr_sexp);
+    IntegerVector deriv_dim = dpred_flat.attr("dim");
+    List deriv_dimnames     = dpred_flat.attr("dimnames");
+    par_local_names = deriv_dimnames[2];
+    Dp0 = deriv_dim[0];
+    Dp1 = deriv_dim[1];
+    n_par_local = par_local_names.size();
+  }
   C.n_par_local = n_par_local;
 
   C.par_idx_global.resize(n_par_local);
@@ -140,15 +146,17 @@ CondInputs gather_one_condition(
     }
   }
 
-  // Gather dpred.
-  C.dpred.assign((std::size_t) n_data * n_par_local, 0.0);
-  for (int j = 0; j < n_data; ++j) {
-    const int i = perm[j];
-    const int ti = t_idx[i] - 1;
-    const int od = o_idx_d[i] - 1;
-    double* row = C.dpred.data() + (std::size_t) j * n_par_local;
-    for (int p = 0; p < n_par_local; ++p) {
-      row[p] = dpred_flat[ti + od * Dp0 + p * Dp0 * Dp1];
+  // Gather dpred (skipped entirely for value-only conditions).
+  if (n_par_local > 0) {
+    C.dpred.assign((std::size_t) n_data * n_par_local, 0.0);
+    for (int j = 0; j < n_data; ++j) {
+      const int i = perm[j];
+      const int ti = t_idx[i] - 1;
+      const int od = o_idx_d[i] - 1;
+      double* row = C.dpred.data() + (std::size_t) j * n_par_local;
+      for (int p = 0; p < n_par_local; ++p) {
+        row[p] = dpred_flat[ti + od * Dp0 + p * Dp0 * Dp1];
+      }
     }
   }
 
@@ -182,8 +190,8 @@ CondInputs gather_one_condition(
   }
 
   // Gather dsigma / d2sigma if errmodel has deriv (mapped from err-par names
-  // to local pars).
-  if (err_mat_opt.isNotNull()) {
+  // to local pars). Skipped for value-only conditions (no local pars).
+  if (err_mat_opt.isNotNull() && n_par_local > 0) {
     NumericMatrix em(err_mat_opt.get());
     RObject ed_sexp = em.attr("deriv");
     if (!ed_sexp.isNULL()) {
@@ -428,13 +436,17 @@ List normL2_kernel(
     }
   }
 
-  // Package result as objlist-shaped list.
+  // Package result as objlist-shaped list. A value-only evaluation has
+  // n_par_global == 0; skip the name/dimname assignment and the [0,0] write
+  // into the empty gradient/Hessian then.
   NumericVector grad_R(grad_global.begin(), grad_global.end());
-  grad_R.names() = par_names_global;
   NumericMatrix hess_R(n_par_global, n_par_global);
-  std::memcpy(&hess_R(0, 0), hess_global.data(),
-              sizeof(double) * (std::size_t) n_par_global * n_par_global);
-  hess_R.attr("dimnames") = List::create(par_names_global, par_names_global);
+  if (n_par_global > 0) {
+    grad_R.names() = par_names_global;
+    std::memcpy(&hess_R(0, 0), hess_global.data(),
+                sizeof(double) * (std::size_t) n_par_global * n_par_global);
+    hess_R.attr("dimnames") = List::create(par_names_global, par_names_global);
+  }
 
   return List::create(
       Named("value")    = value_global,

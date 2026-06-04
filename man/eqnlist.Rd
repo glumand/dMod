@@ -15,7 +15,8 @@ eqnlist(
   description = NULL,
   compartments = NULL,
   compartmentOf = NULL,
-  reactionCompartment = NULL
+  reactionCompartment = NULL,
+  totals = NULL
 )
 
 as.eqnlist(data, volumes, ...)
@@ -55,6 +56,10 @@ States not listed default to compartment \code{"defaultComp"} with volume \code{
 \item{reactionCompartment}{Optional character vector of length
 \code{nrow(smatrix)}. Per-reaction reference compartment ID; use \code{NA} to infer
 from educts. Required when educts span multiple compartments.}
+
+\item{totals}{Optional named list of user-defined conservation-quantity
+expressions, as produced by \link{customTotals}. \code{NULL} leaves the basis to be
+auto-detected from the stoichiometric matrix.}
 
 \item{data}{data.frame with columns Description, Rate, and one colum for each state
 reflecting the stoichiometric matrix}

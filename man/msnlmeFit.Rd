@@ -23,6 +23,8 @@ msnlmeFit(
   resultPath = ".",
   output = FALSE,
   verbose = FALSE,
+  retry = TRUE,
+  nTries = 10L,
   ...
 )
 }
@@ -55,9 +57,9 @@ parframe.}
 
 \item{cores}{Integer, number of parallel workers. On Unix uses
 \code{parallel::mclapply} (fork); on Windows a PSOCK cluster + \code{foreach}.
-Outer parallelism multiplies with the inner OpenMP threads of the C++
-objective kernels (\code{getOption("dMod.objfn.threads")}); keep
-\code{cores * dMod.objfn.threads} below your core count.}
+Outer parallelism multiplies with the OpenMP threads each objective
+function uses (its \code{cores} argument); keep the product below your core
+count.}
 
 \item{samplefun}{Name of a random-number generator (default \code{"rnorm"})
 used to perturb \code{center}. Extra args in \code{...} whose names match
@@ -83,6 +85,13 @@ to \verb{<resultPath>/<studyname>/trial-N-<timestamp>/interRes/}. Defaults to
 
 \item{verbose}{Logical. If \code{TRUE}, prints per-fit progress and forwards
 \code{verbose = TRUE} into \code{\link[=nlmeFit]{nlmeFit()}}.}
+
+\item{retry}{Logical. If \code{TRUE} (default), a fit that throws is
+re-attempted with a freshly sampled \code{parinit} up to \code{nTries} times.
+Ignored when \code{center} is a parframe.}
+
+\item{nTries}{Maximum number of attempts per fit slot, including the
+first. Default \code{10L}.}
 
 \item{...}{Forwarded to \code{samplefun} (e.g. \code{sd = 0.3}).}
 }

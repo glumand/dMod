@@ -109,3 +109,70 @@ test_that("confint.parframe yields half-width = z(0.95)*sigma on a 1D Gaussian p
   expected <- qnorm(0.975) * sigma
   expect_lt(abs(half_width - expected) / expected, 0.10)
 })
+
+
+# ---- retry / nTries -----------------------------------------------------
+
+make_flaky_obj <- function(fail_first = 3L) {
+  counter <- 0L
+  fn <- function(pars, fixed = NULL, deriv = TRUE, ...) {
+    counter <<- counter + 1L
+    if (counter <= fail_first)
+      stop("flaky objfn: deliberate failure ", counter, "/", fail_first)
+    v <- sum(pars * pars)
+    g <- 2 * pars
+    H <- 2 * diag(length(pars))
+    dimnames(H) <- list(names(pars), names(pars))
+    structure(list(value = v, gradient = g, hessian = H),
+              class = c("objlist", "list"))
+  }
+  class(fn) <- c("objfn", "fn")
+  attr(fn, "parameters") <- c("a", "b")
+  fn
+}
+
+
+test_that("mstrust retries a failing fit up to nTries times", {
+  oldwd <- setwd(tempdir()); on.exit(setwd(oldwd), add = TRUE)
+
+  obj <- make_flaky_obj(fail_first = 3L)
+  out <- mstrust(objfun = obj, center = c(a = 0, b = 0),
+                 studyname = "test_mstrust_retry_ok",
+                 rinit = 1, rmax = 10, iterlim = 50,
+                 fits = 1L, sd = 1, cores = 1L,
+                 retry = TRUE, nTries = 10L, output = FALSE)
+
+  expect_length(out, 1L)
+  expect_true(is.null(out[[1]]$error))
+  expect_true(isTRUE(out[[1]]$converged))
+})
+
+
+test_that("mstrust gives up after nTries and records an error", {
+  oldwd <- setwd(tempdir()); on.exit(setwd(oldwd), add = TRUE)
+
+  obj <- make_flaky_obj(fail_first = 100L)
+  out <- mstrust(objfun = obj, center = c(a = 0, b = 0),
+                 studyname = "test_mstrust_retry_fail",
+                 rinit = 1, rmax = 10, iterlim = 50,
+                 fits = 1L, sd = 1, cores = 1L,
+                 retry = TRUE, nTries = 3L, output = FALSE)
+
+  expect_length(out, 1L)
+  expect_true(!is.null(out[[1]]$error))
+})
+
+
+test_that("mstrust with retry = FALSE does not re-attempt", {
+  oldwd <- setwd(tempdir()); on.exit(setwd(oldwd), add = TRUE)
+
+  obj <- make_flaky_obj(fail_first = 1L)
+  out <- mstrust(objfun = obj, center = c(a = 0, b = 0),
+                 studyname = "test_mstrust_no_retry",
+                 rinit = 1, rmax = 10, iterlim = 50,
+                 fits = 1L, sd = 1, cores = 1L,
+                 retry = FALSE, output = FALSE)
+
+  expect_length(out, 1L)
+  expect_true(!is.null(out[[1]]$error))
+})

@@ -4,24 +4,34 @@
 \alias{.detect_and_substitute_cq}
 \title{Substitute conserved quantities into ODE rates}
 \usage{
-.detect_and_substitute_cq(smatrix, f, states, parameters)
+.detect_and_substitute_cq(
+  totals,
+  has_smatrix,
+  f,
+  states,
+  parameters,
+  expressInTotals = TRUE
+)
 }
 \arguments{
-\item{smatrix}{Stoichiometric matrix, or \code{NULL} (then only warns if
-parameter-states still occur unsubstituted).}
+\item{totals}{Named list of CQ expressions (from \code{\link[=getTotals]{getTotals()}}).
+Empty list disables CQ handling.}
+
+\item{has_smatrix}{Whether the caller had structural info available;
+gates the diagnostic warning when \code{totals} is empty.}
 
 \item{f, states, parameters}{Equation set, state names, user parameters.}
+
+\item{expressInTotals}{See above.}
 }
 \value{
-\code{list(f, parameters, cq_info, elim_states)}.
+\code{list(f, parameters, cq_info, elim_states)}. \code{cq_info}/
+\code{elim_states} are non-empty only in \code{TRUE} mode.
 }
 \description{
-Each independent conservation law \verb{sum_k c_k * x_k = total_i} removes one
-degree of freedom from the system: exactly one species \code{x_e} is eliminated
-and substituted as \code{x_e = total_i - (rest_of_CQ)} throughout \code{f}. Species
-already eliminated by a previous CQ are skipped (a CQ with no remaining
-eliminatable species is redundant and dropped). When the user lists
-species in \code{parameters} they are kept as pass-through inputs and the
-eliminator picks a different candidate from the same CQ when possible.
+For each conserved quantity one pivot species is eliminated.
+\code{expressInTotals = TRUE} substitutes \code{x_e -> total_i - rest} and adds a
+\code{total_i} parameter; \code{FALSE} promotes the pivot to a pass-through
+parameter so its redundant rate equation drops.
 }
 \keyword{internal}

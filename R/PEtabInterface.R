@@ -1097,6 +1097,26 @@ read_petab_tables <- function(yamlPath) {
     for (st in names(peq_state_subs)) tr_pre[st] <- peq_state_subs[[st]]
     tr_pre <- apply_petab_param_subs(tr_pre, obs_subs, noi_subs)
     tr_pre <- apply_scale_chain_rule(tr_pre)
+
+    # Pre-equilibration must integrate the FULL network to steady state, with
+    # every conserved moiety fixed by its initial total. When the network has
+    # conserved moieties we therefore run Pequil with expressInTotals = TRUE
+    # (which keeps all moiety species dynamical and pins each `total_i`) and
+    # supply each total from the scale-corrected species initials. The
+    # default expressInTotals = FALSE would instead hold a pivot species at
+    # its initial value, violating mass conservation.
+    peq_totals <- getTotals(peq_reactions)
+    eq_in_totals <- length(peq_totals) > 0L &&
+      all(vapply(peq_totals, function(e)
+        all(getSymbols(e) %in% names(tr_pre)), logical(1)))
+    if (eq_in_totals) {
+      for (tn in names(peq_totals)) {
+        sp <- getSymbols(peq_totals[[tn]])
+        tr_pre[tn] <- replaceSymbols(sp, paste0("(", tr_pre[sp], ")"),
+                                     peq_totals[[tn]])
+      }
+    }
+
     p_pre <- P(tr_pre, condition = sub, compile = compile,
                modelname = paste(modelname, sanitizeConditions(sub),
                                  "pre", sep = "_"))
@@ -1104,6 +1124,7 @@ read_petab_tables <- function(yamlPath) {
     # 3. p_eq: integrate peq_reactions to steady state. attach.input ensures
     #    parameters and observable/noise placeholders flow through unchanged.
     p_eq <- Pequil(peq_reactions, condition = sub, attach.input = TRUE,
+                   expressInTotals = eq_in_totals,
                    compile = compile,
                    modelname = paste(modelname, sanitizeConditions(sub),
                                      "eq", sep = "_"))

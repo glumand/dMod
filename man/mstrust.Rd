@@ -19,6 +19,8 @@ mstrust(
   output = FALSE,
   cautiousMode = FALSE,
   start1stfromCenter = FALSE,
+  retry = TRUE,
+  nTries = 10L,
   ...
 )
 }
@@ -37,10 +39,9 @@ Use \code{\link[=msParframe]{msParframe()}} for reproducible random starts.}
 
 \item{fits}{Number of fits.}
 
-\item{cores}{Number of parallel workers. Multiplies with the inner OpenMP
-threads of the C++ objective kernels
-(\code{getOption("dMod.objfn.threads")}); keep
-\code{cores * dMod.objfn.threads} below your core count.}
+\item{cores}{Number of parallel workers. Multiplies with the OpenMP threads
+each objective function uses (its \code{cores} argument); keep the product
+below your core count.}
 
 \item{optmethod}{Character. Name of the optimiser function to call via
 \code{do.call(optmethod, ...)}. Default \code{"trust"}.}
@@ -60,6 +61,15 @@ pitfalls) and keep intermediate files.}
 
 \item{start1stfromCenter}{Logical. If \code{TRUE}, the first fit starts exactly
 at \code{center} (no random offset).}
+
+\item{retry}{Logical. If \code{TRUE} (default), a fit that fails (with a
+\code{try-error} or with a \code{fit$error} element) is re-attempted with a
+freshly sampled \code{parinit} up to \code{nTries} times before being recorded
+as failed. Ignored when \code{center} is a parframe (rows are taken as
+given and cannot be resampled).}
+
+\item{nTries}{Maximum number of attempts per fit slot, including the
+first. Default \code{10L}.}
 
 \item{...}{Forwarded to \code{\link[=trust]{trust()}}, \code{samplefun}, or \code{objfun} by name match.
 Unmatched names go to \code{objfun}.}

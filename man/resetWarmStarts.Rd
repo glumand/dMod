@@ -9,27 +9,14 @@ resetWarmStarts(fn, verbose = TRUE)
 \arguments{
 \item{fn}{A \code{parfn}, \code{prdfn}, \code{obsfn}, \code{objfn}, or composed \code{fn}.}
 
-\item{verbose}{Print one-line summary of cleared caches. Default
-\code{TRUE}.}
+\item{verbose}{Print one-line summary of cleared caches.}
 }
 \value{
-Invisibly, a character vector of labels for the cleared
-caches (one entry per Pequil/Pimpl parfn touched). Length zero if
-nothing was found.
+Invisibly, labels of the cleared caches (empty if none found).
 }
 \description{
-Both \link{Pequil} and \link{Pimpl} cache the previous root (and its
-sensitivities) as a warm start for the next call, gated by
-\code{keep.root = TRUE}. The cache is keyed to the closure of a single
-\code{parfn} and persists across calls; for workflows that cross basins of
-attraction (\code{mstrust}, parameter-grid sweeps, repeated profile
-likelihoods after a structural change) a stale cache can pin the
-solver in the wrong region.
-}
-\details{
-\code{resetWarmStarts()} clears the cache on the supplied function and on
-every \code{Pequil}/\code{Pimpl} parfn reachable through composition (e.g.
-\code{obj} constructed via \code{normL2(data, g * x * p)} — calling
-\code{resetWarmStarts(obj)} walks the closure environments and resets the
-cache on \code{p} as well).
+Walks \code{fn} and its closure environments and clears the warm-start
+cache on every reachable \link{Pequil} / \link{Pimpl} parfn. Use before workflows
+that cross basins of attraction (multistart, profile after a structural
+change) where a stale root pins the solver in the wrong region.
 }

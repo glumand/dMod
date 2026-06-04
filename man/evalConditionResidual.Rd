@@ -42,7 +42,7 @@ an errmodel mapping. NULL means \code{errfn} applies to all.}
 
 \item{deriv, deriv2}{Logical. Whether to return gradient/Hessian.}
 
-\item{opt.BLOQ}{Character. BLOQ likelihood treatment forwarded to \code{\link[=nll]{nll()}}.
+\item{opt.BLOQ}{Character. BLOQ likelihood treatment (see \link{normL2}).
 One of \code{"M1"}, \code{"M3"} (default), \code{"M4NM"}, \code{"M4BEAL"}.}
 }
 \value{

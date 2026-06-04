@@ -7,42 +7,24 @@
 .zeroStatesFromSmatrix(eqnlist_obj)
 }
 \arguments{
-\item{eqnlist_obj}{An object of class \code{eqnlist}.}
+\item{eqnlist_obj}{An \link{eqnlist}.}
 }
 \value{
-List with elements:
-\describe{
-\item{\code{zero_states}}{Character vector of state names found to be zero.}
-\item{\code{eqnlist}}{Reduced \code{eqnlist} with zero-state columns and their
-trivial reactions removed and rates simplified.}
-}
+\code{list(zero_states, eqnlist)} with the reduced system.
 }
 \description{
-Three-layer structural test on the stoichiometric matrix of an \code{eqnlist},
-iterated until stable (matches the a-priori-zero detection in AlyssaPetit
-v1.2):
-}
-\details{
+Iterated three-layer test on the stoichiometric matrix of an \code{eqnlist}
+(matches AlyssaPetit v1.2):
 \enumerate{
-\item \emph{Neg-only column}: the state's stoichiometric column has only
-non-positive entries and at least one strictly negative entry. The
-state has only outflux, so it must be zero at steady state.
-\item \emph{Pos-only column with single-state feeder}: the state's column has
-only non-negative entries and at least one strictly positive entry.
-Each feeding flux must be zero in steady state; if any feeding flux's
-rate expression involves exactly one state, that state must be zero.
-\item \emph{Sink cluster (LP)}: subsets of states whose combined mass leaks
-monotonically (mass-balance LP via \code{lpSolve::lp}, only when the
-\code{lpSolve} package is installed; reduces to layer 1 for singletons).
-Catches cases like \verb{\{TGFb, R1_TGFb, R1_TGFb_int, ...\}} where every
-individual state's column looks balanced but the cluster as a whole
-degrades.
+\item \emph{Neg-only column}: only outflux, must be zero at SS.
+\item \emph{Pos-only column with single-state feeder}: each feeding flux
+vanishes at SS; if a feeder's rate involves exactly one state, that
+state must be zero.
+\item \emph{Sink cluster (LP)}: subsets whose combined mass leaks
+monotonically (mass-balance LP via \code{lpSolve::lp}, only when installed).
 }
-
-For every state found to be zero, the column is removed from the
-stoichiometric matrix and the state symbol is substituted by \code{"0"} in the
-remaining rate expressions; reactions whose rate becomes structurally
-zero after substitution are dropped entirely. Re-detection then runs on
-the reduced system, since each removal can expose new zero-states.
+For each zero-state the column is dropped, the state symbol is substituted
+by \code{"0"} in remaining rates, structurally-zero reactions are removed, and
+detection re-runs (removals can expose new zero-states).
 }
 \keyword{internal}

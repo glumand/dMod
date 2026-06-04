@@ -1227,9 +1227,9 @@ ecmEvaluateSubject <- function(subjIdx, psiFull, etaModes,
 #'   parframe.
 #' @param cores Integer, number of parallel workers. On Unix uses
 #'   `parallel::mclapply` (fork); on Windows a PSOCK cluster + `foreach`.
-#'   Outer parallelism multiplies with the inner OpenMP threads of the C++
-#'   objective kernels (`getOption("dMod.objfn.threads")`); keep
-#'   `cores * dMod.objfn.threads` below your core count.
+#'   Outer parallelism multiplies with the OpenMP threads each objective
+#'   function uses (its `cores` argument); keep the product below your core
+#'   count.
 #' @param samplefun Name of a random-number generator (default `"rnorm"`)
 #'   used to perturb `center`. Extra args in `...` whose names match
 #'   `formals(samplefun)` are forwarded.
@@ -1248,6 +1248,11 @@ ecmEvaluateSubject <- function(subjIdx, psiFull, etaModes,
 #'   (crash-resilient) and the full parlist is written at the end.
 #' @param verbose Logical. If `TRUE`, prints per-fit progress and forwards
 #'   `verbose = TRUE` into [nlmeFit()].
+#' @param retry Logical. If `TRUE` (default), a fit that throws is
+#'   re-attempted with a freshly sampled `parinit` up to `nTries` times.
+#'   Ignored when `center` is a parframe.
+#' @param nTries Maximum number of attempts per fit slot, including the
+#'   first. Default `10L`.
 #' @param ... Forwarded to `samplefun` (e.g. `sd = 0.3`).
 #'
 #' @return A [parlist] of length `fits`, each element an `nlmeFit` (stripped
@@ -1273,6 +1278,8 @@ msnlmeFit <- function(obj, omega, center,
                       resultPath = ".",
                       output     = FALSE,
                       verbose    = FALSE,
+                      retry      = TRUE,
+                      nTries     = 10L,
                       ...) {
 
   method <- match.arg(method)
@@ -1282,6 +1289,7 @@ msnlmeFit <- function(obj, omega, center,
   # fits and pulls starts directly from rows (sorted-by-value via
   # as.parvec.parframe). Numeric input perturbs by samplefun().
   varargslist <- list(...)
+  argssample  <- NULL  # populated for non-parframe centers; reused on retry
   if (is.parframe(center)) {
     fits <- nrow(center)
     parInitList <- lapply(seq_len(fits), function(i) as.parvec(center, i))
@@ -1301,6 +1309,12 @@ msnlmeFit <- function(obj, omega, center,
         out
       }
     })
+  }
+  resample_init <- function() {
+    perturb <- do.call(samplefun, argssample)
+    out <- center + perturb
+    names(out) <- names(center)
+    out
   }
   cores <- min(fits, cores)
 
@@ -1324,16 +1338,24 @@ msnlmeFit <- function(obj, omega, center,
 
   doOne <- function(i) {
     init_i <- parInitList[[i]]
-    # Invalidate Pimpl warm-start caches per fit so we do not inherit roots
-    # from a neighbouring start.
-    options(.dMod.fit_token = paste0("msnlme_", i, "_", as.numeric(Sys.time())))
+    # Retry: on a try-error, draw a fresh parinit and re-run nlmeFit, up to
+    # nTries times. parframe-supplied centers skip retry (rows are taken as
+    # given). Pequil/Pimpl warm-start caches are flushed between attempts so
+    # the retry does not inherit a dead basin from the previous start.
+    max_tries <- if (isTRUE(retry) && !is.parframe(center)) as.integer(nTries) else 1L
     t0 <- Sys.time()
-    fit <- try(suppressMessages(
-      nlmeFit(obj, omega, init_i,
-              prdfn = prdfn, data = data, errfn = errfn,
-              fixed = fixed, method = method, control = control,
-              verbose = verbose)),
-      silent = !verbose)
+    fit <- NULL
+    for (try_i in seq_len(max_tries)) {
+      fit <- try(suppressMessages(
+        nlmeFit(obj, omega, init_i,
+                prdfn = prdfn, data = data, errfn = errfn,
+                fixed = fixed, method = method, control = control,
+                verbose = verbose)),
+        silent = !verbose)
+      if (!inherits(fit, "try-error") || try_i == max_tries) break
+      init_i <- resample_init()
+      try(resetWarmStarts(obj, verbose = FALSE), silent = TRUE)
+    }
     elapsed <- as.numeric(difftime(Sys.time(), t0, units = "secs"))
 
     if (inherits(fit, "try-error")) {
@@ -1386,7 +1408,8 @@ msnlmeFit <- function(obj, omega, center,
         varlist = c("obj", "omega", "parInitList", "prdfn", "data",
                     "errfn", "fixed", "method", "control", "verbose",
                     "keepFull", "output", "interResultFolder", "fits",
-                    "digits"))
+                    "digits", "retry", "nTries", "center", "samplefun",
+                    "argssample", "resample_init"))
       `%mydo%` <- foreach::`%dopar%`
       i <- NULL
       results <- foreach::foreach(

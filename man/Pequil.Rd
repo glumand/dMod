@@ -10,10 +10,12 @@ Pequil(
   forcings = NULL,
   condition = NULL,
   attach.input = TRUE,
-  start.time = -1e+07,
-  end.time = 0,
+  start.time = 0,
+  end.time = 1e+10,
   keep.root = TRUE,
+  expressInTotals = FALSE,
   controlsODE = list(),
+  controlsMS = list(),
   compile = FALSE,
   modelname = NULL,
   verbose = FALSE,
@@ -25,32 +27,46 @@ Pequil(
 \arguments{
 \item{trafo}{Named character / \link{eqnvec} / \link{eqnlist}.}
 
-\item{parameters}{Outer parameter names. States listed here are not
-integrated; they act as initial conditions and pass through.}
+\item{parameters}{Outer parameters; listed states pass through as
+initial conditions instead of being integrated.}
 
-\item{forcings}{Forcing names; replaced by 0.}
+\item{forcings}{Forcing names; zeroed and removed.}
 
 \item{condition}{Condition label.}
 
 \item{attach.input}{Append pass-through inputs to the output.}
 
-\item{start.time, end.time}{Integration window; the root event fires at
-\code{end.time} if the steady state has not been reached.}
+\item{start.time, end.time}{Integration window; the equilibrate root
+event fires before \code{end.time} on success.}
 
-\item{keep.root}{Warm-start subsequent calls from the cached steady
-state, its sensitivities, and re-use the previous result if the
-inputs are unchanged.}
+\item{keep.root}{Warm-start subsequent calls and re-use the cached
+result when inputs are unchanged.}
+
+\item{expressInTotals}{If \code{FALSE} (default), the eliminated species per
+conserved quantity becomes a pass-through parameter held constant during
+integration. If \code{TRUE}, the full (uneliminated) system is integrated from
+initial conditions that distribute each conserved total across its moiety
+on the conservation manifold, so mass-action positivity and the
+conservation laws hold automatically (no reconstructed species can turn
+negative). The totals become outer parameters; their sensitivities are
+obtained from the pivot species' initial-condition sensitivities. Requires
+every conserved quantity to have a private species (a form occurring only
+in that total) to anchor a feasible initial condition.}
 
 \item{controlsODE}{Overrides for the ODE solver controls.}
 
+\item{controlsMS}{Multistart controls. Recognised keys: \code{nStarts}
+(default \code{10L}; \code{1L} disables multistart), \code{positive} (default
+\code{TRUE}; draws log-uniform random initial conditions over
+\verb{[lower, upper]}), \code{lower}/\code{upper} (scalar or named vector of
+bounds for the random sweep). Under \code{expressInTotals = TRUE} the sweep
+covers the non-conserved states only; moiety species are restarted on
+the conservation manifold fixed by the totals.}
+
 \item{compile, modelname, verbose}{Forwarded to \link[CppODE:CppODE]{CppODE::CppODE}.}
 
-\item{deriv}{If \code{TRUE} (default), attach first-order parameter
-sensitivities \code{attr(., "deriv")} of the steady state.}
-
-\item{deriv2}{Emit second-order sensitivities \code{attr(., "deriv2")};
-requires the model to be compiled with deriv2 support and
-\code{deriv = TRUE}.}
+\item{deriv, deriv2}{Attach first/second-order sensitivities; \code{deriv2}
+requires the model built with \code{deriv2 = TRUE}.}
 
 \item{...}{Forwarded to \link[CppODE:CppODE]{CppODE::CppODE}.}
 }
@@ -58,12 +74,13 @@ requires the model to be compiled with deriv2 support and
 A \link{parfn}.
 }
 \description{
-Returns a \link{parfn} that maps outer parameters to the steady state found
-by integrating the ODE from \code{start.time} to \code{end.time}. Conserved
-quantities are not eliminated; pick the basin of attraction by choosing
-the dependent-state initial values in the input parvec. The Jacobian
-(and optional Hessian) come from CppODE's analytical sensitivity
-integration; the chain rule with incoming \code{dP}/\code{dP2} is applied here.
+Returns a \link{parfn} over the outer inputs. On call, the parfn integrates
+the ODE from \code{start.time} to \code{end.time}, warm starting from the cached
+root when available and falling back to multistart on the initial
+conditions otherwise. The Jacobian (and Hessian when \code{deriv2 = TRUE})
+come from CppODE's analytical sensitivity integration. Conserved
+quantities are detected; how they are parametrised is controlled by
+\code{expressInTotals}.
 }
 \seealso{
 \link{Pexpl}, \link{Pimpl}, \link{P}.

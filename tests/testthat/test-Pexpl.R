@@ -102,3 +102,46 @@ test_that("getParameters(Y * Xs * P) equals getParameters(P) (outer-pars view)",
   expect_setequal(getParameters(bench$prd_id),  getParameters(bench$pfn_id))
   expect_setequal(getParameters(bench$prd_log), getParameters(bench$pfn_log))
 })
+
+
+# ============================================================================
+# Edge case: Pexpl with pure-numeric trafo (no outer parameters)
+# ============================================================================
+
+test_that("Pexpl with pure-numeric trafo evaluates (symbolic and dual)", {
+  withr::local_dir(tempdir())
+  trafo <- c(A = "1.0", B = "2.5")
+
+  p_sym <- Pexpl(trafo, derivMode = "symbolic", compile = FALSE,
+                 modelname = "noparam_pexpl_sym")
+  out_sym <- p_sym(c(dummy = 1.0))
+  expect_equal(unclass(out_sym[[1]])[c("A", "B")], c(A = 1.0, B = 2.5))
+
+  p_dual <- Pexpl(trafo, derivMode = "dual", compile = TRUE,
+                  modelname = "noparam_pexpl_dual")
+  out_dual <- p_dual(c(dummy = 1.0))
+  expect_equal(unclass(out_dual[[1]])[c("A", "B")], c(A = 1.0, B = 2.5))
+})
+
+
+test_that("Full g*x*p chain with constant-only Pexpl evaluates", {
+  withr::local_dir(tempdir())
+  f <- as.eqnvec(c(A = "-k*A"))
+  m <- odemodel(f, modelname = "noparam_full_ode", compile = TRUE,
+                solver = "CppODE")
+  x <- Xs(m)
+
+  trafo <- c(A = "1.0", k = "0.5")
+  p <- Pexpl(trafo, derivMode = "symbolic", compile = FALSE,
+             modelname = "noparam_full_p")
+  g <- Y(c(y1 = "A"), f = NULL, states = c("A"),
+         parameters = character(0),
+         derivMode = "symbolic", compile = FALSE,
+         modelname = "noparam_full_g")
+
+  out <- (g * x * p)(seq(0, 5, length.out = 3), c(dummy = 1.0))
+  pred <- out[[1]]
+  expect_equal(unname(pred[, "y1"]), unname(pred[, "A"]))
+  expect_equal(unname(pred[1, "A"]), 1.0, tolerance = 1e-8)
+  expect_equal(unname(pred[3, "A"]), exp(-0.5 * 5), tolerance = 1e-4)
+})

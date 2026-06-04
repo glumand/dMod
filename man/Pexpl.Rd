@@ -18,34 +18,29 @@ Pexpl(
 )
 }
 \arguments{
-\item{trafo}{Named character or \link{eqnvec}. Names are inner parameters,
+\item{trafo}{Named character / \link{eqnvec}; names are inner parameters,
 values are expressions in the outer parameters.}
 
-\item{parameters}{Outer-parameter names. Defaults to \code{getSymbols(trafo)}.}
+\item{parameters}{Outer parameters; defaults to \code{getSymbols(trafo)}.}
 
-\item{attach.input}{If \code{TRUE}, append the outer inputs to the output.}
+\item{attach.input}{Append outer inputs to the output.}
 
 \item{condition}{Condition label.}
 
 \item{compile, modelname, verbose}{Forwarded to \link[CppODE:funCpp]{CppODE::funCpp}.}
 
-\item{deriv}{If \code{TRUE} (default), attach the Jacobian \code{attr(., "deriv")}
-of shape \verb{[p, theta]}.}
+\item{deriv, deriv2}{Attach \code{attr(., "deriv")} \verb{[p, theta]} and/or
+\code{attr(., "deriv2")} \verb{[p, theta, theta]}. \code{deriv2} needs \code{deriv = TRUE}.}
 
-\item{deriv2}{If \code{TRUE}, attach the Hessian \code{attr(., "deriv2")} of
-shape \verb{[p, theta, theta]}. Requires \code{deriv = TRUE}.}
-
-\item{derivMode}{\code{"dual"} (forward-mode AD, needs \code{compile = TRUE}) or
-\code{"symbolic"} (SymPy + analytic chain rule).}
+\item{derivMode}{\code{"dual"} (AD, needs \code{compile = TRUE}) or \code{"symbolic"}.}
 }
 \value{
 A \link{parfn}.
 }
 \description{
-Builds \code{p_inner = f(p_outer)} from symbolic expressions and returns a
-\link{parfn} whose evaluation attaches the Jacobian (and optionally the
-Hessian). Backed by \link[CppODE:funCpp]{CppODE::funCpp} in either forward-mode AD or
-SymPy mode.
+Builds \code{p_inner = f(p_outer)} from symbolic expressions via
+\link[CppODE:funCpp]{CppODE::funCpp}, in forward-mode AD or SymPy mode. The returned
+\link{parfn} attaches the Jacobian and, optionally, the Hessian.
 }
 \seealso{
 \link{Pimpl}, \link{Pequil}, \link{P}.

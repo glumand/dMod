@@ -9,8 +9,7 @@ constraintL2(
   sigma = 1,
   Omega = NULL,
   attr.name = "prior",
-  condition = NULL,
-  threads = 1L
+  condition = NULL
 )
 }
 \arguments{
@@ -29,9 +28,6 @@ the MVN path and ignores \code{sigma}.}
 \item{attr.name}{Character. Name of the attribute storing the constraint value.}
 
 \item{condition}{Optional character vector of conditions.}
-
-\item{threads}{Integer. Per-call OpenMP threads passed to the C++ constraint
-kernel. Default 1.}
 }
 \value{
 Object of class \code{objfn}.

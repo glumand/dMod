@@ -10,51 +10,65 @@ Pimpl(
   forcings = NULL,
   condition = NULL,
   keep.root = TRUE,
-  positive = TRUE,
+  expressInTotals = TRUE,
   compile = FALSE,
   modelname = NULL,
   verbose = FALSE,
   deriv = TRUE,
   deriv2 = FALSE,
+  controlsMS = list(),
   controlsNleqslv = list()
 )
 }
 \arguments{
 \item{trafo}{Named character / \link{eqnvec} / \link{eqnlist}.}
 
-\item{parameters}{Outer parameters. Auto-extended with state names that
-need to be eliminated for CQ substitution.}
+\item{parameters}{Outer parameters; auto-extended with the \verb{total_*}
+conserved-quantity parameters.}
 
-\item{forcings}{Forcing names; replaced by 0 and removed from the system.}
+\item{forcings}{Forcing names; zeroed and removed.}
 
 \item{condition}{Condition label.}
 
 \item{keep.root}{Cache the root as warm-start for the next call.}
 
-\item{positive}{Solve in log-space to enforce positivity.}
+\item{expressInTotals}{If \code{TRUE} (default), every conserved moiety stays a
+solve variable and one redundant rate equation per conserved quantity is
+replaced by the algebraic conservation constraint \verb{sum(c_k x_k) = total_X},
+adding \code{total_X} as a parameter. The moiety is solved in log space, so all
+species stay positive and none is reconstructed by subtraction; the
+conservation then holds to the solver tolerance (\code{controlsNleqslv$ftol}).
+If \code{FALSE}, the pivot species per conserved quantity becomes a pass-through
+parameter and its redundant equation is dropped.}
 
 \item{compile, modelname, verbose}{Forwarded to \link[CppODE:funCpp]{CppODE::funCpp}.}
 
-\item{deriv}{If \code{TRUE} (default), attach first-order parameter
-sensitivities \code{attr(., "deriv")} via the implicit function theorem.}
+\item{deriv, deriv2}{Attach first/second-order IFT sensitivities.
+\code{deriv2} requires \code{funCpp} to expose \code{hess()}.}
 
-\item{deriv2}{Emit \code{attr(., "deriv2")} via the implicit function theorem
-(closed form: one extra \code{df/dx}-solve per parameter pair). Requires
-\code{funCpp} to expose \code{hess()}. Same shape as in \link{Pexpl} / \link{Pequil}.}
+\item{controlsMS}{Multistart controls. Recognised keys: \code{nStarts}
+(default \code{100L}; \code{1L} disables multistart), \code{positive} (default
+\code{TRUE}; selects nleqslv's log-space transform and log-uniform
+random starts), \code{lower}/\code{upper} (scalar or named vector of bounds
+for the random sweep), \code{debugPlot} (default \code{FALSE}; emit a
+waterfall plot of multistart termination codes).}
 
-\item{controlsNleqslv}{Solver-control overrides (merged into the
-defaults below).}
+\item{controlsNleqslv}{nleqslv tuning: \code{method}, \code{global}, \code{xscalm},
+\code{xtol}, \code{ftol}, \code{btol}, \code{cndtol}, \code{maxit}, \code{allowSingular}. Residuals
+are scaled per equation by their turnover \verb{sum_k |df_i/dx_k| |x_k|}, so
+\code{ftol} is a relative criterion that converges multi-scale systems
+uniformly.}
 }
 \value{
 A \link{parfn}.
 }
 \description{
-Solves \code{f(x, p) = 0} for the dependent states \code{x} via \link[nleqslv:nleqslv]{nleqslv::nleqslv}
-(multistart on failure), then returns a \link{parfn} over the outer inputs
-carrying the IFT-derived Jacobian (and Hessian, with \code{deriv2 = TRUE}).
-For \link{eqnlist} inputs, conserved quantities are detected and eliminated
-species are replaced by \verb{total_*} parameters; their values are
-reconstructed from the solved root.
+Returns a \link{parfn} over the outer inputs. On call, the parfn solves
+\code{f(x, p) = 0} for the dependent states via \link[nleqslv:nleqslv]{nleqslv::nleqslv}, warm
+starting from the cached root when available and falling back to
+multistart otherwise. The IFT-derived Jacobian (and Hessian when
+\code{deriv2 = TRUE}) are attached to the result. For \link{eqnlist} inputs with
+conserved moieties, see \code{expressInTotals}.
 }
 \seealso{
 \link{Pexpl}, \link{Pequil}, \link{P}.

@@ -163,20 +163,12 @@ fx_decay_data_bloq <- function(pars  = c(A = 1.0, k = 0.5),
 
 ## ---- Backend parametrisation --------------------------------------------
 
-# Run a block under both objfn backends (R reference vs. C++ kernel).
-# `fn` takes a single logical argument that signals the active backend so
-# test info messages can include it.
+# The objective functions now have a single C++ backend; these shims keep
+# legacy call sites working by running each block once under that backend.
 for_each_backend <- function(fn) {
-  for (cpp in c(FALSE, TRUE)) {
-    old <- options(dMod.objfn.cpp = cpp)
-    tryCatch(fn(cpp), finally = options(old))
-  }
+  fn(TRUE)
 }
 
-# Run a single block under a specific backend setting. Useful when one
-# block is genuinely backend-specific (e.g. covers an R-only path).
 with_cpp_backend <- function(enabled, code) {
-  old <- options(dMod.objfn.cpp = enabled)
-  on.exit(options(old), add = TRUE)
   force(code)
 }

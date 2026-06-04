@@ -132,3 +132,26 @@ test_that("Y gradient on y = A^2 follows the analytic chain rule dy/dtheta = 2 A
   expect_equal(d[, "y", "A"], ref_dA, tolerance = 1e-5)
   expect_equal(d[, "y", "k"], ref_dk, tolerance = 1e-5)
 })
+
+
+# ============================================================================
+# Edge case: Y with pure-numeric observable (no outer parameters)
+# ============================================================================
+
+test_that("Y with pure-numeric observable composes with an Xs prediction", {
+  withr::local_dir(tempdir())
+  f <- as.eqnvec(c(A = "-k*A"))
+  m <- odemodel(f, modelname = "noparam_y_ode", compile = TRUE,
+                solver = "CppODE")
+  x <- Xs(m)
+
+  g <- Y(c(y1 = "1.0"), f = NULL, states = c("A"),
+         parameters = character(0),
+         derivMode = "symbolic", compile = FALSE,
+         modelname = "noparam_y_obs")
+
+  out <- (g * x)(seq(0, 5, length.out = 3), c(A = 1.0, k = 0.1))
+  pred <- out[[1]]
+  expect_true(all(pred[, "y1"] == 1.0))
+  expect_equal(pred[, "time"], c(0, 2.5, 5))
+})

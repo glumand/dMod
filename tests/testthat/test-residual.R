@@ -3,9 +3,9 @@
 #
 # Sections:
 #   * res()         - data <-> prediction residual operator
-#   * nll()         - per-condition -2 log L kernel (consumes res() output)
 #   * datapointL2() - validation-point L2 constraint that reuses
 #                     env$prediction populated by an upstream normL2
+#   * C++ residual kernel (accumulate_aloq / accumulate_bloq) - FD-validated
 #
 # These tests build prediction matrices by hand to keep the math
 # transparent. End-to-end coverage is in test-normL2.R.
@@ -105,132 +105,6 @@ test_that("res errors if an observable in data is missing from the prediction", 
 })
 
 
-# ---- nll ----------------------------------------------------------------
-
-# nll consumes the output of res() and an external parameter vector. It
-# routes ALOQ rows to nll_ALOQ and BLOQ rows to nll_BLOQ depending on
-# opt.BLOQ.
-
-test_that("nll on a pure-ALOQ dataset matches sum(wr^2) + sum(log(2*pi*sigma^2))", {
-  prdf <- .make_prdframe(times = c(0, 1, 2, 3))
-  dat <- data.frame(time = c(1, 2, 3), name = "A",
-                    value = c(0.55, 0.30, 0.18),
-                    sigma = c(0.1, 0.1, 0.1),
-                    lloq  = -Inf,
-                    stringsAsFactors = FALSE)
-  nout <- res(dat, prdf)
-  pars <- c(A_par = 1.0, k_par = 0.5)
-
-  o <- nll(nout, pars = pars, deriv = TRUE)
-  pred <- prdf[match(dat$time, prdf[, "time"]), "A"]
-  expected <- truth_nll_aloq(pred, dat$value, dat$sigma)
-  expect_equal(unname(o$value), expected, tolerance = 1e-12)
-})
-
-
-test_that("nll bessel.correction inflates wr^2 by exactly factor^2", {
-  prdf <- .make_prdframe(times = c(0, 1, 2, 3))
-  dat <- data.frame(time = c(1, 2, 3), name = "A",
-                    value = c(0.55, 0.30, 0.18),
-                    sigma = 0.1, lloq = -Inf,
-                    stringsAsFactors = FALSE)
-  nout <- res(dat, prdf)
-  pars <- c(A_par = 1.0, k_par = 0.5)
-
-  o_no <- nll(nout, pars = pars, deriv = TRUE, bessel.correction = 1)
-  o_bs <- nll(nout, pars = pars, deriv = TRUE, bessel.correction = 1.2)
-
-  log_sigma_term <- sum(log(2 * pi * dat$sigma^2))
-  chi_no <- o_no$value - log_sigma_term
-  chi_bs <- o_bs$value - log_sigma_term
-  expect_equal(unname(chi_bs), unname(chi_no * 1.2^2), tolerance = 1e-12)
-})
-
-
-test_that("opt.BLOQ='M1' drops BLOQ rows entirely (value equals ALOQ-only nll)", {
-  prdf <- .make_prdframe(times = c(0, 1, 2, 3))
-  dat <- data.frame(time = c(1, 2, 3), name = "A",
-                    value = c(0.55, 0.30, 0.05),
-                    sigma = 0.1,
-                    lloq  = c(-Inf, -Inf, 0.10),
-                    stringsAsFactors = FALSE)
-  nout <- res(dat, prdf)
-  pars <- c(A_par = 1.0, k_par = 0.5)
-
-  o_m1 <- nll(nout, pars = pars, deriv = TRUE, opt.BLOQ = "M1")
-  nout_aloq <- res(dat[1:2, , drop = FALSE], prdf)
-  o_ref <- nll(nout_aloq, pars = pars, deriv = TRUE)
-
-  expect_equal(unname(o_m1$value), unname(o_ref$value), tolerance = 1e-12)
-})
-
-
-test_that("opt.BLOQ='M3' adds -2 * sum(log(Phi(-wr_bloq))) on top of ALOQ value", {
-  prdf <- .make_prdframe(times = c(0, 1, 2, 3))
-  dat <- data.frame(time = c(1, 2, 3), name = "A",
-                    value = c(0.55, 0.30, 0.05),
-                    sigma = 0.1,
-                    lloq  = c(-Inf, -Inf, 0.10),
-                    stringsAsFactors = FALSE)
-  nout <- res(dat, prdf)
-  pars <- c(A_par = 1.0, k_par = 0.5)
-
-  o_m1 <- nll(nout, pars = pars, deriv = TRUE, opt.BLOQ = "M1")
-  o_m3 <- nll(nout, pars = pars, deriv = TRUE, opt.BLOQ = "M3")
-
-  pred_bloq <- prdf[match(3, prdf[, "time"]), "A"]
-  sigma_bloq <- 0.1
-  lloq_val <- 0.10
-  m3_term <- truth_nll_bloq_m3(pred_bloq, lloq_val, sigma_bloq)
-  expect_equal(unname(o_m3$value - o_m1$value), m3_term, tolerance = 1e-12)
-})
-
-
-test_that("opt.BLOQ='M4NM' adds -2*sum(log(1 - Phi(wr)/Phi(w0))) on top of ALOQ value", {
-  prdf <- .make_prdframe(times = c(0, 1, 2, 3))
-  dat <- data.frame(time = c(1, 2, 3), name = "A",
-                    value = c(0.55, 0.30, 0.05),
-                    sigma = 0.1,
-                    lloq  = c(-Inf, -Inf, 0.10),
-                    stringsAsFactors = FALSE)
-  nout <- res(dat, prdf)
-  pars <- c(A_par = 1.0, k_par = 0.5)
-
-  o_m1   <- nll(nout, pars = pars, deriv = TRUE, opt.BLOQ = "M1")
-  o_m4nm <- nll(nout, pars = pars, deriv = TRUE, opt.BLOQ = "M4NM")
-
-  pred_bloq <- prdf[match(3, prdf[, "time"]), "A"]
-  m4_term <- truth_nll_bloq_m4(pred_bloq, 0.10, 0.1)
-  expect_equal(unname(o_m4nm$value - o_m1$value), m4_term, tolerance = 1e-12)
-})
-
-
-test_that("nll gradient on ALOQ equals 2 * sum_i wr_i * dpred_i/dtheta / sigma_i", {
-  prdf <- .make_prdframe(times = c(0, 1, 2, 3))
-  dat <- data.frame(time = c(1, 2, 3), name = "A",
-                    value = c(0.55, 0.30, 0.18),
-                    sigma = 0.1, lloq = -Inf,
-                    stringsAsFactors = FALSE)
-  nout <- res(dat, prdf)
-  pars <- c(A_par = 1.0, k_par = 0.5)
-
-  o <- nll(nout, pars = pars, deriv = TRUE)
-
-  # A(t) = A0 * exp(-k * t), value = sum(wr^2) + log_term:
-  #   dvalue/dA0 = 2 * sum_i wr_i * exp(-k * t_i) / sigma_i
-  #   dvalue/dk  = 2 * sum_i wr_i * (-t_i * A0 * exp(-k * t_i)) / sigma_i
-  t <- dat$time
-  pred <- prdf[match(t, prdf[, "time"]), "A"]
-  wr <- (pred - dat$value) / dat$sigma
-  J_A <- exp(-pars[["k_par"]] * t)
-  J_k <- -t * pars[["A_par"]] * exp(-pars[["k_par"]] * t)
-  g_ref <- c(A_par = 2 * sum(wr * J_A / dat$sigma),
-             k_par = 2 * sum(wr * J_k / dat$sigma))
-  expect_equal(unname(o$gradient[names(g_ref)]), unname(g_ref),
-               tolerance = 1e-12)
-})
-
-
 # ---- datapointL2 --------------------------------------------------------
 
 # datapointL2 penalises (prediction[name, t] - target_par) / sigma in L2.
@@ -316,4 +190,254 @@ test_that("datapointL2 contribution to the combined gradient follows the closed 
                unname(g_main[["k"]] + contrib[["k"]]), tolerance = 1e-3)
   expect_equal(unname(g_combined[["target"]]), unname(contrib[["target"]]),
                tolerance = 1e-3)
+})
+
+
+# ============================================================================
+# C++ residual kernel parity (src/residual_kernel.{h,cpp})
+# ============================================================================
+
+# Helper: build a randomized residual-kernel test problem with quadratic
+# pred/sigma dependence so d2pred is non-trivial and FD-Hessian tests make
+# sense. theta0 is the evaluation point. n_obs ALOQ rows + n_bloq BLOQ rows.
+make_setup <- function(n_obs, n_par, sigma_dep, n_bloq = 0, seed = 1L,
+                       sigma_curved = FALSE) {
+  set.seed(seed)
+  n_total <- n_obs + n_bloq
+  par_names <- paste0("p", seq_len(n_par))
+  theta0    <- runif(n_par, -0.5, 0.5)
+  names(theta0) <- par_names
+
+  # Linear-plus-quadratic pred and sigma in theta, evaluated at theta0.
+  pred0  <- runif(n_total, 1.0, 3.0)
+  dpred0 <- matrix(runif(n_total * n_par, -0.4, 0.4), n_total, n_par,
+                   dimnames = list(NULL, par_names))
+  Q <- array(0.0, dim = c(n_total, n_par, n_par),
+             dimnames = list(NULL, par_names, par_names))
+  for (i in seq_len(n_total)) {
+    M <- matrix(runif(n_par * n_par, -0.2, 0.2), n_par, n_par)
+    Q[i, , ] <- 0.5 * (M + t(M))  # symmetric mixed partials
+  }
+  sigma0 <- runif(n_total, 0.4, 1.0)
+  dsigma0 <- if (sigma_dep)
+    matrix(runif(n_total * n_par, -0.05, 0.05), n_total, n_par,
+           dimnames = list(NULL, par_names))
+  else
+    matrix(0.0, n_total, n_par, dimnames = list(NULL, par_names))
+  # Optional symmetric quadratic sigma term so d2sigma is non-zero. Kept
+  # small so sigma(theta) stays strictly positive in a neighbourhood of
+  # theta0 (Richardson FD perturbs theta by ~1e-2).
+  Q_sigma <- array(0.0, dim = c(n_total, n_par, n_par),
+                   dimnames = list(NULL, par_names, par_names))
+  if (sigma_curved && sigma_dep) {
+    for (i in seq_len(n_total)) {
+      M <- matrix(runif(n_par * n_par, -0.02, 0.02), n_par, n_par)
+      Q_sigma[i, , ] <- 0.5 * (M + t(M))
+    }
+  }
+
+  # y_data: ALOQ rows random with some signal; BLOQ rows < lloq.
+  lloq <- rep(-Inf, n_total)
+  y_data <- runif(n_total, 0.5, 2.5)
+  if (n_bloq > 0) {
+    bloq_rows <- seq_len(n_bloq) + n_obs
+    lloq[bloq_rows]  <- 2.5
+    y_data[bloq_rows] <- 2.5  # res(): val = pmax(value, lloq)
+  }
+
+  list(
+    n_obs       = n_total,
+    n_aloq      = n_obs,
+    n_bloq      = n_bloq,
+    n_par       = n_par,
+    par_names   = par_names,
+    theta0      = theta0,
+    pred0       = pred0,
+    dpred0      = dpred0,
+    sigma0      = sigma0,
+    dsigma0     = dsigma0,
+    Q           = Q,
+    Q_sigma     = Q_sigma,
+    y_data      = y_data,
+    lloq        = lloq
+  )
+}
+
+# Predicts pred(theta), sigma(theta) under the quadratic model used by
+# make_setup. Used for FD-Hessian checks. Both pred and sigma can have a
+# symmetric quadratic theta-dependence (Q, Q_sigma).
+eval_model <- function(setup, theta) {
+  dt <- theta - setup$theta0
+  pred  <- setup$pred0  + setup$dpred0  %*% dt
+  sigma <- setup$sigma0 + setup$dsigma0 %*% dt
+  # Quadratic contribution: 0.5 * dt^T Q[i] dt per row (pred and sigma).
+  for (i in seq_len(setup$n_obs)) {
+    pred[i, 1]  <- pred[i, 1]  + 0.5 * sum(dt * (setup$Q[i, , ]       %*% dt))
+    sigma[i, 1] <- sigma[i, 1] + 0.5 * sum(dt * (setup$Q_sigma[i, , ] %*% dt))
+  }
+  list(pred = as.numeric(pred), sigma = as.numeric(sigma))
+}
+
+default_opts <- function() {
+  list(
+    use_deriv2_exact     = FALSE,
+    bloq_mode            = "NONE",
+    sigma_depends_on_par = FALSE,
+    d2sigma_present      = FALSE,
+    bessel               = 1.0,
+    aloq_part1 = TRUE, aloq_part2 = TRUE, aloq_part3 = TRUE,
+    bloq_part1 = TRUE, bloq_part2 = TRUE, bloq_part3 = TRUE
+  )
+}
+
+# ---- BLOQ-deriv2-exact: FD validation (new functionality) ----
+# With BOTH d2pred and d2sigma propagated, the kernel produces the analytical
+# Hessian and matches FD to Richardson order for both the sigma-independent
+# and sigma-dependent (curved sigma) cases.
+test_that("BLOQ M3 + use_deriv2_exact Hessian matches finite-difference Hessian", {
+  skip_if_not_installed("numDeriv")
+  for (sigma_dep in c(FALSE, TRUE)) {
+    setup <- make_setup(n_obs = 0, n_par = 3, sigma_dep = sigma_dep,
+                        n_bloq = 8, seed = 7L,
+                        sigma_curved = sigma_dep)
+    obj_fn <- function(theta) {
+      m  <- eval_model(setup, theta)
+      wr <- (m$pred - setup$y_data) / m$sigma
+      sum(-2 * stats::pnorm(-wr, log.p = TRUE))
+    }
+    H_fd <- numDeriv::hessian(obj_fn, setup$theta0, method = "Richardson")
+
+    opts <- default_opts()
+    opts$use_deriv2_exact     <- TRUE
+    opts$bloq_mode            <- "M3"
+    opts$sigma_depends_on_par <- sigma_dep
+    cpp <- dMod:::residual_kernel_bloq(
+      pred = setup$pred0, dpred = setup$dpred0, d2pred = setup$Q,
+      y_data = setup$y_data, sigma = setup$sigma0,
+      dsigma  = if (sigma_dep) setup$dsigma0 else NULL,
+      d2sigma = if (sigma_dep) setup$Q_sigma else NULL,
+      lloq = setup$lloq, opts = opts
+    )
+    label <- sprintf("M3 deriv2 FD-Hess sigma_dep=%s", sigma_dep)
+    expect_lt(max(abs(cpp$hessian - H_fd)), 1e-4, label = label)
+    expect_lt(max(abs(cpp$hessian - t(cpp$hessian))), 1e-12,
+              label = paste0(label, " symmetry"))
+  }
+})
+
+
+test_that("BLOQ M4NM + use_deriv2_exact: kernel adds d2pred contribution", {
+  skip_if_not_installed("numDeriv")
+  # NOTE: the M4-mode Hessian is not a clean "Newton-minus-d2-wr"
+  # Gauss-Newton form (the GN parts use specific A1..A6 coefficients whose
+  # sum does not equal the f''-outer-product of the true Newton Hessian).
+  # So even with use_deriv2_exact = TRUE we cannot expect the C++ kernel to
+  # match the FD Hessian exactly under M4 modes; what we DO get back from the
+  # d2 path is the f' * d^2 pred contribution that the GN form drops. We
+  # verify that contribution is non-trivial and that the
+  # Hessian remains symmetric.
+  setup <- make_setup(n_obs = 0, n_par = 3, sigma_dep = FALSE,
+                      n_bloq = 8, seed = 9L)
+  opts <- default_opts()
+  opts$bloq_mode <- "M4NM"
+
+  opts$use_deriv2_exact <- FALSE
+  cpp_gn <- dMod:::residual_kernel_bloq(
+    pred = setup$pred0, dpred = setup$dpred0, d2pred = NULL,
+    y_data = setup$y_data, sigma = setup$sigma0,
+    dsigma = NULL, d2sigma = NULL, lloq = setup$lloq, opts = opts
+  )
+  opts$use_deriv2_exact <- TRUE
+  cpp_ex <- dMod:::residual_kernel_bloq(
+    pred = setup$pred0, dpred = setup$dpred0, d2pred = setup$Q,
+    y_data = setup$y_data, sigma = setup$sigma0,
+    dsigma = NULL, d2sigma = NULL, lloq = setup$lloq, opts = opts
+  )
+  # The d2 path must change the Hessian (else the code path is dead).
+  expect_gt(max(abs(cpp_ex$hessian - cpp_gn$hessian)), 1e-6,
+            label = "M4NM deriv2 changes Hessian")
+  # Symmetry preserved.
+  expect_lt(max(abs(cpp_ex$hessian - t(cpp_ex$hessian))), 1e-12,
+            label = "M4NM deriv2 symmetry")
+})
+
+
+# ---- ALOQ d2sigma-exact: FD validation ----
+# Verify against the true Hessian of the ALOQ objective when both pred and
+# sigma are quadratic in theta.
+test_that("ALOQ d2sigma + d2pred Hessian matches finite-difference Hessian", {
+  skip_if_not_installed("numDeriv")
+  setup <- make_setup(n_obs = 10, n_par = 3, sigma_dep = TRUE,
+                      n_bloq = 0, seed = 13L, sigma_curved = TRUE)
+  obj_fn <- function(theta) {
+    m  <- eval_model(setup, theta)
+    wr <- (m$pred - setup$y_data) / m$sigma
+    sum(wr^2 + log(2 * pi * m$sigma^2))
+  }
+  H_fd <- numDeriv::hessian(obj_fn, setup$theta0, method = "Richardson")
+
+  opts <- default_opts()
+  opts$use_deriv2_exact     <- TRUE
+  opts$bloq_mode            <- "M3"
+  opts$sigma_depends_on_par <- TRUE
+  opts$d2sigma_present      <- TRUE
+  cpp <- dMod:::residual_kernel_aloq(
+    pred = setup$pred0, dpred = setup$dpred0, d2pred = setup$Q,
+    y_data = setup$y_data, sigma = setup$sigma0,
+    dsigma = setup$dsigma0, d2sigma = setup$Q_sigma,
+    lloq = NULL, opts = opts
+  )
+  expect_lt(max(abs(cpp$hessian - H_fd)), 1e-4, label = "ALOQ d2 FD-Hess")
+  expect_lt(max(abs(cpp$hessian - t(cpp$hessian))), 1e-12,
+            label = "ALOQ d2 symmetry")
+})
+
+
+# ---- BLOQ M4NM d2sigma smoke ----
+# Confirms the d2sigma code path is wired up for M4 modes and produces a
+# different Hessian than the d2sigma-free run.
+test_that("BLOQ M4NM d2sigma path changes the Hessian", {
+  setup <- make_setup(n_obs = 0, n_par = 3, sigma_dep = TRUE,
+                      n_bloq = 8, seed = 17L, sigma_curved = TRUE)
+  opts <- default_opts()
+  opts$bloq_mode            <- "M4NM"
+  opts$use_deriv2_exact     <- TRUE
+  opts$sigma_depends_on_par <- TRUE
+  cpp_nosig <- dMod:::residual_kernel_bloq(
+    pred = setup$pred0, dpred = setup$dpred0, d2pred = setup$Q,
+    y_data = setup$y_data, sigma = setup$sigma0,
+    dsigma = setup$dsigma0, d2sigma = NULL,
+    lloq = setup$lloq, opts = opts
+  )
+  cpp_sig <- dMod:::residual_kernel_bloq(
+    pred = setup$pred0, dpred = setup$dpred0, d2pred = setup$Q,
+    y_data = setup$y_data, sigma = setup$sigma0,
+    dsigma = setup$dsigma0, d2sigma = setup$Q_sigma,
+    lloq = setup$lloq, opts = opts
+  )
+  expect_gt(max(abs(cpp_sig$hessian - cpp_nosig$hessian)), 1e-6,
+            label = "M4NM d2sigma changes Hessian")
+  expect_lt(max(abs(cpp_sig$hessian - t(cpp_sig$hessian))), 1e-12,
+            label = "M4NM d2sigma symmetry")
+})
+
+
+# ---- Edge case: zero rows ----
+test_that("kernels are no-ops on zero-row inputs", {
+  opts <- default_opts()
+  opts$bloq_mode <- "M3"
+  cpp_aloq <- dMod:::residual_kernel_aloq(
+    pred = numeric(0), dpred = matrix(0, 0, 3),
+    d2pred = NULL, y_data = numeric(0), sigma = numeric(0),
+    dsigma = NULL, d2sigma = NULL, lloq = NULL, opts = default_opts()
+  )
+  cpp_bloq <- dMod:::residual_kernel_bloq(
+    pred = numeric(0), dpred = matrix(0, 0, 3),
+    d2pred = NULL, y_data = numeric(0), sigma = numeric(0),
+    dsigma = NULL, d2sigma = NULL, lloq = NULL, opts = opts
+  )
+  expect_equal(cpp_aloq$value, 0)
+  expect_equal(sum(abs(cpp_aloq$gradient)), 0)
+  expect_equal(sum(abs(cpp_aloq$hessian)), 0)
+  expect_equal(cpp_bloq$value, 0)
 })

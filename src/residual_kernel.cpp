@@ -95,7 +95,7 @@ void accumulate_aloq_residual(
     double* hess_acc) {
 
   if (n_obs == 0) return;
-  if (n_par <= 0) throw std::runtime_error("accumulate_aloq: n_par must be > 0");
+  if (n_par < 0) throw std::runtime_error("accumulate_aloq: n_par must be >= 0");
 
   const bool   has_dsig    = (dsigma != nullptr) && opts.sigma_depends_on_par;
   const bool   has_d2sig   = opts.use_deriv2_exact && has_dsig
@@ -273,7 +273,7 @@ void accumulate_bloq_residual(
   if (opts.bloq_mode == BloqMode::NONE || opts.bloq_mode == BloqMode::M1) {
     return;
   }
-  if (n_par <= 0) throw std::runtime_error("accumulate_bloq: n_par must be > 0");
+  if (n_par < 0) throw std::runtime_error("accumulate_bloq: n_par must be >= 0");
   if (lloq == nullptr) {
     throw std::runtime_error(
         "accumulate_bloq: lloq must be non-null for BLOQ rows");

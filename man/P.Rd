@@ -19,53 +19,32 @@ P(
 )
 }
 \arguments{
-\item{trafo}{object of class \link{eqnvec}, named character, \link{eqnlist}, or list thereof.}
+\item{trafo}{An \link{eqnvec}, named character, \link{eqnlist}, or list thereof.}
 
-\item{parameters}{character vector}
+\item{parameters}{Outer-parameter names.}
 
-\item{condition}{character, the condition for which the transformation is generated}
+\item{condition}{Condition label.}
 
-\item{compile}{logical, compile the function (see \link[CppODE:funCpp]{CppODE::funCpp})}
+\item{compile, modelname, verbose}{Forwarded to \link[CppODE:funCpp]{CppODE::funCpp}.}
 
-\item{modelname}{character, see \link[CppODE:funCpp]{CppODE::funCpp}}
+\item{method}{One of \code{"explicit"}, \code{"implicit"}, \code{"equilibrate"}, or \code{NULL}.}
 
-\item{method}{character, one of \code{"explicit"}, \code{"implicit"}, or \code{"equilibrate"}.
-If \code{NULL} (default), auto-selects \code{"equilibrate"} for \link{eqnlist} entries
-and \code{"explicit"} for all others.}
+\item{cores}{Per-condition \code{mclapply()} cores. \code{NULL} auto-detects via
+\link{detectFreeCores}; capped at 1 on Windows.}
 
-\item{cores}{Number of cores for the per-condition \code{mclapply()}.
-\code{NULL} (default) auto-detects via \link{detectFreeCores}; forced to 1 on
-Windows.}
+\item{deriv, deriv2}{Attach first/second-order sensitivities. \code{deriv2}
+requires \code{deriv = TRUE}.}
 
-\item{verbose}{Print out information during compilation}
-
-\item{deriv}{Logical, attach first-order parameter sensitivities to the
-result. Default \code{TRUE}.}
-
-\item{deriv2}{Logical, additionally attach the second-order sensitivity
-\code{attr(., "deriv2")} of shape \verb{[innerPar, outerPar, outerPar]}. Requires
-\code{deriv = TRUE}. Default \code{FALSE}.}
-
-\item{...}{Additional arguments passed to the underlying transformation function
-(\link{Pexpl}, \link{Pimpl}, or \link{Pequil}).}
+\item{...}{Forwarded to the chosen backend.}
 }
 \value{
-An object of class \link{parfn}, representing the parameter transformation.
+A \link{parfn}.
 }
 \description{
-This function provides a unified interface for generating condition-specific
-parameter transformations, as commonly required in ODE-based modeling workflows.
-
-\code{P()} can operate in three modes:
-\itemize{
-\item \strong{Explicit mode} (\code{method = "explicit"}, see \link{Pexpl}):
-Inner parameters are directly computed from symbolic expressions.
-\item \strong{Implicit mode} (\code{method = "implicit"}, see \link{Pimpl}):
-Steady states found via nonlinear root finding.
-\item \strong{Equilibrate mode} (\code{method = "equilibrate"}, see \link{Pequil}):
-Steady states found via ODE integration to equilibrium.
-This is used automatically for \link{eqnlist} entries when no method is specified.
-}
+Unified entry to the three backends: explicit (\link{Pexpl}, algebraic),
+implicit (\link{Pimpl}, root-finding) and equilibrate (\link{Pequil}, ODE
+pre-integration). \code{method = NULL} picks \code{"equilibrate"} for
+\link{eqnlist} entries, \code{"explicit"} otherwise.
 }
 \seealso{
 \link{Pexpl}, \link{Pimpl}, \link{Pequil}, \link{parfn}

@@ -44,15 +44,14 @@ setting stepControl, algoControl and optControl by hand.}
 \code{list(gamma = 1, W = "hessian", reoptimize = FALSE, correction = 1, reg = .Machine$double.eps)}}
 
 \item{optControl}{List of arguments controlling the \code{trust()} optimizer. Defaults to
-\code{list(rinit = .1, rmax = 10, iterlim = 10, fterm = sqrt(.Machine$double.eps), mterm = sqrt(.Machine$double.eps))}.
+\code{list(rinit = .1, rmax = 10, iterlim = 10, fterm = 1e-6, mterm = 1e-6)}.
 See \link{trust} for more details.}
 
 \item{verbose}{Logical, print verbose messages.}
 
 \item{cores}{number of cores used when computing profiles for several
-parameters. Multiplies with the inner OpenMP threads of the C++ objective
-kernels (\code{getOption("dMod.objfn.threads")}); keep
-\code{cores * dMod.objfn.threads} below your core count.}
+parameters. Multiplies with the OpenMP threads each objective function uses
+(its \code{cores} argument); keep the product below your core count.}
 
 \item{cautiousMode}{Logical, write every step to disk and don't delete intermediate results}
 

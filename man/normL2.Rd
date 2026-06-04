@@ -12,7 +12,6 @@ normL2(
   attr.name = "data",
   use.bessel = !is.null(errmodel),
   cores = 1L,
-  threads = 1L,
   opt.BLOQ = c("M3", "M1", "M4NM", "M4BEAL")
 )
 }
@@ -35,19 +34,14 @@ as an attribute with this name.}
 global Bessel correction to variance estimates to account for finite-sample
 bias. Defaults to TRUE if an error model is supplied, FALSE otherwise.}
 
-\item{cores}{Integer. Number of CPU cores used for parallel evaluation over
-conditions. Must be >= 1. Parallelization is configured once when the
-objective function is created.}
-
-\item{threads}{Integer. Per-call OpenMP threads passed to the C++ residual
-kernel (used when the \code{dMod.objfn.cpp} path is active). Capped by
-\code{getOption("dMod.objfn.threads")}. Default 1.}
+\item{cores}{Integer. Number of OpenMP threads the C++ residual kernel uses
+to evaluate conditions in parallel. Must be >= 1. Captured once when the
+objective function is created. Default 1.}
 
 \item{opt.BLOQ}{Character. NONMEM-style treatment of below-LOQ rows
 (those with \code{value <= lloq} in the data). One of \code{"M1"} (drop BLOQ rows
 from the objective), \code{"M3"} (censored log-likelihood, default), \code{"M4NM"}
-or \code{"M4BEAL"} (truncated variants; require non-negative LOQ). Forwarded
-to \code{\link[=nll]{nll()}} for the R path and to the C++ kernel.}
+or \code{"M4BEAL"} (truncated variants; require non-negative LOQ).}
 }
 \value{
 An object of class \code{objfn}, i.e. a function

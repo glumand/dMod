@@ -14,13 +14,12 @@
 #' @param algoControl List of arguments controlling the fast PL algorithm. defaults to
 #' \code{list(gamma = 1, W = "hessian", reoptimize = FALSE, correction = 1, reg = .Machine$double.eps)}
 #' @param optControl List of arguments controlling the \code{trust()} optimizer. Defaults to
-#' \code{list(rinit = .1, rmax = 10, iterlim = 10, fterm = sqrt(.Machine$double.eps), mterm = sqrt(.Machine$double.eps))}.
+#' \code{list(rinit = .1, rmax = 10, iterlim = 10, fterm = 1e-6, mterm = 1e-6)}.
 #' See \link{trust} for more details.
 #' @param verbose Logical, print verbose messages.
 #' @param cores number of cores used when computing profiles for several
-#' parameters. Multiplies with the inner OpenMP threads of the C++ objective
-#' kernels (`getOption("dMod.objfn.threads")`); keep
-#' `cores * dMod.objfn.threads` below your core count.
+#' parameters. Multiplies with the OpenMP threads each objective function uses
+#' (its `cores` argument); keep the product below your core count.
 #' @param cautiousMode Logical, write every step to disk and don't delete intermediate results
 #' @param side either, "left", "right" or "both": determines the side of the profile which is calculated (usefeull for parallelization). default is "both"
 #' @param ... Arguments going to obj()
@@ -744,10 +743,9 @@ vcov <- function(fit, parupper = NULL, parlower = NULL) {
 #' @param rinit Starting trust-region radius, see [trust()].
 #' @param rmax Maximum trust-region radius, see [trust()].
 #' @param fits Number of fits.
-#' @param cores Number of parallel workers. Multiplies with the inner OpenMP
-#'   threads of the C++ objective kernels
-#'   (`getOption("dMod.objfn.threads")`); keep
-#'   `cores * dMod.objfn.threads` below your core count.
+#' @param cores Number of parallel workers. Multiplies with the OpenMP threads
+#'   each objective function uses (its `cores` argument); keep the product
+#'   below your core count.
 #' @param optmethod Character. Name of the optimiser function to call via
 #'   `do.call(optmethod, ...)`. Default `"trust"`.
 #' @param start1stfromCenter Logical. If `TRUE`, the first fit starts exactly
@@ -762,6 +760,13 @@ vcov <- function(fit, parupper = NULL, parlower = NULL) {
 #' @param output Logical. Write per-fit output to disk.
 #' @param cautiousMode Logical. Persist every fit deparsed (avoids RDA-version
 #'   pitfalls) and keep intermediate files.
+#' @param retry Logical. If `TRUE` (default), a fit that fails (with a
+#'   `try-error` or with a `fit$error` element) is re-attempted with a
+#'   freshly sampled `parinit` up to `nTries` times before being recorded
+#'   as failed. Ignored when `center` is a parframe (rows are taken as
+#'   given and cannot be resampled).
+#' @param nTries Maximum number of attempts per fit slot, including the
+#'   first. Default `10L`.
 #'   
 #' @details Runs `fits` independent [trust()] optimisations from random
 #'   starts (sampled by `samplefun`, default [rnorm()]) added to `center`,
@@ -783,6 +788,7 @@ vcov <- function(fit, parupper = NULL, parlower = NULL) {
 #' @import parallel
 mstrust <- function(objfun, center, studyname, rinit = .1, rmax = 10, fits = 20, cores = 1, optmethod = "trust",
                     samplefun = "rnorm", resultPath = ".", stats = FALSE, output = FALSE, cautiousMode = FALSE, start1stfromCenter = FALSE,
+                    retry = TRUE, nTries = 10L,
                     ...) {
   
   narrowing <- NULL
@@ -798,10 +804,10 @@ mstrust <- function(objfun, center, studyname, rinit = .1, rmax = 10, fits = 20,
   
   argslist <- list(
     objfun = objfun, center = center, studyname = studyname,
-    rinit = rinit, rmax = rmax, fits = fits, 
-    cores = cores, optmethod = optmethod, samplefun = samplefun, 
-    resultPath = resultPath, stats = stats, output = output, 
-    cautiousMode = cautiousMode)
+    rinit = rinit, rmax = rmax, fits = fits,
+    cores = cores, optmethod = optmethod, samplefun = samplefun,
+    resultPath = resultPath, stats = stats, output = output,
+    cautiousMode = cautiousMode, retry = retry, nTries = nTries)
   argslist <- c(argslist, varargslist)
   
   # Add extra arguments
@@ -812,7 +818,8 @@ mstrust <- function(objfun, center, studyname, rinit = .1, rmax = 10, fits = 20,
   # Second, check what trust() and samplefun() accept and check for name clashes.
   # Third, whatever is unused is passed to the objective function objfun().
   nameslocal <- c("studyname", "center", "fits", "cores", "optmethod", "samplefun",
-                  "resultPath", "stats", "narrowing", "output")
+                  "resultPath", "stats", "narrowing", "output",
+                  "retry", "nTries")
   namestrust <- intersect(names(formals(trust)), names(argslist))
   namessample <- intersect(names(formals(samplefun)), names(argslist))
   if (length(intersect(namestrust, namessample) != 0)) {
@@ -937,21 +944,30 @@ mstrust <- function(objfun, center, studyname, rinit = .1, rmax = 10, fits = 20,
         argstrust$parinit <- center
       } else {
         # All other fits start from random positions
-        argstrust$parinit <- center + do.call(samplefun, argssample)  
+        argstrust$parinit <- center + do.call(samplefun, argssample)
       }
     }
-    
-    # Invalidate warm-start caches (e.g. in Pimpl) so each fit uses its own 
-    # initial values instead of inheriting solutions from previous fits
-    options(.dMod.fit_token = paste0("fit_", i, "_", as.numeric(Sys.time())))
-    
+
     # Check if traceFile is requested. In that case combine tracefile, with logfolder and fit number
     if (!is.null(argstrust[["traceFile"]])) {
       digits <- floor(log10(fits))
       argstrust[["traceFile"]] <- file.path(resultFolder, paste0(formatC(i, digits = digits, flag = "0"), "_", argslist[["traceFile"]]))
     }
-    
-    fit <- do.call(optmethod, c(argstrust, argsobj))
+
+    # Retry loop: a try-error or fit$error triggers re-sampling parinit and
+    # re-running optmethod, up to nTries times. parframe-supplied centers
+    # are skipped (rows are taken as given). Warm-start caches in
+    # Pequil/Pimpl are flushed between attempts via resetWarmStarts() so
+    # the retry does not inherit the dead basin.
+    max_tries <- if (isTRUE(retry) && !is.parframe(center)) as.integer(nTries) else 1L
+    fit <- NULL
+    for (try_i in seq_len(max_tries)) {
+      fit <- try(do.call(optmethod, c(argstrust, argsobj)), silent = !output)
+      ok  <- !inherits(fit, "try-error") && is.list(fit) && !any(names(fit) == "error")
+      if (ok || try_i == max_tries) break
+      argstrust$parinit <- center + do.call(samplefun, argssample)
+      try(resetWarmStarts(objfun, verbose = FALSE), silent = TRUE)
+    }
     
     # Keep only numeric attributes of object returned by trust()
     attr.fit <- attributes(fit)

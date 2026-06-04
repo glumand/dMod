@@ -310,3 +310,18 @@ test_that("MVN summable with normL2-style objfn via +.objfn", {
   vsep  <- obj_theta(pars)$value + obj_mvn(pars)$value
   expect_equal(vsum, vsep, tolerance = 1e-10)
 })
+
+
+# ============================================================================
+# Cross-backend parity (C++ kernel vs R reference)
+# ============================================================================
+
+test_that("constraintL2 cpp kernel agrees with R reference on a small diagonal case", {
+  obj <- constraintL2(mu = c(a = 0.0, b = 1.0, c = -0.5), sigma = c(0.5, 1, 2))
+  pars <- c(a = 0.3, b = 1.4, c = -0.6)
+  with_cpp_backend(FALSE, { o_R <- obj(pars) })
+  with_cpp_backend(TRUE,  { o_C <- obj(pars) })
+  expect_equal(o_C$value,    o_R$value,    tolerance = 1e-12)
+  expect_equal(o_C$gradient, o_R$gradient, tolerance = 1e-12)
+  expect_equal(o_C$hessian,  o_R$hessian,  tolerance = 1e-12)
+})
