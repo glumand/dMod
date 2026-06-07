@@ -350,8 +350,10 @@ test_that("normL2 rejects unknown opt.BLOQ values", {
   bench <- fx_decay_compiled()
   data  <- fx_decay_data_bloq(sigma = 0.05, lloq = 0.1,
                               times = seq(0, 10, by = 1))
+  # match.arg() rejects the unknown value; assert on the listed choices rather
+  # than the "should be one of" prefix, which match.arg translates per locale.
   expect_error(normL2(data, bench$prd_id, opt.BLOQ = "M2"),
-               "should be one of")
+               "M4BEAL")
 })
 
 

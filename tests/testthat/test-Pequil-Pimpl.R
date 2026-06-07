@@ -454,7 +454,9 @@ test_that("resetWarmStarts clears Pequil's cache by name", {
   pars <- c(k_in = 1.5, k_out = 0.3, A = 0.1)
   pf(pars)
 
-  reset_env <- environment(attr(pf, "resetWarmStart"))$cache_ref
+  # Warm-start caches are now kept per condition in a registry; a condition-less
+  # call lands in the "__default__" slot.
+  reset_env <- environment(attr(pf, "resetWarmStart"))$reg_ref$caches[["__default__"]]
   expect_false(is.null(reset_env$yini))
 
   labels <- resetWarmStarts(pf, verbose = FALSE)
@@ -475,7 +477,7 @@ test_that("resetWarmStarts clears Pimpl's cache by name", {
               compile = TRUE, verbose = FALSE)
   pf(c(a = 1, x = 0.5))
 
-  reset_env <- environment(attr(pf, "resetWarmStart"))$cache_ref
+  reset_env <- environment(attr(pf, "resetWarmStart"))$reg_ref$caches[["__default__"]]
   expect_false(is.null(reset_env$guess))
 
   labels <- resetWarmStarts(pf, verbose = FALSE)
@@ -501,8 +503,8 @@ test_that("resetWarmStarts walks into composed functions", {
   p1(c(k1 = 1, kdg1 = 0.5, A = 0.1))
   p2(c(k2 = 2, kdg2 = 0.4, B = 0.2))
 
-  ref1 <- environment(attr(p1, "resetWarmStart"))$cache_ref
-  ref2 <- environment(attr(p2, "resetWarmStart"))$cache_ref
+  ref1 <- environment(attr(p1, "resetWarmStart"))$reg_ref$caches[["__default__"]]
+  ref2 <- environment(attr(p2, "resetWarmStart"))$reg_ref$caches[["__default__"]]
   expect_false(is.null(ref1$yini))
   expect_false(is.null(ref2$yini))
 
@@ -512,6 +514,40 @@ test_that("resetWarmStarts walks into composed functions", {
   expect_length(labels, 2L)
   expect_null(ref1$yini)
   expect_null(ref2$yini)
+})
+
+
+test_that("a condition-less Pequil keeps an independent warm start per condition", {
+  skip_if_no_compile()
+  oldwd <- setwd(.dmod_fx_workdir()); on.exit(setwd(oldwd), add = TRUE)
+
+  stamp <- as.integer(Sys.time())
+
+  # Condition-less equilibration: SS A* = k_in / k_out.
+  g_eq <- Pequil(c(A = "k_in - k_out * A"),
+                 parameters = c("k_in", "k_out"),
+                 modelname = paste0("test_percond_eq_", stamp),
+                 compile = TRUE, verbose = FALSE, attach.input = TRUE)
+
+  # Two conditions with different k_in -> different steady states (3 and 6).
+  trafos <- list(
+    C1 = c(k_in = "s",     k_out = "1", A = "1"),
+    C2 = c(k_in = "2 * s", k_out = "1", A = "1"))
+  px <- P(trafos, modelname = paste0("test_percond_px_", stamp),
+          compile = TRUE, verbose = FALSE)
+
+  pf  <- g_eq * px
+  out <- pf(c(s = 3), deriv = FALSE)
+
+  expect_equal(as.numeric(out$C1["A"]), 3, tolerance = 1e-4)
+  expect_equal(as.numeric(out$C2["A"]), 6, tolerance = 1e-4)
+
+  # The single Pequil closure must now hold one warm-start slot per condition,
+  # each cached at its own root -- not a single shared/overwritten cache.
+  caches <- environment(attr(g_eq, "resetWarmStart"))$reg_ref$caches
+  expect_setequal(ls(caches), c("C1", "C2"))
+  expect_equal(as.numeric(caches[["C1"]]$yini["A"]), 3, tolerance = 1e-4)
+  expect_equal(as.numeric(caches[["C2"]]$yini["A"]), 6, tolerance = 1e-4)
 })
 
 

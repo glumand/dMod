@@ -296,6 +296,11 @@ parfn <- function(p2p, parameters = NULL, condition = NULL) {
   mappings[[1]] <- p2p
   names(mappings) <- condition
 
+  # p2p of warm-starting transformations (Pequil / Pimpl) accepts a `condition`
+  # argument so it can keep one warm-start cache per condition. Forward it only
+  # when present; Pexpl and other p2p's keep their original signature untouched.
+  p2p_has_cond <- "condition" %in% names(formals(p2p))
+
   outfn <- function(..., fixed = NULL, deriv = TRUE, deriv2 = FALSE, conditions = condition, env = NULL) {
 
 
@@ -310,8 +315,18 @@ parfn <- function(p2p, parameters = NULL, condition = NULL) {
 
     if (is.null(overlap)) conditions <- union(condition, conditions)
 
+    # Per-condition warm-start key: prefer this parfn's own condition, else the
+    # single condition it is currently being evaluated under (set by prodfn when
+    # a condition-less parfn is composed with a condition-specifying one).
+    cond_key <- if (!is.null(condition)) condition[[1]]
+                else if (length(conditions) == 1L) conditions
+                else NULL
+
     if (is.null(overlap) | length(overlap) > 0)
-      result <- p2p(pars = pars, fixed = fixed, deriv = deriv, deriv2 = deriv2)
+      result <- if (p2p_has_cond)
+        p2p(pars = pars, fixed = fixed, deriv = deriv, deriv2 = deriv2, condition = cond_key)
+      else
+        p2p(pars = pars, fixed = fixed, deriv = deriv, deriv2 = deriv2)
     else
       result <- NULL
     

@@ -63,6 +63,37 @@ P <- function(trafo = NULL, parameters = NULL, condition = NULL,
 }
 
 
+## Per-condition warm-start registry shared by Pimpl / Pequil / .Pequil_totals.
+## Each of those builds ONE p2p closure even when condition-less, and the common
+## usage pattern is a condition-less `Pequil` (or `Pimpl`) composed via `*` with a
+## condition-specifying `Pexpl`. The prodfn loop then calls that single p2p once
+## per condition. With a single cache env this means every condition warm-starts
+## from whichever condition was solved last (order-dependent, can cross basins of
+## attraction). The registry keeps one cache env PER condition key instead, so a
+## condition is always warm-started from its OWN previous root. `parfn()` forwards
+## the active condition to p2p (see the `condition` argument there); a NULL/empty
+## key (parfn called outside any condition context) falls back to a shared slot.
+.warmstart_registry <- function() {
+  caches <- new.env(parent = emptyenv())
+  get_cache <- function(key) {
+    k <- if (is.null(key) || !nzchar(key)) "__default__" else key
+    cc <- get0(k, envir = caches, inherits = FALSE)
+    if (is.null(cc)) { cc <- new.env(parent = emptyenv()); assign(k, cc, envir = caches) }
+    cc
+  }
+  reset <- function() {
+    nms <- ls(caches, all.names = TRUE)
+    for (k in nms) {
+      cc <- get(k, envir = caches, inherits = FALSE)
+      inner <- ls(cc, all.names = TRUE)
+      if (length(inner)) rm(list = inner, envir = cc)
+    }
+    invisible(nms)
+  }
+  list(get = get_cache, reset = reset, caches = caches)
+}
+
+
 #' Parameter transformation (explicit, algebraic)
 #'
 #' Builds `p_inner = f(p_outer)` from symbolic expressions via
@@ -338,7 +369,7 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
 #'     vanishes at SS; if a feeder's rate involves exactly one state, that
 #'     state must be zero.
 #'   \item *Sink cluster (LP)*: subsets whose combined mass leaks
-#'     monotonically (mass-balance LP via `lpSolve::lp`, only when installed).
+#'     monotonically (mass-balance LP via `lpSolve::lp`).
 #' }
 #' For each zero-state the column is dropped, the state symbol is substituted
 #' by `"0"` in remaining rates, structurally-zero reactions are removed, and
@@ -403,7 +434,6 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
   }
 
   .sink_cluster <- function(M, eps = 1e-8, Mbig = 1e4) {
-    if (!requireNamespace("lpSolve", quietly = TRUE)) return(integer(0))
     nF <- nrow(M); nS <- ncol(M)
     if (nF == 0L || nS == 0L) return(integer(0))
     c_obj <- colSums(M)
@@ -805,8 +835,7 @@ Pimpl <- function(trafo, parameters = NULL, forcings = NULL, condition = NULL,
     array(c(H4), dim(H4)[2:4], dimnames = dimnames(H4)[2:4])
   }
 
-  cache <- new.env(parent = emptyenv())
-  cache$guess <- NULL
+  reg <- .warmstart_registry()
 
   ## Biological SS magnitudes span ~10 orders when rate constants span 2-3:
   ## default log-uniform sampling over [1e-5, 1e5] when positive = TRUE.
@@ -962,12 +991,13 @@ Pimpl <- function(trafo, parameters = NULL, forcings = NULL, condition = NULL,
   }
 
 
-  p2p <- function(pars, fixed = NULL, deriv = TRUE, deriv2 = FALSE) {
+  p2p <- function(pars, fixed = NULL, deriv = TRUE, deriv2 = FALSE, condition = NULL) {
     if (deriv2 && !emit_d2)
       stop("Pimpl was built with deriv2 = FALSE; rebuild with deriv2 = TRUE.", call. = FALSE)
     if (!emit_d1) deriv <- FALSE
     if (deriv2 && !deriv) deriv <- TRUE
 
+    cache <- reg$get(condition)
     p   <- pars
     dP  <- attr(p, "deriv")
     dP2 <- if (deriv2) attr(p, "deriv2") else NULL
@@ -1086,9 +1116,9 @@ Pimpl <- function(trafo, parameters = NULL, forcings = NULL, condition = NULL,
   attr(p2p, "modelname")   <- modelname
   attr(p2p, "compileInfo") <- collectCompileInfo(PEval$func, PEval$jac, PEval$hess)
   attr(p2p, "resetWarmStart") <- local({
-    cache_ref <- cache; mn <- modelname; cond <- condition
+    reg_ref <- reg; mn <- modelname; cond <- condition
     function() {
-      cache_ref$guess <- NULL
+      reg_ref$reset()
       paste0("Pimpl(", mn, if (!is.null(cond)) paste0(":", cond) else "", ")")
     }
   })
@@ -1198,8 +1228,7 @@ Pimpl <- function(trafo, parameters = NULL, forcings = NULL, condition = NULL,
   controls <- c(list(keep.root = keep.root, attach.input = attach.input,
                      start.time = start.time, end.time = end.time), ode_ctrl)
 
-  cache <- new.env(parent = emptyenv())
-  cache$yini <- cache$last_hash <- cache$last_result <- NULL
+  reg <- .warmstart_registry()
 
   default_sens <- matrix(0, n_dep, length(all_sens), dimnames = list(dependent, all_sens))
   if (length(pivots)) default_sens[cbind(pivots, pivots)] <- 1
@@ -1207,12 +1236,13 @@ Pimpl <- function(trafo, parameters = NULL, forcings = NULL, condition = NULL,
     array(0, c(n_dep, length(all_sens), length(all_sens)),
           dimnames = list(dependent, all_sens, all_sens)) else NULL
 
-  p2p <- function(pars, fixed = NULL, deriv = TRUE, deriv2 = FALSE) {
+  p2p <- function(pars, fixed = NULL, deriv = TRUE, deriv2 = FALSE, condition = NULL) {
     if (deriv2 && !emit_d2)
       stop("Pequil(deriv2 = TRUE) requires the model to be built with deriv2 = TRUE.",
            call. = FALSE)
     if (!emit_d1) deriv <- FALSE
     if (deriv2 && !deriv) deriv <- TRUE
+    cache <- reg$get(condition)
     p   <- pars
     dP  <- attr(p, "deriv")
     dP2 <- if (deriv2) attr(p, "deriv2") else NULL
@@ -1352,9 +1382,9 @@ Pimpl <- function(trafo, parameters = NULL, forcings = NULL, condition = NULL,
   attr(p2p, "modelname")   <- modelname
   attr(p2p, "compileInfo") <- collectCompileInfo(model, model_s, model_s2)
   attr(p2p, "resetWarmStart") <- local({
-    cache_ref <- cache; mn <- modelname; cond <- condition
+    reg_ref <- reg; mn <- modelname; cond <- condition
     function() {
-      cache_ref$yini <- cache_ref$last_hash <- cache_ref$last_result <- NULL
+      reg_ref$reset()
       paste0("Pequil(", mn, if (!is.null(cond)) paste0(":", cond) else "", ")")
     }
   })
@@ -1465,9 +1495,7 @@ Pequil <- function(trafo, parameters = NULL, forcings = NULL, condition = NULL,
                               maxprogress = 100L, hini = 0, roottol = 1e-6, maxroot = 1L),
                          controlsODE)
 
-  cache <- new.env(parent = emptyenv())
-  cache$yini <- cache$sensini <- cache$sens2ini <-
-    cache$last_hash <- cache$last_result <- NULL
+  reg <- .warmstart_registry()
 
   default_sens <- matrix(0, n_dep, length(all_sens),
                          dimnames = list(dependent, all_sens))
@@ -1480,13 +1508,14 @@ Pequil <- function(trafo, parameters = NULL, forcings = NULL, condition = NULL,
   controls <- c(list(keep.root = keep.root, attach.input = attach.input,
                      start.time = start.time, end.time = end.time), ode_ctrl)
 
-  p2p <- function(pars, fixed = NULL, deriv = TRUE, deriv2 = FALSE) {
+  p2p <- function(pars, fixed = NULL, deriv = TRUE, deriv2 = FALSE, condition = NULL) {
     if (deriv2 && !emit_d2)
       stop("Pequil(deriv2 = TRUE) requires the model to be built with deriv2 = TRUE.",
            call. = FALSE)
     if (!emit_d1) deriv <- FALSE
     if (deriv2 && !deriv) deriv <- TRUE
 
+    cache <- reg$get(condition)
     p   <- pars
     dP  <- attr(p, "deriv")
     dP2 <- if (deriv2) attr(p, "deriv2") else NULL
@@ -1658,10 +1687,9 @@ Pequil <- function(trafo, parameters = NULL, forcings = NULL, condition = NULL,
   attr(p2p, "modelname")   <- modelname
   attr(p2p, "compileInfo") <- collectCompileInfo(model, model_s, model_s2)
   attr(p2p, "resetWarmStart") <- local({
-    cache_ref <- cache; mn <- modelname; cond <- condition
+    reg_ref <- reg; mn <- modelname; cond <- condition
     function() {
-      cache_ref$yini <- cache_ref$sensini <- cache_ref$sens2ini <-
-        cache_ref$last_hash <- cache_ref$last_result <- NULL
+      reg_ref$reset()
       paste0("Pequil(", mn, if (!is.null(cond)) paste0(":", cond) else "", ")")
     }
   })

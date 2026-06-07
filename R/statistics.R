@@ -954,6 +954,19 @@ mstrust <- function(objfun, center, studyname, rinit = .1, rmax = 10, fits = 20,
       argstrust[["traceFile"]] <- file.path(resultFolder, paste0(formatC(i, digits = digits, flag = "0"), "_", argslist[["traceFile"]]))
     }
 
+    # Each fit must rediscover its own condition-specific steady-state roots.
+    # A stale Pequil/Pimpl warm-start root would seed this fit's equilibration
+    # and short-circuit the parfn-internal multistart, silently pinning the
+    # wrong basin in multistable models. This body runs once per fit in BOTH
+    # backends, so flushing here covers both leak paths:
+    #   - cores = 1 (%do%): all fits share one objfun closure; clear the root
+    #     left by the previous fit.
+    #   - cores > 1 (%dopar%): the body runs inside the fork, so this clears the
+    #     fork's copy-on-write inheritance of whatever the parent cache held at
+    #     fork time (non-empty e.g. if objfun was evaluated before mstrust),
+    #     which would otherwise be the SAME stale root in every fork.
+    try(resetWarmStarts(objfun, verbose = FALSE), silent = TRUE)
+
     # Retry loop: a try-error or fit$error triggers re-sampling parinit and
     # re-running optmethod, up to nTries times. parframe-supplied centers
     # are skipped (rows are taken as given). Warm-start caches in
