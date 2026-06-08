@@ -410,10 +410,7 @@ expand.grid.alt <- function(seq1, seq2) {
 }
 
 
-## Windows-only: write a temp Makevars merging the existing user Makevars with
-## `lines`, for injection via R_MAKEVARS_USER. SHLIB reads it regardless of cwd
-## and applies it with the highest makefile precedence, so its PKG_LIBS reaches
-## the link even when the env var or a source-dir Makevars.win does not.
+## Windows-only: temp Makevars (existing user Makevars + `lines`) for R_MAKEVARS_USER.
 .compileMakevarsUser <- function(lines) {
   f <- Sys.getenv("R_MAKEVARS_USER", unset = NA)
   if (is.na(f) || !file.exists(f)) {
@@ -717,10 +714,7 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
       else                 try(writeLines(mv_pre, mv_path), silent = TRUE)
     }, add = TRUE)
 
-    ## Windows fallback: the source-dir Makevars.win above is read only when
-    ## SHLIB's cwd matches the source dir and with low precedence. Inject the
-    ## same PKG_* through R_MAKEVARS_USER, which SHLIB reads regardless of cwd
-    ## and applies last, so PKG_LIBS (BLAS/LAPACK) reliably reaches the link.
+    ## Windows fallback for BLAS/LAPACK: inject PKG_* via R_MAKEVARS_USER.
     if (.Platform$OS.type == "windows") {
       mv <- .compileMakevarsUser(c(
         paste("PKG_CFLAGS =",   pkg_cflags),
