@@ -410,6 +410,25 @@ expand.grid.alt <- function(seq1, seq2) {
 }
 
 
+## Windows-only: write a temp Makevars merging the existing user Makevars with
+## `lines`, for injection via R_MAKEVARS_USER. SHLIB reads it regardless of cwd
+## and applies it with the highest makefile precedence, so its PKG_LIBS reaches
+## the link even when the env var or a source-dir Makevars.win does not.
+.compileMakevarsUser <- function(lines) {
+  f <- Sys.getenv("R_MAKEVARS_USER", unset = NA)
+  if (is.na(f) || !file.exists(f)) {
+    cand <- path.expand(c("~/.R/Makevars.ucrt", "~/.R/Makevars.win64",
+                          "~/.R/Makevars.win", "~/.R/Makevars"))
+    cand <- cand[file.exists(cand)]
+    f <- if (length(cand)) cand[1] else NA
+  }
+  prev <- if (!is.na(f) && file.exists(f)) readLines(f, warn = FALSE) else character()
+  mv <- tempfile(fileext = ".mk")
+  writeLines(c(prev, lines), mv)
+  mv
+}
+
+
 #' Compile model-related C/C++ code
 #'
 #' @description
@@ -575,12 +594,30 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
   ## own env.
   compile_one <- function(entry) {
     extra_c <- entry$compileArgs %||% ""
+    pkg_c  <- trimws(paste(base,     extra_c))
+    pkg_cx <- trimws(paste(cxx_base, extra_c))
+    pkg_l  <- trimws(paste(base_libs, entry$linkArgs %||% ""))
     Sys.setenv(
-      PKG_CFLAGS   = trimws(paste(base,     extra_c)),
-      PKG_CXXFLAGS = trimws(paste(cxx_base, extra_c)),
+      PKG_CFLAGS   = pkg_c,
+      PKG_CXXFLAGS = pkg_cx,
       PKG_CPPFLAGS = cppflags,
-      PKG_LIBS     = trimws(paste(base_libs, entry$linkArgs %||% ""))
+      PKG_LIBS     = pkg_l
     )
+    if (.Platform$OS.type == "windows") {
+      mv <- .compileMakevarsUser(c(
+        paste("PKG_CFLAGS =",   pkg_c),
+        paste("PKG_CXXFLAGS =", pkg_cx),
+        paste("PKG_CPPFLAGS =", cppflags),
+        paste("PKG_LIBS =",     pkg_l)
+      ))
+      old_mu <- Sys.getenv("R_MAKEVARS_USER", unset = NA)
+      Sys.setenv(R_MAKEVARS_USER = mv)
+      on.exit({
+        if (is.na(old_mu)) Sys.unsetenv("R_MAKEVARS_USER")
+        else Sys.setenv(R_MAKEVARS_USER = old_mu)
+        unlink(mv)
+      }, add = TRUE)
+    }
     cmd <- paste(Rbin, "CMD SHLIB", shQuote(entry$srcfile))
     if (verbose) cat(cmd, "\n")
     if (system(cmd, ignore.stdout = !verbose, ignore.stderr = !verbose) != 0)
@@ -679,6 +716,26 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
       if (is.null(mv_pre)) try(unlink(mv_path), silent = TRUE)
       else                 try(writeLines(mv_pre, mv_path), silent = TRUE)
     }, add = TRUE)
+
+    ## Windows fallback: the source-dir Makevars.win above is read only when
+    ## SHLIB's cwd matches the source dir and with low precedence. Inject the
+    ## same PKG_* through R_MAKEVARS_USER, which SHLIB reads regardless of cwd
+    ## and applies last, so PKG_LIBS (BLAS/LAPACK) reliably reaches the link.
+    if (.Platform$OS.type == "windows") {
+      mv <- .compileMakevarsUser(c(
+        paste("PKG_CFLAGS =",   pkg_cflags),
+        paste("PKG_CXXFLAGS =", pkg_cxxflags),
+        paste("PKG_CPPFLAGS =", cppflags),
+        paste("PKG_LIBS =",     pkg_libs)
+      ))
+      old_mu <- Sys.getenv("R_MAKEVARS_USER", unset = NA)
+      Sys.setenv(R_MAKEVARS_USER = mv)
+      on.exit({
+        if (is.na(old_mu)) Sys.unsetenv("R_MAKEVARS_USER")
+        else Sys.setenv(R_MAKEVARS_USER = old_mu)
+        unlink(mv)
+      }, add = TRUE)
+    }
 
     output <- sub(paste0("\\", so, "$"), "", output)
     out <- file.path(dirname(files[1]), paste0(output, so))
