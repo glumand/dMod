@@ -1,0 +1,2096 @@
+# Structural identifiability of ODE models. Self-contained module driven from
+# R/symmetryDetection.R via reticulate. Three exact engines, selected by the
+# R-side `method` argument:
+#
+#   "observability": local identifiability from the rank of the
+#     observability-identifiability matrix O = d/dz [g, L_f g, ...]. For a
+#     rational model O is built by a Taylor-mode construction over GF(p) at a
+#     rational point (no symbolic O), the rank certified across several primes;
+#     this scales to large, deep systems. Non-rational observables route to a
+#     symbolic build whose rank is certified at several generic points, with an
+#     optional closed-form nullspace reconstructed only in the relevant
+#     variables.
+#   "liesym": the polynomial Lie-symmetry ansatz of Merkt et al. 2015
+#     (PRE 92, 012920); the determining system X(g)=0, [f,X]=0 (and the Lie
+#     chain X(L_f^k g)=0 and the steady-state field [f_ss,X]=0) is solved in
+#     exact rational arithmetic (modular GF(p) + CRT + rational reconstruction,
+#     validated, sympy fallback; exact=False keeps a legacy float path) and
+#     every generator is verified symbolically.
+#   "scaling": scaling (toric) symmetries from the integer kernel of the
+#     monomial-exponent conditions; pure integer linear algebra.
+#
+# Observation functions may be non-rational with rational gradient (log10);
+# gradients are taken before any polynomial is formed. A clean parse_expr
+# symbol table keeps state and parameter names unmangled, and an optional
+# symengine backend accelerates the symbolic build.
+
+import io
+import sys
+import math
+import tokenize
+
+import numpy as np
+import sympy as spy
+from sympy.parsing.sympy_parser import parse_expr
+
+try:
+    import symengine as _seng
+    _HAVE_SYMENGINE = True
+except Exception:
+    _HAVE_SYMENGINE = False
+
+# module state set per run
+_EXACT = True
+_BACKEND = "sympy"
+_warned_symengine = False
+
+# primes < 2**31 so int64 products stay < 2**62 during modular elimination
+_PRIMES = [2147483647, 2147483629, 2147483587, 2147483579,
+           2147483563, 2147483549, 2147483543, 2147483497]
+
+
+def _select_backend(name):
+    global _BACKEND, _warned_symengine
+    if name == "symengine" and not _HAVE_SYMENGINE:
+        if not _warned_symengine:
+            sys.stdout.write("symengine not available; using sympy.\n")
+            sys.stdout.flush()
+            _warned_symengine = True
+        _BACKEND = "sympy"
+    else:
+        _BACKEND = name
+
+
+def _diff(expr, var):
+    """Differentiate with the selected backend, return a sympy expression."""
+    if _BACKEND == "symengine" and _HAVE_SYMENGINE:
+        try:
+            d = _seng.diff(_seng.sympify(expr), _seng.sympify(var))
+            return d._sympy_()
+        except Exception:
+            return spy.diff(expr, var)
+    return spy.diff(expr, var)
+
+
+###########################################################################
+#####################     input parsing (clean)     ######################
+###########################################################################
+
+def _as_list(x):
+    if x is None:
+        return []
+    if isinstance(x, str):
+        return [x]
+    return list(x)
+
+
+def _clean(line):
+    return line.replace('"', '').replace(',', '').replace('^', '**').strip()
+
+
+def _build_symbol_table(all_lines):
+    """Map every non-function identifier to a sympy Symbol, so names like
+    E, I, S, O, Q, N are taken as model variables, not sympy constants."""
+    syms, funcs = set(), set()
+    for raw in all_lines:
+        line = _clean(raw)
+        if not line:
+            continue
+        try:
+            toks = list(tokenize.generate_tokens(io.StringIO(line).readline))
+        except (tokenize.TokenError, IndentationError):
+            toks = []
+        for i, t in enumerate(toks):
+            if t.type == tokenize.NAME:
+                nxt = toks[i + 1] if i + 1 < len(toks) else None
+                if nxt is not None and nxt.type == tokenize.OP and nxt.string == '(':
+                    funcs.add(t.string)
+                else:
+                    syms.add(t.string)
+    syms -= funcs
+    return {s: spy.Symbol(s) for s in syms}
+
+
+def _function_aliases():
+    """Functions used in dMod that sympy does not provide by name; mapped to
+    differentiable sympy expressions so their gradients are rational."""
+    x = spy.Symbol('_x_')
+    return {
+        'log10': spy.Lambda(x, spy.log(x) / spy.log(10)),
+        'log2': spy.Lambda(x, spy.log(x) / spy.log(2)),
+    }
+
+
+def _make_parse(local_dict):
+    def parse(rhs):
+        return parse_expr(_clean(rhs), local_dict=local_dict, evaluate=True)
+    return parse
+
+
+def _read_equations(lines, parse):
+    variables, functions = [], []
+    for raw in lines:
+        line = _clean(raw)
+        if '=' not in line:
+            continue
+        lhs, rhs = line.split('=', 1)
+        variables.append(spy.Symbol(lhs.strip()))
+        functions.append(parse(rhs))
+    allsyms = set()
+    for f in functions:
+        allsyms |= set(spy.sympify(f).free_symbols)
+    parameters = sorted(allsyms - set(variables), key=spy.default_sort_key)
+    return variables, functions, parameters
+
+
+###########################################################################
+#####################     exact polynomial class     #####################
+###########################################################################
+
+class Apoly:
+    """Sparse multivariate polynomial. Coefficients are kept exact (sympy
+    Rational) when _EXACT, else float64 (legacy path)."""
+
+    def __init__(self, expr, variables, rs):
+        self.vars = variables
+        self.rs = rs
+        if expr is None:
+            self.coefs = []
+            self.exps = []
+            return
+        poly = spy.Poly(spy.sympify(expr), variables).as_dict()
+        if rs is None:
+            self.coefs = list(poly.values())
+        else:
+            coefsTmp = list(poly.values())
+            self.coefs = [None] * len(coefsTmp)
+            for i in range(len(coefsTmp)):
+                if _EXACT:
+                    row = np.empty(len(rs), dtype=object)
+                    for j, r in enumerate(rs):
+                        row[j] = spy.diff(coefsTmp[i], r) if coefsTmp[i].has(r) \
+                            else spy.Integer(0)
+                else:
+                    row = np.zeros(len(rs))
+                    for j, r in enumerate(rs):
+                        if coefsTmp[i].has(r):
+                            row[j] = float(spy.diff(coefsTmp[i], r))
+                self.coefs[i] = row
+        self.exps = [np.array(e) for e in poly.keys()]
+
+    def __repr__(self):
+        return str(self.coefs) + '\n' + str(self.exps)
+
+    def getCopy(self):
+        newPoly = Apoly(None, self.vars, self.rs)
+        newPoly.coefs = [c.copy() if hasattr(c, "copy") else c for c in self.coefs]
+        newPoly.exps = [e.copy() for e in self.exps]
+        return newPoly
+
+    def add(self, otherPoly):
+        for i in range(len(otherPoly.exps)):
+            for j in range(len(self.exps)):
+                if np.array_equal(otherPoly.exps[i], self.exps[j]):
+                    self.coefs[j] = self.coefs[j] + otherPoly.coefs[i]
+                    if not np.any(self.coefs[j]):
+                        self.coefs.pop(j)
+                        self.exps.pop(j)
+                    break
+            else:
+                self.coefs.append(otherPoly.coefs[i])
+                self.exps.append(otherPoly.exps[i])
+
+    def sub(self, otherPoly):
+        for i in range(len(otherPoly.exps)):
+            for j in range(len(self.exps)):
+                if np.array_equal(otherPoly.exps[i], self.exps[j]):
+                    self.coefs[j] = self.coefs[j] - otherPoly.coefs[i]
+                    if not np.any(self.coefs[j]):
+                        self.coefs.pop(j)
+                        self.exps.pop(j)
+                    break
+            else:
+                self.coefs.append(-1 * otherPoly.coefs[i])
+                self.exps.append(otherPoly.exps[i])
+
+    def mul(self, otherPoly):
+        newPoly = Apoly(None, self.vars, self.rs)
+        n = len(self.coefs) * len(otherPoly.coefs)
+        newPoly.coefs = [0] * n
+        newPoly.exps = [0] * n
+        k = 0
+        for i in range(len(otherPoly.exps)):
+            for j in range(len(self.exps)):
+                # works only because at most one factor carries rs
+                newPoly.coefs[k] = otherPoly.coefs[i] * self.coefs[j]
+                newPoly.exps[k] = otherPoly.exps[i] + self.exps[j]
+                k += 1
+        i = 0
+        while i < len(newPoly.coefs):
+            j = i + 1
+            while j < len(newPoly.coefs):
+                if np.array_equal(newPoly.exps[i], newPoly.exps[j]):
+                    newPoly.exps.pop(j)
+                    newPoly.coefs[i] = newPoly.coefs[i] + newPoly.coefs.pop(j)
+                else:
+                    j += 1
+            i += 1
+        return newPoly
+
+    def diff(self, j):
+        newPoly = self.getCopy()
+        i = 0
+        while i < len(newPoly.exps):
+            if newPoly.exps[i][j] != 0:
+                newPoly.coefs[i] = newPoly.coefs[i] * int(newPoly.exps[i][j])
+                newPoly.exps[i][j] -= 1
+                i += 1
+            else:
+                newPoly.coefs.pop(i)
+                newPoly.exps.pop(i)
+        return newPoly
+
+    def as_expr(self):
+        expr = 0
+        for i in range(len(self.coefs)):
+            fact = 1
+            for j in range(len(self.vars)):
+                fact = fact * self.vars[j] ** int(self.exps[i][j])
+            if self.rs is None:
+                expr += self.coefs[i] * fact
+            else:
+                coef = 0
+                for j in range(len(self.rs)):
+                    coef += self.rs[j] * self.coefs[i][j]
+                expr += coef * fact
+        return spy.nsimplify(expr)
+
+
+###########################################################################
+#####################     infinitesimal ansatz     #######################
+###########################################################################
+
+def _sym(name):
+    return spy.Symbol(name)
+
+
+def giveDegree(vars, i, p, summand, poly, num, k, rs):
+    if i == len(vars) - 1:
+        rs.append(_sym('r_' + str(vars[k]) + '_' + str(num)))
+        poly += rs[-1] * summand * vars[i] ** p
+        return poly, num + 1
+    else:
+        for j in range(p + 1):
+            poly, num = giveDegree(vars, i + 1, p - j, summand * vars[i] ** j,
+                                   poly, num, k, rs)
+    return poly, num
+
+
+def makeAnsatz(ansatz, allVariables, m, q, pMax, fixed):
+    n = len(allVariables)
+    rs = []
+    infis = []
+
+    if ansatz == 'uni':
+        for k in range(n):
+            infis.append(spy.sympify(0))
+            if allVariables[k] in fixed:
+                continue
+            for p in range(pMax + 1):
+                rs.append(_sym('r_' + str(allVariables[k]) + '_' + str(p)))
+                infis[-1] += rs[-1] * allVariables[k] ** p
+        diffInfis = [[0] * n]
+        for i in range(n):
+            diffInfis[0][i] = spy.diff(infis[i], allVariables[i])
+
+    elif ansatz == 'par':
+        for k in range(n):
+            infis.append(spy.sympify(0))
+            if allVariables[k] in fixed:
+                continue
+            num = 0
+            for p in range(pMax + 1):
+                vari = list(allVariables[m + q:])
+                if k < (m + q):
+                    vari.append(allVariables[k])
+                    kp = len(vari) - 1
+                else:
+                    kp = k - (m + q)
+                degree, num = giveDegree(vari, 0, p, 1, 0, num, kp, rs)
+                infis[-1] += degree
+        diffInfis = [[0] * n]
+        for i in range(n):
+            diffInfis[0][i] = spy.diff(infis[i], allVariables[i])
+
+    elif ansatz == 'multi':
+        for k in range(n):
+            infis.append(spy.sympify(0))
+            if allVariables[k] in fixed:
+                continue
+            num = 0
+            for p in range(pMax + 1):
+                if k < m:
+                    vari = list(allVariables[:m]) + list(allVariables[m + q:])
+                    kp = k
+                elif k < m + q:
+                    vari = list(allVariables[:])
+                    kp = k
+                else:
+                    vari = list(allVariables[m + q:])
+                    kp = k - (m + q)
+                degree, num = giveDegree(vari, 0, p, 1, 0, num, kp, rs)
+                infis[-1] += degree
+        diffInfis = [0] * n
+        for i in range(n):
+            diffInfis[i] = [0] * n
+        for i in range(n):
+            for j in range(n):
+                diffInfis[i][j] = spy.diff(infis[i], allVariables[j])
+    else:
+        raise UserWarning("ansatz must be one of 'uni', 'par', 'multi'")
+
+    return infis, diffInfis, rs
+
+
+def transformInfisToPoly(infis, diffInfis, allVariables, rs, ansatz):
+    n = len(allVariables)
+    k = len(diffInfis)
+    infisPoly = [Apoly(infis[i], allVariables, rs) for i in range(n)]
+    diffInfisPoly = [[0] * n for _ in range(k)]
+    for a in range(k):
+        for i in range(n):
+            diffInfisPoly[a][i] = Apoly(diffInfis[a][i], allVariables, rs)
+    return infisPoly, diffInfisPoly
+
+
+###########################################################################
+#####################     determining equations     ######################
+###########################################################################
+
+def _quotient_derivatives(numerators, denominators, allVariables):
+    m = len(numerators)
+    n = len(allVariables)
+    derivativesNum = [[None] * n for _ in range(m)]
+    for k in range(m):
+        for l in range(n):
+            d = Apoly(None, allVariables, None)
+            d.add(numerators[k].diff(l).mul(denominators[k]))
+            d.sub(numerators[k].mul(denominators[k].diff(l)))
+            derivativesNum[k][l] = d
+    return derivativesNum
+
+
+def doEquation(k, numerators, denominators, derivativesNum, infis, diffInfis,
+               allVariables, rs, ansatz):
+    n = len(allVariables)
+    m = len(numerators)
+    polynomial = Apoly(None, allVariables, rs)
+    if ansatz in ('uni', 'par'):
+        polynomial.add(diffInfis[0][k].mul(denominators[k]).mul(numerators[k]))
+        for i in range(n):
+            polynomial.sub(infis[i].mul(derivativesNum[k][i]))
+    else:  # multi
+        for j in range(m):
+            summand = diffInfis[k][j].mul(denominators[k]).mul(numerators[j])
+            for l in range(m):
+                if l != j:
+                    summand = summand.mul(denominators[l])
+            polynomial.add(summand)
+        for i in range(n):
+            summand = infis[i].mul(derivativesNum[k][i])
+            for l in range(m):
+                if l != k:
+                    summand = summand.mul(denominators[l])
+            polynomial.sub(summand)
+    return list(polynomial.coefs)
+
+
+def _obs_rows(obsExpr, infisSym, allVariables, rs):
+    # X(g) = sum_l xi_l dg/dvar_l = 0. Only the gradient of g enters, so g may
+    # be non-rational (e.g. log10) as long as every dg/dvar is rational; the
+    # numerator of together(X(g)) is then polynomial in the variables.
+    n = len(allVariables)
+    Xg = spy.Integer(0)
+    for l in range(n):
+        d = _diff(obsExpr, allVariables[l])
+        if d != 0:
+            Xg += infisSym[l] * d
+    num, _ = spy.fraction(spy.together(Xg))
+    num = spy.expand(num)
+    try:
+        poly = Apoly(num, allVariables, rs)
+    except spy.PolynomialError:
+        raise UserWarning(
+            "Observable gradient is not rational (e.g. exp/sqrt mixed with "
+            "other terms). The liesym engine needs rational gradients; strip "
+            "an invertible outer function g = phi(h) to its argument h, or use "
+            "method='observability'.")
+    return list(poly.coefs)
+
+
+def doInitEquation(k, initDenominators, initDerivativesNum, initFunctions,
+                   infis, allVariables, rs):
+    n = len(allVariables)
+    m = len(initFunctions)
+    polynomial = infis[k].mul(initDenominators[k]).mul(initDenominators[k])
+    for i in range(n):
+        polynomial.sub(infis[i].mul(initDerivativesNum[k][i]))
+    polynomial = polynomial.as_expr()
+    for i in range(m):
+        if polynomial.has(allVariables[i]):
+            polynomial = polynomial.subs(allVariables[i], initFunctions[i])
+    polynomial = Apoly(polynomial, allVariables, rs)
+    return list(polynomial.coefs)
+
+
+###########################################################################
+#####################     exact / legacy solvers     #####################
+###########################################################################
+
+def _rref_mod_p(A, p):
+    """Vectorized int64 Gauss-Jordan over GF(p). Returns (R, pivots)."""
+    A = (np.asarray(A, dtype=np.int64) % p)
+    nrows, ncols = A.shape
+    pivots = []
+    r = 0
+    for c in range(ncols):
+        piv = -1
+        for i in range(r, nrows):
+            if A[i, c] % p != 0:
+                piv = i
+                break
+        if piv == -1:
+            continue
+        if piv != r:
+            A[[r, piv]] = A[[piv, r]]
+        inv = pow(int(A[r, c]), p - 2, p)
+        A[r] = (A[r] * inv) % p
+        for i in range(nrows):
+            if i != r and A[i, c] % p != 0:
+                A[i] = (A[i] - A[i, c] * A[r]) % p
+        pivots.append(c)
+        r += 1
+        if r == nrows:
+            break
+    return A, pivots
+
+
+def _rational_reconstruct(a, m):
+    """Recover n/d with a ≡ n*d^{-1} (mod m), |n|,|d| bounded by sqrt(m/2)."""
+    a %= m
+    if a == 0:
+        return spy.Integer(0)
+    bound = math.isqrt(m // 2)
+    r0, r1 = m, a
+    s0, s1 = 0, 1
+    while r1 > bound:
+        q = r0 // r1
+        r0, r1 = r1, r0 - q * r1
+        s0, s1 = s1, s0 - q * s1
+    if s1 == 0 or abs(s1) > bound:
+        return None
+    return spy.Rational(r1, s1)
+
+
+def _modular_nullspace(M):
+    """Exact nullspace of sympy Matrix M via multi-prime GF(p) + CRT +
+    rational reconstruction. Returns list of sympy column vectors, or None
+    if reconstruction/validation fails (caller falls back to sympy)."""
+    nrows, ncols = M.shape
+    if nrows == 0:
+        return [spy.Matrix([1 if j == c else 0 for j in range(ncols)])
+                for c in range(ncols)]
+    Aint = []
+    for i in range(nrows):
+        row = [spy.Rational(M[i, j]) for j in range(ncols)]
+        L = 1
+        for r in row:
+            L = spy.ilcm(L, r.q)
+        Aint.append([int(r * L) for r in row])
+
+    ref_pivots = None
+    free = None
+    residues = {}
+    mods = []
+    for p in _PRIMES:
+        Ap = [[x % p for x in row] for row in Aint]
+        R, pivots = _rref_mod_p(Ap, p)
+        if ref_pivots is None:
+            ref_pivots = pivots
+            free = [c for c in range(ncols) if c not in pivots]
+        elif pivots != ref_pivots:
+            continue
+        mods.append(p)
+        for ki in range(len(ref_pivots)):
+            for f in free:
+                residues.setdefault((ki, f), []).append(int(R[ki, f]) % p)
+        if len(mods) >= 4:
+            break
+
+    if not mods:
+        return None
+
+    from sympy.ntheory.modular import crt
+    exact = {}
+    for key, res in residues.items():
+        x, Mmod = crt(mods, res)
+        val = _rational_reconstruct(int(x), int(Mmod))
+        if val is None:
+            return None
+        exact[key] = val
+
+    basis = []
+    for f in free:
+        v = [spy.Integer(0)] * ncols
+        v[f] = spy.Integer(1)
+        for ki, c in enumerate(ref_pivots):
+            v[c] = -exact[(ki, f)]
+        basis.append(spy.Matrix(v))
+
+    # validate exactly
+    for v in basis:
+        if not (M * v).is_zero_matrix:
+            return None
+    return basis
+
+
+def exactNullspace(rows, ncols):
+    """Return basis vectors (list of sympy column vectors)."""
+    if not rows:
+        return [spy.Matrix([1 if j == c else 0 for j in range(ncols)])
+                for c in range(ncols)]
+    M = spy.Matrix([[spy.sympify(x) for x in row] for row in rows])
+    # the modular solver needs a rational matrix; transcendental constants
+    # (e.g. log(10) from a log10 observable) route to the exact sympy nullspace
+    if all(bool(e.is_rational) for e in M):
+        basis = _modular_nullspace(M)
+        if basis is not None:
+            return basis
+    return M.nullspace()
+
+
+# ---- legacy float path (exact=False) ----
+
+def legacyNullspace(rows, ncols):
+    # Float SVD-based nullspace. Robust to rectangular/underdetermined systems
+    # (the v1 LU+rref assumed an overdetermined system and broke otherwise).
+    from scipy.linalg import null_space
+    if not rows:
+        base = np.eye(ncols)
+    else:
+        A = np.array([[float(x) for x in row] for row in rows])
+        base = null_space(A)
+    return [spy.Matrix([spy.nsimplify(base[i, l], rational=True)
+                        for i in range(ncols)])
+            for l in range(base.shape[1])]
+
+
+###########################################################################
+#####################     post-processing / report     ###################
+###########################################################################
+
+def checkForCommonFactor(infisTmp, allVariables, m):
+    epsilon = spy.Symbol('epsilon')
+    factors = []
+    for i in range(len(allVariables)):
+        if infisTmp[i] != 0:
+            fac = spy.factor(infisTmp[i])
+            if fac.is_Add:
+                factors = [infisTmp[i]]
+            elif fac.is_Mul:
+                factors = list(fac.args)
+            else:
+                factors = [fac]
+            break
+    i = 0
+    while i < len(factors):
+        if factors[i].is_number:
+            factors.pop(i)
+        elif factors[i] in allVariables[:m]:
+            factors.pop(i)
+        elif factors[i].is_Add:
+            factors.pop(i)
+        elif factors[i].is_Pow:
+            if not factors[i].args[0].is_Add:
+                factors[i] = factors[i].args[0]
+                i += 1
+            else:
+                factors.pop(i)
+        else:
+            i += 1
+    for i in range(1, len(infisTmp)):
+        if infisTmp[i] == 0:
+            continue
+        fac = spy.factor(infisTmp[i])
+        if fac.is_Mul:
+            factorsTmp = list(fac.args)
+        else:
+            factorsTmp = [fac]
+        j = 0
+        while j < len(factors):
+            k = 0
+            while k < len(factorsTmp):
+                if factorsTmp[k].is_number:
+                    factorsTmp.pop(k)
+                elif factorsTmp[k] in allVariables[:m]:
+                    factorsTmp.pop(k)
+                elif factorsTmp[k].is_Add:
+                    factorsTmp.pop(k)
+                elif factorsTmp[k].is_Pow:
+                    if not factorsTmp[k].args[0].is_Add:
+                        factorsTmp[k] = factorsTmp[k].args[0]
+                        k += 1
+                    else:
+                        factorsTmp.pop(k)
+                else:
+                    k += 1
+            if factors[j] in factorsTmp:
+                j += 1
+            else:
+                factors.pop(j)
+        if len(factors) != 0:
+            continue
+        else:
+            break
+    return len(factors) != 0
+
+
+def buildTransformation(infis, allVariables):
+    n = len(allVariables)
+    epsilon = spy.Symbol('epsilon')
+    transformations = [0] * n
+    tType = [False] * 6
+    for i in range(n):
+        if infis[i] == 0:
+            transformations[i] = allVariables[i]
+        else:
+            poly = spy.Poly(infis[i], allVariables).as_dict()
+            monomials = list(poly.keys())
+            coefs = list(poly.values())
+            if len(monomials) == 1:
+                p = None
+                broke = False
+                for j in range(n):
+                    if monomials[0][j] != 0:
+                        if j == i and p is None:
+                            p = monomials[0][i]
+                        elif p is None and monomials[0][j] == 1:
+                            p = -1 - j
+                        else:
+                            transformations[i] = '-?-'
+                            tType[0] = True
+                            broke = True
+                            break
+                if not broke:
+                    if p is None:
+                        transformations[i] = allVariables[i] + epsilon * coefs[0]
+                        tType[2] = True
+                    elif p <= 0:
+                        transformations[i] = allVariables[i] + epsilon * coefs[0] * allVariables[-p - 1]
+                        tType[5] = True
+                    elif p == 1:
+                        transformations[i] = spy.exp(epsilon * coefs[0]) * allVariables[i]
+                        tType[1] = True
+                    else:
+                        transformations[i] = spy.simplify(
+                            allVariables[i] / (1 - (p - 1) * epsilon * allVariables[i] ** (p - 1)) ** (spy.sympify(1) / (p - 1)))
+                        if p == 2:
+                            tType[3] = True
+                        else:
+                            tType[4] = True
+            else:
+                transformations[i] = '-?-'
+                tType[0] = True
+
+    labels = ['unknown', 'scaling', 'translation', 'MM-like', 'p>2', 'gen. translation']
+    parts = [labels[i] for i in range(6) if tType[i]]
+    return transformations, 'Type: ' + ', '.join(parts)
+
+
+def printTransformations(infisAll, allVariables, verified):
+    n = len(allVariables)
+    print('\n\n' + str(len(infisAll)) + ' transformation(s) found:')
+    for l in range(len(infisAll)):
+        for i in range(n):
+            infisAll[l][i] = spy.nsimplify(infisAll[l][i])
+        trans, ttype = buildTransformation(infisAll[l], allVariables)
+        flag = ''
+        if verified is not None:
+            flag = '  [verified]' if verified[l] else '  [UNVERIFIED]'
+        print('-' * 60)
+        print('#' + str(l + 1) + ': ' + ttype + flag)
+        for i in range(n):
+            if infisAll[l][i] != 0:
+                print('  {0:>14s} : {1:s}  ->  {2:s}'.format(
+                    str(allVariables[i]), str(infisAll[l][i]), str(trans[i])))
+
+
+###########################################################################
+#####################     verification     ###############################
+###########################################################################
+
+def _is_zero(expr):
+    if expr == 0:
+        return True
+    e = spy.together(spy.sympify(expr))
+    num, _ = spy.fraction(e)
+    return spy.simplify(spy.expand(num)) == 0
+
+
+def _verify_generator(infis, allVariables, diffEquations, ssFields, obsExprs):
+    n = len(allVariables)
+    # observation / Lie-chain invariance: X(o) = 0
+    for o in obsExprs:
+        s = 0
+        for l in range(n):
+            if infis[l] != 0:
+                s += infis[l] * spy.diff(o, allVariables[l])
+        if not _is_zero(s):
+            return False
+    # flow conditions [f, X] = 0 for each dynamic field. The field has a
+    # component only for the dynamic states (index < len(fields)); parameter
+    # and input directions evolve trivially (component 0).
+    for fields in (diffEquations, ssFields):
+        if not fields:
+            continue
+        mf = len(fields)
+        for k in range(mf):
+            fk = fields[k]
+            bracket = 0
+            for l in range(n):
+                fl = fields[l] if l < mf else 0
+                if fl != 0 and infis[k] != 0:
+                    bracket += fl * spy.diff(infis[k], allVariables[l])
+                if infis[l] != 0 and fk != 0:
+                    bracket -= infis[l] * spy.diff(fk, allVariables[l])
+            if not _is_zero(bracket):
+                return False
+    return True
+
+
+###########################################################################
+#####################     core driver     ################################
+###########################################################################
+
+def _rationalize(functions, allVariables):
+    """Split each expression into numerator/denominator Apoly pairs."""
+    nums, dens = [], []
+    for fexpr in functions:
+        rational = spy.together(spy.sympify(fexpr))
+        nums.append(Apoly(spy.numer(rational), allVariables, None))
+        dens.append(Apoly(spy.denom(rational), allVariables, None))
+    return nums, dens
+
+
+def symmetryDetection(allVariables, diffEquations, observables, obsFunctions,
+                      initFunctions, predictions, predFunctions, ssFunctions,
+                      ansatz='uni', pMax=2, inputs=(), fixed=(), lieOrder=0,
+                      allTrafos=False, verify=True):
+    n = len(allVariables)
+    m = len(diffEquations)
+    q = len(inputs)
+
+    sys.stdout.write('Preparing equations...')
+    sys.stdout.flush()
+
+    infisSym, diffInfis, rs = makeAnsatz(ansatz, allVariables, m, q, pMax, list(fixed))
+    infis, diffInfis = transformInfisToPoly(infisSym, diffInfis, allVariables, rs, ansatz)
+
+    numerators, denominators = _rationalize(diffEquations, allVariables)
+    derivativesNum = _quotient_derivatives(numerators, denominators, allVariables)
+
+    # observation invariance plus the Lie-derivative chain X(L_f^k g) = 0
+    fieldExprs = [spy.together(spy.sympify(f)) for f in diffEquations]
+    obsExprs = []
+    for g in obsFunctions:
+        expr = spy.sympify(g)
+        chain = [expr]
+        for _ in range(int(lieOrder)):
+            cur = chain[-1]
+            lie = 0
+            for i in range(m):
+                d = _diff(cur, allVariables[i])
+                if d != 0:
+                    lie += fieldExprs[i] * d
+            chain.append(spy.together(lie))
+        obsExprs.extend(chain)
+    h = len(obsExprs)
+
+    # initial conditions
+    o = len(initFunctions)
+    if o:
+        initNum, initDen = _rationalize(initFunctions, allVariables)
+        initDerivativesNum = _quotient_derivatives(initNum, initDen, allVariables)
+    else:
+        initDen = []
+        initDerivativesNum = []
+
+    # steady-state-initial second flow field f_ss
+    if ssFunctions:
+        ssNum, ssDen = _rationalize(ssFunctions, allVariables)
+        ssDerivativesNum = _quotient_derivatives(ssNum, ssDen, allVariables)
+        ssFieldExprs = [spy.together(spy.sympify(f)) for f in ssFunctions]
+    else:
+        ssFieldExprs = []
+
+    sys.stdout.write('done\nBuilding system...')
+    sys.stdout.flush()
+
+    rows = []
+    for k in range(m):
+        rows.extend(doEquation(k, numerators, denominators, derivativesNum,
+                               infis, diffInfis, allVariables, rs, ansatz))
+    for k in range(h):
+        rows.extend(_obs_rows(obsExprs[k], infisSym, allVariables, rs))
+    for k in range(o):
+        rows.extend(doInitEquation(k, initDen, initDerivativesNum, initFunctions,
+                                   infis, allVariables, rs))
+    if ssFunctions:
+        for k in range(len(ssFunctions)):
+            rows.extend(doEquation(k, ssNum, ssDen, ssDerivativesNum,
+                                   infis, diffInfis, allVariables, rs, ansatz))
+
+    ncols = len(rs)
+    sys.stdout.write('done\nSolving system of size %dx%d (%s)...'
+                     % (len(rows), ncols, 'exact' if _EXACT else 'float'))
+    sys.stdout.flush()
+
+    if _EXACT:
+        basis = exactNullspace(rows, ncols)
+    else:
+        basis = legacyNullspace(rows, ncols)
+
+    sys.stdout.write('done\nProcessing results...\n')
+    sys.stdout.flush()
+
+    infisAll = []
+    for v in basis:
+        infisTmp = [0] * n
+        for i in range(n):
+            poly = infis[i].getCopy()
+            poly.rs = [v[j] for j in range(ncols)]
+            infisTmp[i] = poly.as_expr()
+        if allTrafos or not checkForCommonFactor(infisTmp, allVariables, m):
+            infisAll.append(infisTmp)
+
+    verified = None
+    if verify:
+        verified = [_verify_generator(infisTmp, allVariables, fieldExprs,
+                                      ssFieldExprs, obsExprs)
+                    for infisTmp in infisAll]
+
+    printTransformations(infisAll, allVariables, verified)
+
+    if predictions:
+        checkPredictions(predictions, predFunctions, infisAll, allVariables)
+
+    # structured return
+    result = []
+    for l, infisTmp in enumerate(infisAll):
+        trans, ttype = buildTransformation(infisTmp, allVariables)
+        nz = [i for i in range(n) if infisTmp[i] != 0]
+        result.append({
+            'infinitesimals': {str(allVariables[i]): str(infisTmp[i]) for i in nz},
+            'transformation': {str(allVariables[i]): str(trans[i]) for i in nz},
+            'type': ttype,
+            'verified': (None if verified is None else bool(verified[l])),
+        })
+    return result
+
+
+def checkPredictions(predictions, predFunctions, infisAll, allVariables):
+    n = len(allVariables)
+    print('\nChecking predictions:')
+    for i in range(len(predictions)):
+        admits = True
+        lines = []
+        for j in range(len(infisAll)):
+            infiPred = 0
+            for k in range(n):
+                if infisAll[j][k] != 0:
+                    infiPred += infisAll[j][k] * spy.diff(predFunctions[i], allVariables[k])
+            infiPred = spy.simplify(infiPred)
+            if infiPred != 0:
+                admits = False
+                lines.append('  ' + str(predictions[i]) + '  (#' + str(j + 1) + '): ' + str(infiPred))
+        if admits:
+            print('  ' + str(predictions[i]) + ': admits all')
+        else:
+            for ln in lines:
+                print(ln)
+
+
+
+# raised when an expression is not a rational function of the coordinates
+class _NotRational(Exception):
+    pass
+
+###########################################################################
+#####################   observability tape compiler   ####################
+###########################################################################
+
+# Opcodes for the flat tape consumed by the C++ kernel (src/symmetry_kernel.cpp).
+# Integer powers are expanded into multiplications, so the kernel needs only
+# these four operations.
+_OP_CONST, _OP_ADD, _OP_MUL, _OP_INV = 0, 1, 2, 3
+
+
+def _is_rational_expr(e):
+    """True if e is a rational function of its symbols (no transcendental
+    function, no non-integer power)."""
+    e = spy.sympify(e)
+    for a in spy.preorder_traversal(e):
+        if a.is_Function:
+            return False
+        if a.is_Pow and not a.exp.is_Integer:
+            return False
+    return True
+
+
+def _emit_tape_shared(fexpr, gexpr, slotOf, base):
+    """Emit a straight-line tape over an explicit slot map covering both
+    states and leaves; instruction i writes slot base + i. Used by the
+    multi-condition compiler, where states occupy their own slots (seeded from
+    an initial condition) rather than being leaves."""
+    op, a, b, cnum, cden = [], [], [], [], []
+    memo = {}
+
+    def emit(opcode, aa, bb, num=0, den=1):
+        op.append(int(opcode))
+        a.append(int(aa))
+        b.append(int(bb))
+        cnum.append(str(num))
+        cden.append(str(den))
+        return base + len(op) - 1
+
+    def build(e):
+        s = memo.get(e)
+        if s is not None:
+            return s
+        if e.is_Symbol:
+            nm = str(e)
+            if nm not in slotOf:
+                raise _NotRational()
+            memo[e] = slotOf[nm]
+            return slotOf[nm]
+        if e.is_Integer:
+            s = emit(_OP_CONST, 0, 0, int(e), 1)
+        elif e.is_Rational:
+            s = emit(_OP_CONST, 0, 0, int(e.p), int(e.q))
+        elif e.is_Float:
+            r = spy.nsimplify(e, rational=True)
+            if not r.is_Rational:
+                r = spy.Rational(e)
+            s = emit(_OP_CONST, 0, 0, int(r.p), int(r.q))
+        elif e.is_Add:
+            args = list(e.args)
+            s = build(args[0])
+            for t in args[1:]:
+                s = emit(_OP_ADD, s, build(t))
+        elif e.is_Mul:
+            args = list(e.args)
+            s = build(args[0])
+            for t in args[1:]:
+                s = emit(_OP_MUL, s, build(t))
+        elif e.is_Pow and e.exp.is_Integer:
+            n = int(e.exp)
+            baseS = build(e.base)
+            if n == 0:
+                s = emit(_OP_CONST, 0, 0, 1, 1)
+            else:
+                s = baseS
+                for _ in range(abs(n) - 1):
+                    s = emit(_OP_MUL, s, baseS)
+                if n < 0:
+                    s = emit(_OP_INV, s, 0)
+        else:
+            raise _NotRational()
+        memo[e] = s
+        return s
+
+    repl, red = spy.cse(list(fexpr) + list(gexpr))
+    for sym, sub in repl:
+        memo[sym] = build(sub)
+    outslots = [build(e) for e in red]
+    return op, a, b, cnum, cden, outslots
+
+
+def _ic_rational(e):
+    """Return (p, q) of a numeric initial condition as exact integers."""
+    if e.is_Float:
+        r = spy.nsimplify(e, rational=True)
+        if not r.is_Rational:
+            r = spy.Rational(e)
+    else:
+        r = spy.Rational(e)
+    return int(r.p), int(r.q)
+
+
+_ssModularCache = {}
+# coupled-subsystem solutions keyed by the canonical system mod p, so a call whose
+# coupled part is unchanged (e.g. a probe perturbing an unrelated parameter) reuses
+# the solution instead of recomputing a Groebner basis
+_coupledCache = {}
+
+
+def _modp_rational(val, p):
+    """Map a sympy Rational (or integer-valued expression) to its residue mod p."""
+    r = spy.Rational(val)
+    return (int(r.p) % p) * pow(int(r.q) % p, p - 2, p) % p
+
+
+def _poly_terms(expr, gens):
+    """Compile a rational expression in `gens` to (numerator, denominator) term
+    lists [(exponent tuple, (p, q))] with rational coefficients as integer pairs.
+    Prime-independent, so the compile is cached and only the per-prime reduction
+    (in _eval_terms) repeats. Replaces per-point sympy .subs of the Jacobian."""
+    num, den = spy.fraction(spy.together(expr))
+    def terms(e):
+        P = spy.Poly(e, *gens)
+        out = []
+        for monom, coef in P.terms():
+            r = spy.Rational(coef)
+            out.append((tuple(int(m) for m in monom), (int(r.p), int(r.q))))
+        return out
+    return terms(num), terms(den)
+
+
+def _bipoly(expr, stateGens, paramGens):
+    """Compile a polynomial in (states, params) to a list of (state-monomial
+    exponent tuple, param-coefficient term list), the latter from _poly_terms.
+    Lets the per-point state-polynomial be rebuilt by evaluating the parameter
+    coefficients mod p, replacing the per-call subs(params) + expand."""
+    P = spy.Poly(expr, *stateGens)
+    out = []
+    for sm, coef in P.terms():
+        ct = _poly_terms(coef, paramGens)
+        out.append((tuple(int(m) for m in sm), ct))
+    return out
+
+
+def _eval_bipoly(bip, stateGens, paramvals, p):
+    """Rebuild the state-polynomial at numeric parameter values mod p: each
+    state-monomial scaled by its parameter coefficient, evaluated via _eval_terms
+    at `paramvals` (the coefficients are functions of the parameters only)."""
+    terms = []
+    for sm, ct in bip:
+        c = _eval_terms(ct, paramvals, p)
+        if c == 0:
+            continue
+        mono = spy.Integer(c)
+        for k, e in enumerate(sm):
+            if e:
+                mono = mono * stateGens[k] ** int(e)
+        terms.append(mono)
+    return spy.Add(*terms) if terms else spy.Integer(0)
+
+
+def _solve_mod(A, B, p):
+    """Solve A X = B over GF(p) by Gauss-Jordan (A: n x n, B: n x k, integer lists
+    already reduced mod p). Returns X as a list of rows, or None if A is singular."""
+    n = len(A)
+    if n == 0:
+        return [[] for _ in range(0)]
+    k = len(B[0]) if B and B[0] else 0
+    M = [list(A[i]) + list(B[i]) for i in range(n)]
+    for col in range(n):
+        piv = next((r for r in range(col, n) if M[r][col] % p), None)
+        if piv is None:
+            return None
+        M[col], M[piv] = M[piv], M[col]
+        inv = pow(M[col][col] % p, p - 2, p)
+        M[col] = [(x * inv) % p for x in M[col]]
+        for r in range(n):
+            if r != col and M[r][col] % p:
+                f = M[r][col] % p
+                M[r] = [(M[r][c] - f * M[col][c]) % p for c in range(n + k)]
+    return [M[i][n:] for i in range(n)]
+
+
+def _eval_terms(numden, ptvals, p):
+    """Evaluate a (num, den) term list (from _poly_terms) at the integer point
+    `ptvals` (gens order, already mod p) and return the residue num/den mod p."""
+    def ev(terms):
+        acc = 0
+        for monom, (cn, cd) in terms:
+            c = (cn % p) * pow(cd % p, p - 2, p) % p
+            for k, e in enumerate(monom):
+                if e:
+                    c = c * pow(ptvals[k], e, p) % p
+            acc = (acc + c) % p
+        return acc
+    nv = ev(numden[0]); dv = ev(numden[1])
+    return nv * pow(dv % p, p - 2, p) % p
+
+
+def _reduce_modp(e, p):
+    """Reduce the integer coefficients of a polynomial expression modulo p."""
+    e = spy.sympify(e)
+    syms = sorted(e.free_symbols, key=str)
+    if not syms:
+        return spy.Integer(int(e) % p)
+    return spy.Poly(e, *syms, modulus=p).as_expr()
+
+
+def evalRationalMod(expr, names, vals, q):
+    """Value of the rational expression `expr` at the integer point names -> vals,
+    reduced modulo the prime q. Returns None if the denominator vanishes mod q.
+    Used to certify a reconstructed identifiability direction at a fresh prime."""
+    q = int(q)
+    if not isinstance(names, (list, tuple)): names = [names]
+    if not isinstance(vals, (list, tuple)): vals = [vals]
+    local = _build_symbol_table([str(expr)] + [str(n) for n in names])
+    local.update(_function_aliases())
+    parse = _make_parse(local)
+    e = spy.together(spy.sympify(parse(str(expr))).subs(
+        {spy.Symbol(str(n)): spy.Integer(int(v))
+         for n, v in zip(names, vals)}))
+    num, den = spy.fraction(e)
+    num, den = int(num), int(den) % q
+    if den == 0:
+        return None
+    return int((num % q) * pow(den, q - 2, q) % q)
+
+
+def solveSteadyStateModular(model, stateNames, paramNames, paramVals, prime,
+                            forcings=None, backend='sympy', t0events=None,
+                            recast=None, lVals=None):
+    """Numeric point on the interior component of f = 0 over GF(prime) with its
+    implicit-function-theorem parameter sensitivities.
+
+    `model` is a list of "X = rhs" lines; `stateNames`/`paramNames` the state and
+    parameter order; `paramVals` a {name: int} map of residues mod `prime`;
+    `forcings` are held at 0; `t0events` are dose-style events composed onto the
+    point after the solve. Returns {'ok': True, 'xstar': [...], 'dx': {param:
+    [...]}} (state-ordered) or {'ok': False, 'why': ...}."""
+    _select_backend(backend)
+    model = _as_list(model)
+    forcings = set(_as_list(forcings))
+    p = int(prime)
+
+    key = (tuple(model), tuple(stateNames), tuple(paramNames), tuple(sorted(forcings)))
+    cached = _ssModularCache.get(key)
+    if cached is None:
+        local = _build_symbol_table(model + list(paramNames))
+        local.update(_function_aliases())
+        parse = _make_parse(local)
+        rhsByName = {}
+        for raw in model:
+            line = _clean(raw)
+            if '=' not in line:
+                continue
+            lhs, rhs = line.split('=', 1)
+            rhsByName[lhs.strip()] = parse(rhs)
+        stateSyms = [spy.Symbol(nm) for nm in stateNames]
+        paramSyms = [spy.Symbol(nm) for nm in paramNames]
+        solveStates = [s for s in stateSyms if str(s) not in forcings]
+        forcingSubs = {spy.Symbol(nm): spy.Integer(0) for nm in forcings}
+        fSym = [spy.sympify(rhsByName[str(s)]).subs(forcingSubs) for s in solveStates]
+        # numerators of f = 0; the symbolic Jacobians for the IFT
+        polys = [spy.expand(spy.fraction(spy.together(fi))[0]) for fi in fSym]
+        Jx = spy.Matrix([[spy.diff(fi, sj) for sj in solveStates] for fi in fSym])
+        Jt = {str(th): spy.Matrix([[spy.diff(fi, th)] for fi in fSym])
+              for th in paramSyms}
+        # compile the Jacobian entries to prime-independent modular term lists so
+        # each point evaluates by integer arithmetic instead of a sympy .subs
+        gens = list(paramSyms) + list(solveStates)
+        nSc = len(solveStates)
+        JxTerms = [[_poly_terms(Jx[i, j], gens) for j in range(nSc)]
+                   for i in range(nSc)]
+        JtTerms = {str(th): [_poly_terms(Jt[str(th)][i], gens) for i in range(nSc)]
+                   for th in paramSyms}
+        # state-polynomials of f = 0 as bipolys, so the per-point substitution of
+        # the parameters is an integer evaluation rather than a sympy subs + expand
+        polyBi = [_bipoly(pl, list(solveStates), list(paramSyms)) for pl in polys]
+        cached = (paramSyms, solveStates, polys, Jx, Jt, gens, JxTerms, JtTerms, polyBi)
+        _ssModularCache[key] = cached
+    paramSyms, solveStates, polys, Jx, Jt, gens, JxTerms, JtTerms, polyBi = cached
+
+    paramvals = [int(paramVals.get(str(th), 0)) % p for th in paramSyms]
+    sgens = list(solveStates)
+    polysN = [_eval_bipoly(bip, sgens, paramvals, p) for bip in polyBi]
+
+    # linear state elimination: solve a state that occurs to degree 1 with a
+    # state-free coefficient, substitute, iterate
+    sol = {}
+    elim = []
+    remaining = list(solveStates)
+    remSet = set(remaining)
+    remPolys = list(polysN)
+    progress = True
+    while progress and remaining:
+        progress = False
+        for idx, pl in enumerate(remPolys):
+            if pl is None:
+                continue
+            present = pl.free_symbols & remSet
+            if not present:
+                continue
+            picked = None
+            for v in present:
+                pv = spy.Poly(pl, v)
+                if pv.degree() != 1:
+                    continue
+                a = pv.nth(1)
+                if a.free_symbols & remSet or int(a) % p == 0:
+                    continue
+                b = pv.nth(0)
+                expr = _reduce_modp(-b * pow(int(a) % p, p - 2, p), p)
+                picked = (v, expr)
+                break
+            if picked is None:
+                continue
+            v, expr = picked
+            elim.append((v, expr))
+            remPolys[idx] = None
+            for j in range(len(remPolys)):
+                if remPolys[j] is not None and v in remPolys[j].free_symbols:
+                    remPolys[j] = _reduce_modp(remPolys[j].subs(v, expr), p)
+            remaining.remove(v)
+            remSet.discard(v)
+            progress = True
+
+    # coupled residual, saturated by the product of the states: grevlex basis,
+    # FGLM to a triangular lex basis, with a direct lex basis as fallback
+    if remaining:
+        residPolys = [pl for pl in remPolys if pl is not None]
+        # canonical key of the coupled system mod p; reuse the solution on a match
+        try:
+            ckey = (p, tuple(str(v) for v in remaining), tuple(sorted(
+                tuple(sorted((tuple(int(e) for e in m), int(c) % p)
+                             for m, c in spy.Poly(pl, *remaining).terms()))
+                for pl in residPolys)))
+        except Exception:
+            ckey = None
+        cached = _coupledCache.get(ckey) if ckey is not None else None
+        # fall through with the cached solution when the coupled system recurs
+        if cached is not None:
+            if cached == 'NONE':
+                return {'ok': False, 'why': 'no consistent interior point'}
+            sol = {spy.Symbol(k): spy.Integer(val) for k, val in cached}
+            remaining = []
+    if remaining and len(remaining) == 1:
+        # one coupled variable left: its interior value is a nonzero root of any
+        # residual that contains it at which all residuals vanish - no Groebner
+        v = remaining[0]
+        cand = next((pl for pl in residPolys
+                     if v in spy.sympify(pl).free_symbols), None)
+        if cand is not None:
+            try:
+                roots = spy.Poly(cand, v, modulus=p).ground_roots()
+            except Exception:
+                roots = {}
+            residE1 = [spy.sympify(pl) for pl in residPolys]
+            for r in roots:
+                rr = int(r) % p
+                if rr == 0:
+                    continue
+                if all(int(e.subs(v, rr)) % p == 0 for e in residE1):
+                    sol = {v: spy.Integer(rr)}
+                    if ckey is not None:
+                        _coupledCache[ckey] = ((str(v), rr),)
+                    remaining = []
+                    break
+    if remaining:
+        w = spy.Symbol('_w_sat_')
+        prod = spy.Integer(1)
+        for s in remaining:
+            prod = prod * s
+        sat = residPolys + [w * prod - 1]
+        try:
+            G = spy.groebner(sat, w, *remaining, order='grevlex', modulus=p)
+            basis = [g for g in G.fglm('lex')
+                     if w not in spy.sympify(g).free_symbols]
+        except Exception:
+            try:
+                G = spy.groebner(sat, w, *remaining, order='lex', modulus=p)
+            except Exception as e:
+                return {'ok': False, 'why': 'groebner: %s' % e}
+            basis = [g for g in G.exprs if w not in g.free_symbols]
+        # back-substitute with backtracking, choosing an interior (non-zero) root
+        # per state and accepting only a point at which every residual equation
+        # vanishes; returns no point when none exists in GF(p)
+        rvars = list(reversed(remaining))
+        rset = set(remaining)
+        residE = [spy.sympify(pl) for pl in residPolys]
+
+        def backtrack(i, partial):
+            if i == len(rvars):
+                for e in residE:
+                    if int(e.subs(partial)) % p != 0:
+                        return None
+                return partial
+            v = rvars[i]
+            cand = None
+            for g in basis:
+                gg = spy.sympify(g).subs(partial)
+                if gg.free_symbols & rset == {v}:
+                    cand = gg
+                    break
+            if cand is None:
+                return None
+            try:
+                roots = spy.Poly(cand, v, modulus=p).ground_roots()
+            except Exception:
+                return None
+            for r in roots:
+                rr = int(r) % p
+                if rr == 0:
+                    continue
+                nxt = dict(partial)
+                nxt[v] = spy.Integer(rr)
+                got = backtrack(i + 1, nxt)
+                if got is not None:
+                    return got
+            return None
+
+        rsol = backtrack(0, {})
+        if rsol is None:
+            if ckey is not None:
+                _coupledCache[ckey] = 'NONE'
+            return {'ok': False, 'why': 'no consistent interior point'}
+        sol = rsol
+        if ckey is not None:
+            _coupledCache[ckey] = tuple((str(k), int(v) % p) for k, v in rsol.items())
+
+    # resolve the eliminated states to numbers, latest first
+    for v, expr in reversed(elim):
+        sol[v] = spy.Integer(_modp_rational(expr.subs(sol), p))
+
+    nS = len(solveStates)
+    valBy = {str(s): int(sol[s]) % p for s in solveStates}
+    sIdx = {str(s): i for i, s in enumerate(solveStates)}
+    # point in gens order (params then solve-states), already reduced mod p
+    ptvals = [int(paramVals.get(str(th), 0)) % p for th in paramSyms] + \
+             [valBy[str(s)] for s in solveStates]
+    JtBy = {str(th): [_eval_terms(JtTerms[str(th)][i], ptvals, p) for i in range(nS)]
+            for th in paramSyms}
+    Jxeff = [[_eval_terms(JxTerms[i][j], ptvals, p) for j in range(nS)]
+             for i in range(nS)]
+
+    # power/Hill recast: E = base^exp is held generic. Its chain rule folds into
+    # the state Jacobian (base a state) or a parameter column (base a parameter)
+    # and into the exponent column, so the IFT sensitivities dx pick up the
+    # exponent. base0 is the resting base value; E0, L0 are independent generics.
+    recastOut = []
+    if recast:
+        lVals = lVals or {}
+        for rc in recast:
+            E, L, base, exp = rc['E'], rc['L'], rc['base'], rc['exp']
+            E0 = int(paramVals.get(E, 0)) % p
+            L0 = int(lVals.get(L, 0)) % p
+            base0 = valBy[base] if base in valBy else int(paramVals.get(base, 0)) % p
+            binv = pow(base0, p - 2, p) if base0 % p else 0
+            dEbase = int(paramVals.get(exp, 0)) % p * E0 % p * binv % p
+            dEexp = E0 * L0 % p
+            jE = JtBy.get(E, [0] * nS)
+            if base in sIdx:
+                bc = sIdx[base]
+                for i in range(nS):
+                    Jxeff[i][bc] = (Jxeff[i][bc] + jE[i] * dEbase) % p
+            elif base in JtBy:
+                JtBy[base] = [(JtBy[base][i] + jE[i] * dEbase) % p for i in range(nS)]
+            if exp in JtBy:
+                JtBy[exp] = [(JtBy[exp][i] + jE[i] * dEexp) % p for i in range(nS)]
+            recastOut.append({'E': E, 'L': L, 'base': base, 'exp': exp, 'E0': E0,
+                              'L0': L0, 'dEbase': dEbase, 'dEexp': dEexp, 'dLbase': binv})
+
+    # solve Jxeff * dx = -Jt for every parameter column at once over GF(p)
+    params_l = [str(th) for th in paramSyms]
+    B = [[(-JtBy[params_l[j]][i]) % p for j in range(len(params_l))]
+         for i in range(nS)]
+    X = _solve_mod(Jxeff, B, p)
+    if X is None:
+        return {'ok': False, 'why': 'singular jacobian mod p'}
+    dxBy = {params_l[j]: [X[i][j] % p for i in range(nS)]
+            for j in range(len(params_l))}
+
+    # assemble in the full state order; held states stay at 0 with no duals
+    xstar = [valBy.get(nm, 0) for nm in stateNames]
+    dx = {}
+    for nm in paramNames:
+        col = dxBy.get(nm, [0] * nS)
+        dx[nm] = [col[sIdx[s]] if s in sIdx else 0 for s in stateNames]
+
+    # E and L initial-value parameter-duals for their icSeed rows: dE0/dth =
+    # dEbase*dx[base,th] + (th==exp)*dEexp, dL0/dth = dLbase*dx[base,th]
+    for rc in recastOut:
+        bi = sIdx.get(rc['base'])
+        eD = {}
+        lD = {}
+        for nm in paramNames:
+            dxb = dxBy[nm][bi] if (bi is not None and nm in dxBy) else 0
+            eD[nm] = (rc['dEbase'] * dxb + (rc['dEexp'] if nm == rc['exp'] else 0)) % p
+            lD[nm] = rc['dLbase'] * dxb % p
+        rc['eDual'] = eD
+        rc['lDual'] = lD
+
+    # compose the t0 events onto the seed (value mod p and its parameter-duals)
+    events = list(t0events) if t0events else []
+    if events:
+        idxOfState = {nm: i for i, nm in enumerate(stateNames)}
+        eloc = _build_symbol_table([str(e['value']) for e in events] + list(paramNames))
+        eloc.update(_function_aliases())
+        eparse = _make_parse(eloc)
+        psub = {spy.Symbol(k): spy.Integer(int(v) % p) for k, v in paramVals.items()}
+        for evt in events:
+            X = str(evt['var'])
+            if X not in idxOfState:
+                continue
+            i = idxOfState[X]
+            val = spy.sympify(eparse(str(evt['value'])))
+            v0 = _modp_rational(val.subs(psub), p)
+            vdu = {}
+            for nm in paramNames:
+                d = spy.diff(val, spy.Symbol(nm))
+                vdu[nm] = _modp_rational(d.subs(psub), p) if d != 0 else 0
+            meth = str(evt['method'])
+            if meth == 'replace':
+                xstar[i] = v0
+                for nm in paramNames:
+                    dx[nm][i] = vdu[nm]
+            elif meth == 'add':
+                xstar[i] = (xstar[i] + v0) % p
+                for nm in paramNames:
+                    dx[nm][i] = (dx[nm][i] + vdu[nm]) % p
+            elif meth == 'multiply':
+                old = xstar[i]
+                oldd = {nm: dx[nm][i] for nm in paramNames}
+                xstar[i] = old * v0 % p
+                for nm in paramNames:
+                    dx[nm][i] = (old * vdu[nm] + v0 * oldd[nm]) % p
+    return {'ok': True, 'xstar': xstar, 'dx': dx, 'stateNames': list(stateNames),
+            'recast': recastOut}
+
+
+def _detect_power_atoms(perCond, S):
+    """Find base^exp terms with a non-numeric exponent. base must be a single
+    symbol and exp = c*n (c rational, n a symbol); returns the unique (base, n)
+    pairs, or None if a power is outside this form (then it stays non-rational)."""
+    pairs = set()
+    for (f_c, g_c, ic_c, f_ss) in perCond:
+        for e in list(f_c) + list(g_c) + list(ic_c.values()) + list(f_ss):
+            for pw in spy.sympify(e).atoms(spy.Pow):
+                if pw.exp.is_number:
+                    continue
+                if not pw.base.is_Symbol:
+                    return None
+                c, rest = pw.exp.as_coeff_Mul()
+                if not (rest.is_Symbol and c.is_rational):
+                    return None
+                pairs.add((pw.base, rest))
+    return sorted(pairs, key=lambda t: (str(t[0]), str(t[1])))
+
+
+def _apply_power_recast(pairs, S, perCond):
+    """Recast each base^(c*n) as E^c with E = base^n a new state, and add a
+    companion L = log(base) per base. E' = n*E*base'/base, L' = base'/base when
+    base is a state (0 when it is a parameter). E, L are appended to the state
+    list; f_ss keeps only the real states (E is held generic in the solve)."""
+    Sset = set(S)
+    recast = {}
+    Lof = {}
+    for (base, n) in pairs:
+        recast[(base, n)] = spy.Symbol('_E_%s_%s' % (base, n))
+        if base not in Lof:
+            Lof[base] = spy.Symbol('_L_%s' % base)
+
+    def sub(expr):
+        def repl(pw):
+            if pw.exp.is_number or not pw.base.is_Symbol:
+                return pw
+            c, rest = pw.exp.as_coeff_Mul()
+            E = recast.get((pw.base, rest))
+            return E ** c if E is not None else pw
+        return spy.sympify(expr).replace(lambda x: x.is_Pow, repl)
+
+    extra = [recast[(b, n)] for (b, n) in pairs] + \
+            [Lof[b] for b in sorted(Lof, key=str)]
+    newPerCond = []
+    for (f_c, g_c, ic_c, f_ss) in perCond:
+        f_r = [sub(e) for e in f_c]
+        g_r = [sub(e) for e in g_c]
+        ic_r = {k: sub(v) for k, v in ic_c.items()}
+        ss_r = [sub(e) for e in f_ss]
+        rhsOf = {str(X): f_r[i] for i, X in enumerate(S)}
+        for (b, n) in pairs:
+            E = recast[(b, n)]
+            brhs = rhsOf.get(str(b), spy.Integer(0))
+            ic_r[str(E)] = E
+            f_r.append(n * E * brhs / b if brhs != 0 else spy.Integer(0))
+        for b in sorted(Lof, key=str):
+            L = Lof[b]
+            brhs = rhsOf.get(str(b), spy.Integer(0))
+            ic_r[str(L)] = L
+            f_r.append(brhs / b if brhs != 0 else spy.Integer(0))
+        newPerCond.append((f_r, g_r, ic_r, ss_r))
+    meta = [{'E': str(recast[(b, n)]), 'L': str(Lof[b]),
+             'base': str(b), 'exp': str(n)} for (b, n) in pairs]
+    return list(S) + extra, newPerCond, meta
+
+
+def recastBacksub(expr, eNames, lNames, bases, exps):
+    """Substitute the recast coordinates of a reconstructed direction back to
+    their meaning, E -> base**exp and L -> log(base), and cancel. `expr` is a
+    rational expression string; the name vectors are aligned per recast atom."""
+    e = parse_expr(_clean(str(expr)), local_dict={}, evaluate=True)
+    asList = lambda v: list(v) if isinstance(v, (list, tuple)) else [v]
+    subs = {}
+    for E, L, base, exp in zip(asList(eNames), asList(lNames),
+                               asList(bases), asList(exps)):
+        b = spy.Symbol(str(base))
+        subs[spy.Symbol(str(E))] = b ** spy.sympify(str(exp))
+        subs[spy.Symbol(str(L))] = spy.log(b)
+    return str(spy.cancel(e.subs(subs)))
+
+
+def compileObservabilityTapeMulti(model, observation, conditionSubs, conditionIC0,
+                                  fixed=None, parameters=None, backend='sympy',
+                                  equilibrate=False, forcings=None):
+    """Compile one observability tape per experimental condition over a shared
+    coordinate space, for the multi-condition observability path.
+
+    The base `model` and `observation` are symbolic. `conditionSubs` is a list
+    (one entry per condition) of {symbol: replacement} maps: a numeric
+    replacement bakes that symbol to a constant in the condition, a symbol
+    replacement renames it (e.g. a knockdown-specific rate), and pre-equilibration
+    switches enter here too. `conditionIC0` is a list of {state: expression} maps
+    giving the start-point (t0+) initial condition of each state in each
+    condition, already composed in R from the steady state / `initial` and the
+    t0 events; an entry may be a symbol, a number, or an arbitrary rational
+    expression in the parameters. A state with no entry starts free (its own
+    unknown initial value).
+
+    Returns the per-condition tapes (each carrying a small IC tape that seeds the
+    state initial values, with their parameter-duals, at order 0) plus the shared
+    leaf/state layout, the dual-carrying coordinates z = free state initial values
+    + free parameters (excluding `fixed`), and their names. A non-rational
+    right-hand side, observable or initial condition returns
+    {'ok': False, 'nonrational': ...}."""
+    _select_backend(backend)
+    model = _as_list(model)
+    observation = _as_list(observation)
+    conditionSubs = conditionSubs or []
+    conditionIC0 = conditionIC0 or []
+    forcings = set(_as_list(forcings))
+    K = len(conditionSubs)
+
+    extra = []
+    for d in conditionSubs:
+        for k, v in dict(d).items():
+            extra += [str(k), str(v)]
+    for d in conditionIC0:
+        for k, v in dict(d).items():
+            extra += [str(k), str(v)]
+    all_lines = model + observation + _as_list(parameters) + extra
+    local = _build_symbol_table(all_lines)
+    local.update(_function_aliases())
+    parse = _make_parse(local)
+
+    variables, diffEquations, _ = _read_equations(model, parse)
+    obsVars, obsFunctions, _ = _read_equations(observation, parse)
+    fixedNames = set(str(s) for s in
+                     [local.get(nm, spy.Symbol(nm)) for nm in _as_list(fixed)])
+
+    isConst = [spy.sympify(e) == 0 for e in diffEquations]
+    S = [variables[i] for i in range(len(variables)) if not isConst[i]]
+    Srhs = [spy.sympify(diffEquations[i]) for i in range(len(variables))
+            if not isConst[i]]
+    nS = len(S)
+
+    def pval(s):
+        return spy.sympify(parse(str(s)))
+
+    perCond = []
+    for c in range(K):
+        subsMap = {}
+        for k, v in dict(conditionSubs[c]).items():
+            subsMap[local.get(str(k), spy.Symbol(str(k)))] = pval(v)
+        ic0 = dict(conditionIC0[c]) if c < len(conditionIC0) else {}
+        f_c = [e.subs(subsMap) for e in Srhs]
+        g_c = [spy.sympify(e).subs(subsMap) for e in obsFunctions]
+        # resting-state model for the equilibrate solve: forcings at 0, no events,
+        # non-forcing per-condition substitutions baked in
+        forcZero = {local.get(nm, spy.Symbol(nm)): spy.Integer(0) for nm in forcings}
+        subsMapNF = {k: v for k, v in subsMap.items() if str(k) not in forcings}
+        f_ss = [e.subs(subsMapNF).subs(forcZero) for e in Srhs]
+        ic_c = {}
+        for X in S:
+            e = pval(ic0[str(X)]) if str(X) in ic0 else X
+            ic_c[str(X)] = spy.sympify(e).subs(subsMap)
+        perCond.append((f_c, g_c, ic_c, f_ss))
+
+    # power/Hill recast (equilibrate only): replace base^exp (exp a parameter) by
+    # a state E with E' = exp*E*base'/base and a companion L = log(base). Both are
+    # held generic in the f = 0 solve and excluded from z, so f stays rational and
+    # the log enters only through the generic L coordinate (sound by the algebraic
+    # independence of base, log(base) and base^exp).
+    nReal = nS
+    powerRecast = []
+    if equilibrate:
+        pairs = _detect_power_atoms(perCond, S)
+        if pairs is None:
+            return {'ok': False, 'nonrational':
+                    ['unsupported power form: base must be a symbol and exponent c*param']}
+        if pairs:
+            S, perCond, powerRecast = _apply_power_recast(pairs, S, perCond)
+            nS = len(S)
+
+    nonrational = []
+    for (f_c, g_c, ic_c, f_ss) in perCond:
+        for X, e in zip(S, f_c):
+            if not _is_rational_expr(e):
+                nonrational.append('d%s/dt = %s' % (X, e))
+        for y, e in zip(obsVars, g_c):
+            if not _is_rational_expr(e):
+                nonrational.append('%s = %s' % (y, e))
+        for X in S:
+            if not _is_rational_expr(ic_c[str(X)]):
+                nonrational.append('%s(0) = %s' % (X, ic_c[str(X)]))
+    if nonrational:
+        return {'ok': False, 'nonrational': nonrational}
+
+    # a state carries a free initial-value leaf when its initial condition still
+    # depends on the state symbol itself (a bare free value, or a free value with
+    # an additive/multiplicative dose composed on top). In constraint mode no
+    # state is a free coordinate: every state is seeded numerically from the
+    # interior steady-state point per evaluation point and prime (icSeed).
+    freeState = {str(X): False for X in S}
+    if not equilibrate:
+        for (f_c, g_c, ic_c, f_ss) in perCond:
+            for X in S:
+                if X in spy.sympify(ic_c[str(X)]).free_symbols:
+                    freeState[str(X)] = True
+
+    # f_ss is included so parameters the perturbed dynamics drop still count
+    paramset = set()
+    for (f_c, g_c, ic_c, f_ss) in perCond:
+        for e in list(f_c) + list(g_c) + list(ic_c.values()) + list(f_ss):
+            paramset |= set(spy.sympify(e).free_symbols)
+    paramset -= set(S)
+    params = sorted(paramset, key=spy.default_sort_key)
+
+    freeStates = [X for X in S if freeState[str(X)]]
+    leafNames = [str(X) for X in freeStates] + [str(s) for s in params]
+    leafSlot = {nm: i for i, nm in enumerate(leafNames)}
+    nLeaves = len(leafNames)
+    slotOf = dict(leafSlot)
+    for i in range(nS):
+        slotOf[str(S[i])] = nLeaves + i
+    base = nLeaves + nS
+
+    tapes = []
+    for (f_c, g_c, ic_c, f_ss) in perCond:
+        try:
+            op, a, b, cnum, cden, outslots = _emit_tape_shared(f_c, g_c, slotOf, base)
+        except _NotRational:
+            return {'ok': False}
+        fOut = outslots[:nS]
+        tape = {
+            'op': op, 'a': a, 'b': b, 'cnum': cnum, 'cden': cden,
+            'stateSlots': [nLeaves + i for i in range(nS)],
+            'fOut': fOut,
+            'gOut': outslots[nS:nS + len(g_c)],
+            'icLeaf': [-1] * nS, 'icNum': ['0'] * nS, 'icDen': ['1'] * nS,
+            # substituted dynamics and observation of this condition, for the
+            # multi-condition scaling peel
+            'modelLines': ['%s = %s' % (str(S[i]), spy.sympify(f_c[i]))
+                           for i in range(nS)],
+            'obsLines': ['%s = %s' % (str(obsVars[j]), spy.sympify(g_c[j]))
+                         for j in range(len(g_c))],
+        }
+        if equilibrate:
+            # the states are seeded per condition from the steady-state point and
+            # its IFT parameter-duals via icSeed, so no IC tape is built; carry the
+            # resting field (real states only) for the solver.
+            tape['constraintModel'] = ['%s = %s' % (str(S[i]), spy.sympify(f_ss[i]))
+                                       for i in range(nReal)]
+        if not equilibrate:
+            try:
+                icOp, icA, icB, icCnum, icCden, icOut = _emit_tape_shared(
+                    [ic_c[str(X)] for X in S], [], leafSlot, nLeaves)
+            except _NotRational:
+                return {'ok': False}
+            tape.update({'icOp': icOp, 'icA': icA, 'icB': icB,
+                         'icCnum': icCnum, 'icCden': icCden, 'icOut': icOut})
+        tapes.append(tape)
+
+    zStateNames = [str(X) for X in freeStates if str(X) not in fixedNames]
+    zParamNames = [str(s) for s in params if str(s) not in fixedNames]
+    znames = zStateNames + zParamNames
+    zSlots = [leafSlot[nm] for nm in znames]
+
+    out = {
+        'ok': True,
+        'tapes': tapes,
+        'nLeaves': nLeaves,
+        'nStates': nS,
+        'zSlots': zSlots,
+        'znames': znames,
+        'leafNames': leafNames,
+    }
+    if equilibrate:
+        out['equilibrate'] = True
+        out['stateNames'] = [str(X) for X in S]
+        out['paramNames'] = [str(s) for s in params]
+        out['forcings'] = sorted(forcings)
+        out['realStateNames'] = [str(X) for X in S[:nReal]]
+        out['powerRecast'] = powerRecast
+    return out
+
+
+###########################################################################
+#####################     scaling symmetries     ########################
+###########################################################################
+
+def _poly_monomials(expr, zvars):
+    """Numerator and denominator monomial-exponent lists of expr over zvars
+    (other symbols are treated as weight-zero coefficients). Raises if expr is
+    not rational-polynomial in zvars."""
+    e = spy.together(spy.sympify(expr))
+    p, q = spy.fraction(e)
+    pe = spy.Poly(spy.expand(p), *zvars).as_dict()
+    qe = spy.Poly(spy.expand(q), *zvars).as_dict()
+    return list(pe.keys()), list(qe.keys())
+
+
+def _scaling_rows(diffEquations, obsFunctions, m, zvars, interOffset):
+    """Sparse monomial-exponent rows of one (f, g) system for the scaling kernel:
+    weight columns 0..nz-1 are shared over zvars, intermediate columns run from
+    interOffset. Returns (rows, ninter, skipped); each row is a {col: coeff} map."""
+    nz = len(zvars)
+    exprs = []          # (numer monomials, denom monomials, target weight vector)
+    skipped = 0
+    for g in obsFunctions:
+        try:
+            pmon, qmon = _poly_monomials(g, zvars)
+        except Exception:
+            skipped += 1
+            continue
+        exprs.append((pmon, qmon, [0] * nz))
+    for i in range(m):
+        try:
+            pmon, qmon = _poly_monomials(diffEquations[i], zvars)
+        except Exception:
+            skipped += 1
+            continue
+        tvec = [0] * nz
+        tvec[i] = 1     # state i is column i of zvars; x_i has weight c_i
+        exprs.append((pmon, qmon, tvec))
+
+    rows = []
+    for k, (pmon, qmon, tvec) in enumerate(exprs):
+        wp, wq = interOffset + 2 * k, interOffset + 2 * k + 1
+        for a in pmon:                       # a . c - wp = 0
+            row = {j: int(a[j]) for j in range(nz) if a[j]}
+            row[wp] = -1
+            rows.append(row)
+        for b in qmon:                       # b . c - wq = 0
+            row = {j: int(b[j]) for j in range(nz) if b[j]}
+            row[wq] = -1
+            rows.append(row)
+        row = {j: -int(tvec[j]) for j in range(nz) if tvec[j]}  # wp - wq - t.c = 0
+        row[wp], row[wq] = 1, -1
+        rows.append(row)
+    return rows, 2 * len(exprs), skipped
+
+
+def _materialize_rows(rows, ncols):
+    """Dense matrix (list of lists) from sparse {col: coeff} rows."""
+    out = []
+    for r in rows:
+        dense = [0] * ncols
+        for c, v in r.items():
+            dense[c] = v
+        out.append(dense)
+    return out
+
+
+def _scaling_gens(rows, ncols, nz):
+    """Reduced integer generators (primitive, over the first nz weight columns)
+    of the scaling kernel given the determining rows."""
+    basis = exactNullspace(rows, ncols) if rows else []
+    cvecs = [[v[j] for j in range(nz)] for v in basis
+             if any(v[j] != 0 for j in range(nz))]
+    gens = []
+    if cvecs:
+        red, _ = spy.Matrix(cvecs).rref()
+        for r in range(red.rows):
+            row = [red[r, j] for j in range(nz)]
+            if all(x == 0 for x in row):
+                continue
+            L = 1
+            for x in row:
+                L = spy.ilcm(L, spy.Rational(x).q)
+            ints = [int(spy.Rational(x) * L) for x in row]
+            d = 0
+            for x in ints:
+                d = spy.igcd(d, x)
+            if d:
+                ints = [x // d for x in ints]
+            gens.append(ints)
+    return gens
+
+
+def _scaling_nonid(gens, znames, nz):
+    """Scaling entries (support, integer vector, type) from generators."""
+    nonId = []
+    for c in gens:
+        comp = {znames[j]: c[j] for j in range(nz) if c[j] != 0}
+        nonId.append({'support': sorted(comp.keys()),
+                      'vector': {k: str(v) for k, v in comp.items()},
+                      'type': 'scaling'})
+    return nonId
+
+
+def scalingSymmetries(allVariables, diffEquations, obsFunctions, m, params,
+                      fixed=(), verbose=True):
+    """Exact scaling (toric) symmetries z_i -> lam^{c_i} z_i via the integer
+    kernel of the monomial-exponent conditions: every observable is invariant
+    and every f_i scales with the weight of x_i. Pure linear algebra over the
+    integers, so it is exact and scales to large models with no expression
+    swell. Returns only the scaling part of the symmetry algebra. Symbols in
+    `fixed` are known and may not scale, so their weight is forced to zero."""
+    zvars = list(allVariables[:m]) + list(params)
+    nz = len(zvars)
+    znames = [str(s) for s in zvars]
+    fixedset = set(str(s) for s in fixed)
+
+    sparse, ninter, skipped = _scaling_rows(diffEquations, obsFunctions, m, zvars, nz)
+    ncols = nz + ninter
+    rows = _materialize_rows(sparse, ncols)
+    for j in range(nz):                      # a fixed coordinate does not scale
+        if znames[j] in fixedset:
+            row = [0] * ncols
+            row[j] = 1
+            rows.append(row)
+
+    nonId = _scaling_nonid(_scaling_gens(rows, ncols, nz), znames, nz)
+
+    if verbose:
+        print('-' * 60)
+        print('%d scaling symmetry/ies (exact integer kernel)%s:'
+              % (len(nonId), '' if not skipped else
+                 ', %d non-polynomial term(s) skipped' % skipped))
+        for d in nonId:
+            print('  ' + ', '.join('%s^(%s)' % (k, d['vector'][k])
+                                   for k in d['support']))
+
+    return {
+        'method': 'scaling',
+        'count': len(nonId),
+        'nonIdentifiable': nonId,
+    }
+
+
+def scalingSymmetriesMulti(perCondModel, perCondObs, inputs=None, fixed=None):
+    """Scaling symmetries common to every condition: the integer kernel of the
+    monomial-exponent conditions of all conditions, stacked over a shared weight
+    space (each condition contributes its own intermediate columns). The kernel
+    of the stack is the intersection of the per-condition scaling lattices, so a
+    returned scaling is a symmetry of every condition. Coordinates are the shared
+    dynamic states plus the parameters; `inputs` and `fixed` symbols do not scale.
+    Returns scalings keyed by coordinate name (states and parameters)."""
+    perCondModel = [_as_list(m) for m in perCondModel]
+    perCondObs = [_as_list(o) for o in perCondObs]
+    inputset = set(_as_list(inputs))
+    fixedset = set(_as_list(fixed))
+    K = len(perCondModel)
+    if K == 0:
+        return {'method': 'scaling', 'count': 0, 'nonIdentifiable': []}
+
+    all_lines = [l for lines in perCondModel + perCondObs for l in lines]
+    local = _build_symbol_table(all_lines)
+    local.update(_function_aliases())
+    parse = _make_parse(local)
+
+    stateNames = [_clean(l).split('=', 1)[0].strip() for l in perCondModel[0]]
+    stateSyms = [local.get(nm, spy.Symbol(nm)) for nm in stateNames]
+
+    perF, perG, paramset = [], [], set()
+    for c in range(K):
+        rhs = {}
+        for l in perCondModel[c]:
+            lhs, expr = _clean(l).split('=', 1)
+            rhs[lhs.strip()] = spy.sympify(parse(expr))
+        f = [rhs[nm] for nm in stateNames]
+        g = [spy.sympify(parse(_clean(l).split('=', 1)[1])) for l in perCondObs[c]]
+        perF.append(f)
+        perG.append(g)
+        for e in f + g:
+            paramset |= set(spy.sympify(e).free_symbols)
+
+    paramset -= set(stateSyms)
+    paramset -= {local.get(nm, spy.Symbol(nm)) for nm in inputset}
+    params = sorted(paramset, key=spy.default_sort_key)
+    zvars = stateSyms + params
+    nz = len(zvars)
+    znames = [str(s) for s in zvars]
+    m = len(stateSyms)
+
+    rows, interOffset = [], nz
+    for c in range(K):
+        sparse, ninter, _ = _scaling_rows(perF[c], perG[c], m, zvars, interOffset)
+        rows.extend(sparse)
+        interOffset += ninter
+    ncols = interOffset
+    dense = _materialize_rows(rows, ncols)
+    for j in range(nz):
+        if znames[j] in fixedset:
+            row = [0] * ncols
+            row[j] = 1
+            dense.append(row)
+
+    nonId = _scaling_nonid(_scaling_gens(dense, ncols, nz), znames, nz)
+    return {'method': 'scaling', 'count': len(nonId), 'nonIdentifiable': nonId}
+
+
+###########################################################################
+#####################     R entry point     ##############################
+###########################################################################
+
+def symmetryDetectiondMod(model, observation, prediction=None, initial=None,
+                          ansatz='uni', pMax=2, inputs=None, fixed=None,
+                          parallel=1, allTrafos=False,
+                          ssEquations=None, lieOrder=0, exact=True,
+                          verify=True, backend='sympy', parameters=None,
+                          method='liesym', point=None, symbolic=False):
+    global _EXACT
+    _EXACT = bool(exact)
+    _select_backend(backend)
+
+    model = _as_list(model)
+    observation = _as_list(observation)
+    prediction = _as_list(prediction)
+    initial = _as_list(initial)
+    ssEquations = _as_list(ssEquations)
+    inputNames = _as_list(inputs)
+    fixedNames = _as_list(fixed)
+    extraParams = _as_list(parameters)
+
+    all_lines = (model + observation + prediction + initial + ssEquations
+                 + inputNames + fixedNames + extraParams)
+    local = _build_symbol_table(all_lines)
+    local.update(_function_aliases())
+    parse = _make_parse(local)
+
+    sys.stdout.write('\nReading input...')
+    sys.stdout.flush()
+
+    variables, diffEquations, params = _read_equations(model, parse)
+
+    observables, obsFunctions, params = _read_observation(
+        observation, variables, params, parse)
+
+    if initial:
+        initFunctions, params = _read_initial(initial, variables, params, parse)
+    else:
+        initFunctions = []
+
+    if prediction:
+        predictions, predFunctions = _read_predictions(
+            prediction, variables, params, parse)
+    else:
+        predictions, predFunctions = [], []
+
+    # steady-state-initial field (forcings already zeroed on the R side),
+    # aligned to the dynamic state order
+    ssFunctions = []
+    if ssEquations:
+        ssVars, ssFun, _ = _read_equations(ssEquations, parse)
+        ssMap = {str(ssVars[i]): ssFun[i] for i in range(len(ssVars))}
+        ssFunctions = [ssMap.get(str(v), spy.Integer(0)) for v in variables]
+
+    # explicit parameters
+    for pn in extraParams:
+        s = local.get(pn, spy.Symbol(pn))
+        if s not in params and s not in variables:
+            params.append(s)
+
+    inputSyms = [local.get(nm, spy.Symbol(nm)) for nm in inputNames]
+    fixedSyms = [local.get(nm, spy.Symbol(nm)) for nm in fixedNames]
+    for s in inputSyms:
+        if s in params:
+            params.remove(s)
+
+    # a declared input that is also a state (a known switch) is a constant, not
+    # a dynamic variable: drop its equation so it appears once, as an input
+    keep = [i for i, v in enumerate(variables) if v not in inputSyms]
+    variables = [variables[i] for i in keep]
+    diffEquations = [diffEquations[i] for i in keep]
+
+    allVariables = list(variables) + list(inputSyms) + list(params)
+
+    sys.stdout.write('done\n')
+    sys.stdout.flush()
+
+    if str(method) == 'scaling':
+        return scalingSymmetries(
+            allVariables, diffEquations, obsFunctions, len(variables), params,
+            fixed=fixedSyms)
+
+    return symmetryDetection(
+        allVariables, diffEquations, observables, obsFunctions, initFunctions,
+        predictions, predFunctions, ssFunctions, ansatz=ansatz, pMax=int(pMax),
+        inputs=inputSyms, fixed=fixedSyms, lieOrder=int(lieOrder),
+        allTrafos=bool(allTrafos), verify=bool(verify))
+
+
+def _read_observation(observation, variables, parameters, parse):
+    obsVars, obsFunctions, obsParameters = _read_equations(observation, parse)
+    for var in variables:
+        if var in obsParameters:
+            obsParameters.remove(var)
+    for par in parameters:
+        if par in obsParameters:
+            obsParameters.remove(par)
+    return obsVars, obsFunctions, parameters + obsParameters
+
+
+def _read_initial(initial, variables, parameters, parse):
+    initVars, initFunctions, initParameters = _read_equations(initial, parse)
+    o = len(initVars)
+    m = len(variables)
+    i = 0
+    while i < len(initParameters):
+        if initParameters[i] in variables + parameters:
+            initParameters.pop(i)
+        else:
+            i += 1
+    for i in range(o):
+        if initVars[i] == initFunctions[i]:
+            initFunctions[i] = spy.Symbol(str(initVars[i]) + '_0')
+            initParameters.append(initFunctions[i])
+    substituted = True
+    counter = 0
+    while substituted:
+        substituted = False
+        for k in range(o):
+            for j in range(o):
+                if initFunctions[k].has(initVars[j]):
+                    initFunctions[k] = initFunctions[k].subs(initVars[j], initFunctions[j])
+                    substituted = True
+        counter += 1
+        if counter > 100:
+            raise UserWarning('Infinite recursion in the initial value functions')
+    initFunctionsOrdered = [0] * m
+    for i in range(m):
+        try:
+            initFunctionsOrdered[i] = initFunctions[initVars.index(variables[i])]
+        except ValueError:
+            initFunctionsOrdered[i] = spy.Symbol(str(variables[i]) + '_0')
+            initParameters.append(initFunctionsOrdered[i])
+    return initFunctionsOrdered, parameters + initParameters
+
+
+def _read_predictions(prediction, variables, parameters, parse):
+    predVars, predFunctions, predParameters = _read_equations(prediction, parse)
+    i = 0
+    while i < len(predParameters):
+        if predParameters[i] in variables + parameters:
+            predParameters.pop(i)
+        else:
+            i += 1
+    if len(predParameters) != 0:
+        raise UserWarning('New parameters occured in predictions: ' + str(predParameters))
+    return predVars, predFunctions
