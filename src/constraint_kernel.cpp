@@ -1,17 +1,17 @@
 // dMod constraintL2 + datapointL2 C++ kernels.
 //
 // constraintL2_scalar_kernel: prior penalty (p - mu)^2 / sigma^2 + (est?
-//   2 log sigma : 0). Mirrors R/objClass.R::constraintL2 scalar path.
-//   Supports the dP chain rule and the dP2 exact-second-order term.
+//   2 log sigma : 0). Supports the dP chain rule and the dP2 exact-second-order
+//   term. With deriv = false only the value is returned.
 //
 // datapointL2_kernel: single-data-point L2 penalty (pred - target)^2 / sigma^2
 //   for a single (condition, time, observable) cell against a target value
-//   which is itself a parameter. Mirrors R/objClass.R::datapointL2.
+//   which is itself a parameter. With deriv = false only value and prediction
+//   are returned.
 //
 // constraintL2_mvn_kernel: multivariate Gaussian prior over per-subject eta
-// blocks; Cholesky-parametrized Omega. Mirrors R/objClass.R::constraintL2_mvn.
-// Eta + chol parameter blocks, GN Hessian in z-space, with full
-// chain-rule via dP and exact dP2 contribution.
+// blocks; Cholesky-parametrized Omega. Eta + chol parameter blocks, GN Hessian
+// in z-space, with full chain-rule via dP and exact dP2 contribution.
 
 #include "residual_kernel.h"
 
@@ -108,7 +108,8 @@ List constraintL2_scalar_kernel(
     NumericVector mu,
     NumericVector sigma,                // length = length(mu_names); when est, holds 0.0 for est-rows
     CharacterVector sigma_pars,         // names of sigma params (empty string if fixed)
-    bool est) {
+    bool est,
+    bool deriv = true) {
 
   // Build allp lookup: name -> value
   // pars carries the outer (theta) parameter values when dP is given;
@@ -170,6 +171,13 @@ List constraintL2_scalar_kernel(
     }
     value += (r_vec[i] / sg_vec[i]) * (r_vec[i] / sg_vec[i]);
     if (est) value += 2.0 * std::log(sg_vec[i]);
+  }
+
+  if (!deriv) {
+    return List::create(
+        Named("value")    = value,
+        Named("gradient") = R_NilValue,
+        Named("hessian")  = R_NilValue);
   }
 
   // Compute inner gradient gi (length n_inner_full) + inner Hessian.
@@ -290,7 +298,8 @@ List datapointL2_kernel(
     std::string obs_name,                // single observable name
     double t,
     double sigma,
-    std::string value_par) {             // name of pouter param that holds the data target value
+    std::string value_par,               // name of pouter param that holds the data target value
+    bool deriv = true) {
 
   CharacterVector pouter_names = pouter.names();
   const int n_p = pouter.size();
@@ -331,6 +340,14 @@ List datapointL2_kernel(
   const double res = pred - target;
   const double sigma2 = sigma * sigma;
   const double value = (res / sigma) * (res / sigma);
+
+  if (!deriv) {
+    return List::create(
+        Named("value")      = value,
+        Named("gradient")   = R_NilValue,
+        Named("hessian")    = R_NilValue,
+        Named("prediction") = pred);
+  }
 
   // 4. dres/dp: -1 for the value_par, dpred/dp for the structural pars
   std::vector<double> dres_dp(n_p, 0.0);

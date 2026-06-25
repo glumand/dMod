@@ -14,5 +14,5 @@
 #' @importFrom utils globalVariables
 #' @noRd
 .onLoad <- function(libname, pkgname) {
-  reticulate::py_require(c("python-libsbml", "sympy", "scipy", "numpy"))
+  reticulate::py_require(c("python-libsbml", "sympy", "scipy", "numpy", "symengine"))
 }

@@ -13,12 +13,12 @@ bmm_bb <- function(A, B, Bn, M, K, N) {
     .Call(`_dMod_bmm_bb`, A, B, Bn, M, K, N)
 }
 
-constraintL2_scalar_kernel <- function(pars, dP_opt, dP2_opt, inner_par_names, fixed_opt, mu_names, mu, sigma, sigma_pars, est) {
-    .Call(`_dMod_constraintL2_scalar_kernel`, pars, dP_opt, dP2_opt, inner_par_names, fixed_opt, mu_names, mu, sigma, sigma_pars, est)
+constraintL2_scalar_kernel <- function(pars, dP_opt, dP2_opt, inner_par_names, fixed_opt, mu_names, mu, sigma, sigma_pars, est, deriv = TRUE) {
+    .Call(`_dMod_constraintL2_scalar_kernel`, pars, dP_opt, dP2_opt, inner_par_names, fixed_opt, mu_names, mu, sigma, sigma_pars, est, deriv)
 }
 
-datapointL2_kernel <- function(pouter, fixed_opt, prdf, dpred_attr_opt, d2pred_attr_opt, obs_name, t, sigma, value_par) {
-    .Call(`_dMod_datapointL2_kernel`, pouter, fixed_opt, prdf, dpred_attr_opt, d2pred_attr_opt, obs_name, t, sigma, value_par)
+datapointL2_kernel <- function(pouter, fixed_opt, prdf, dpred_attr_opt, d2pred_attr_opt, obs_name, t, sigma, value_par, deriv = TRUE) {
+    .Call(`_dMod_datapointL2_kernel`, pouter, fixed_opt, prdf, dpred_attr_opt, d2pred_attr_opt, obs_name, t, sigma, value_par, deriv)
 }
 
 constraintL2_mvn_kernel <- function(pars, fixed_opt, dP_opt, dP2_opt, inner_par_names, K, N, all_eta_names, mu, L_lower, include_chol_block) {

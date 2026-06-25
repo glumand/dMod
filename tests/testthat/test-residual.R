@@ -326,39 +326,43 @@ test_that("BLOQ M3 + use_deriv2_exact Hessian matches finite-difference Hessian"
 })
 
 
-test_that("BLOQ M4NM + use_deriv2_exact: kernel adds d2pred contribution", {
+# The M4* BLOQ contribution -2 log(1 - Phi(wr)/Phi(w0)) has an exact analytic
+# Hessian (not a Gauss-Newton surrogate). Validate it against finite differences
+# for both M4NM and M4BEAL (which share the BLOQ formula) and for fixed and
+# parameter-dependent (curved) sigma. This also exercises the d2pred / d2sigma
+# exact-Hessian path.
+test_that("BLOQ M4NM/M4BEAL + use_deriv2_exact Hessian matches finite-difference Hessian", {
   skip_if_not_installed("numDeriv")
-  # NOTE: the M4-mode Hessian is not a clean "Newton-minus-d2-wr"
-  # Gauss-Newton form (the GN parts use specific A1..A6 coefficients whose
-  # sum does not equal the f''-outer-product of the true Newton Hessian).
-  # So even with use_deriv2_exact = TRUE we cannot expect the C++ kernel to
-  # match the FD Hessian exactly under M4 modes; what we DO get back from the
-  # d2 path is the f' * d^2 pred contribution that the GN form drops. We
-  # verify that contribution is non-trivial and that the
-  # Hessian remains symmetric.
-  setup <- make_setup(n_obs = 0, n_par = 3, sigma_dep = FALSE,
-                      n_bloq = 8, seed = 9L)
-  opts <- default_opts()
-  opts$bloq_mode <- "M4NM"
+  for (mode in c("M4NM", "M4BEAL")) {
+    for (sigma_dep in c(FALSE, TRUE)) {
+      setup <- make_setup(n_obs = 0, n_par = 3, sigma_dep = sigma_dep,
+                          n_bloq = 8, seed = 9L, sigma_curved = sigma_dep)
+      obj_fn <- function(theta) {
+        m  <- eval_model(setup, theta)
+        wr <- (m$pred - setup$y_data) / m$sigma
+        w0 <- m$pred / m$sigma
+        sum(-2 * log(1 - stats::pnorm(wr) / stats::pnorm(w0)))
+      }
+      H_fd <- numDeriv::hessian(obj_fn, setup$theta0, method = "Richardson")
 
-  opts$use_deriv2_exact <- FALSE
-  cpp_gn <- dMod:::residual_kernel_bloq(
-    pred = setup$pred0, dpred = setup$dpred0, d2pred = NULL,
-    y_data = setup$y_data, sigma = setup$sigma0,
-    dsigma = NULL, d2sigma = NULL, lloq = setup$lloq, opts = opts
-  )
-  opts$use_deriv2_exact <- TRUE
-  cpp_ex <- dMod:::residual_kernel_bloq(
-    pred = setup$pred0, dpred = setup$dpred0, d2pred = setup$Q,
-    y_data = setup$y_data, sigma = setup$sigma0,
-    dsigma = NULL, d2sigma = NULL, lloq = setup$lloq, opts = opts
-  )
-  # The d2 path must change the Hessian (else the code path is dead).
-  expect_gt(max(abs(cpp_ex$hessian - cpp_gn$hessian)), 1e-6,
-            label = "M4NM deriv2 changes Hessian")
-  # Symmetry preserved.
-  expect_lt(max(abs(cpp_ex$hessian - t(cpp_ex$hessian))), 1e-12,
-            label = "M4NM deriv2 symmetry")
+      opts <- default_opts()
+      opts$use_deriv2_exact     <- TRUE
+      opts$bloq_mode            <- mode
+      opts$sigma_depends_on_par <- sigma_dep
+      opts$d2sigma_present      <- sigma_dep
+      cpp <- dMod:::residual_kernel_bloq(
+        pred = setup$pred0, dpred = setup$dpred0, d2pred = setup$Q,
+        y_data = setup$y_data, sigma = setup$sigma0,
+        dsigma  = if (sigma_dep) setup$dsigma0 else NULL,
+        d2sigma = if (sigma_dep) setup$Q_sigma else NULL,
+        lloq = setup$lloq, opts = opts
+      )
+      label <- sprintf("%s BLOQ deriv2 FD-Hess sigma_dep=%s", mode, sigma_dep)
+      expect_lt(max(abs(cpp$hessian - H_fd)), 1e-4, label = label)
+      expect_lt(max(abs(cpp$hessian - t(cpp$hessian))), 1e-12,
+                label = paste0(label, " symmetry"))
+    }
+  }
 })
 
 
@@ -393,32 +397,37 @@ test_that("ALOQ d2sigma + d2pred Hessian matches finite-difference Hessian", {
 })
 
 
-# ---- BLOQ M4NM d2sigma smoke ----
-# Confirms the d2sigma code path is wired up for M4 modes and produces a
-# different Hessian than the d2sigma-free run.
-test_that("BLOQ M4NM d2sigma path changes the Hessian", {
-  setup <- make_setup(n_obs = 0, n_par = 3, sigma_dep = TRUE,
-                      n_bloq = 8, seed = 17L, sigma_curved = TRUE)
+# ---- M4BEAL ALOQ correction: exact second-order FD validation ----
+# M4BEAL adds +2 log Phi(w0) to every ALOQ row (truncation of the normal at 0).
+# Its gradient and full Hessian, including the d2pred / d2sigma exact terms, are
+# analytic and must match the finite-difference Hessian of the truncated
+# objective wr^2 + log(2 pi sigma^2) + 2 log Phi(pred/sigma).
+test_that("ALOQ M4BEAL + use_deriv2_exact Hessian matches finite-difference Hessian", {
+  skip_if_not_installed("numDeriv")
+  setup <- make_setup(n_obs = 8, n_par = 3, sigma_dep = TRUE,
+                      n_bloq = 0, seed = 23L, sigma_curved = TRUE)
+  obj_fn <- function(theta) {
+    m  <- eval_model(setup, theta)
+    wr <- (m$pred - setup$y_data) / m$sigma
+    w0 <- m$pred / m$sigma
+    sum(wr^2 + log(2 * pi * m$sigma^2) + 2 * stats::pnorm(w0, log.p = TRUE))
+  }
+  H_fd <- numDeriv::hessian(obj_fn, setup$theta0, method = "Richardson")
+
   opts <- default_opts()
-  opts$bloq_mode            <- "M4NM"
   opts$use_deriv2_exact     <- TRUE
+  opts$bloq_mode            <- "M4BEAL"
   opts$sigma_depends_on_par <- TRUE
-  cpp_nosig <- dMod:::residual_kernel_bloq(
-    pred = setup$pred0, dpred = setup$dpred0, d2pred = setup$Q,
-    y_data = setup$y_data, sigma = setup$sigma0,
-    dsigma = setup$dsigma0, d2sigma = NULL,
-    lloq = setup$lloq, opts = opts
-  )
-  cpp_sig <- dMod:::residual_kernel_bloq(
+  opts$d2sigma_present      <- TRUE
+  cpp <- dMod:::residual_kernel_aloq(
     pred = setup$pred0, dpred = setup$dpred0, d2pred = setup$Q,
     y_data = setup$y_data, sigma = setup$sigma0,
     dsigma = setup$dsigma0, d2sigma = setup$Q_sigma,
-    lloq = setup$lloq, opts = opts
+    lloq = NULL, opts = opts
   )
-  expect_gt(max(abs(cpp_sig$hessian - cpp_nosig$hessian)), 1e-6,
-            label = "M4NM d2sigma changes Hessian")
-  expect_lt(max(abs(cpp_sig$hessian - t(cpp_sig$hessian))), 1e-12,
-            label = "M4NM d2sigma symmetry")
+  expect_lt(max(abs(cpp$hessian - H_fd)), 1e-4, label = "M4BEAL ALOQ d2 FD-Hess")
+  expect_lt(max(abs(cpp$hessian - t(cpp$hessian))), 1e-12,
+            label = "M4BEAL ALOQ d2 symmetry")
 })
 
 

@@ -1,30 +1,23 @@
-# -------------------------------------------------
-# R / RStudio
-# -------------------------------------------------
+# RStudio / R session
 .Rproj.user/
 .Rhistory
 .RData
-.Rbuildignore
 
-# -------------------------------------------------
-# Git / Editor
-# -------------------------------------------------
-.gitignore.swp
+# Editor and OS
+*.swp
 .DS_Store
 Thumbs.db
 
-# -------------------------------------------------
-# R CMD check / build artefacts
-# -------------------------------------------------
+# Build and check artefacts
 *.tar.gz
 *.Rcheck/
 .Rcheck/
 check/
 inst/doc/
+/doc/
+/Meta/
 
-# -------------------------------------------------
-# R Markdown / knitr
-# -------------------------------------------------
+# knitr and R Markdown
 README.html
 README_files/
 *.knit.md
@@ -33,61 +26,32 @@ README_files/
 *_files/
 .cache/
 
-# -------------------------------------------------
-# Working directories
-# -------------------------------------------------
-deriv2Tests/wd/
-
-# -------------------------------------------------
-# Bench scratch outputs. Only the immutable pre_rewrite baseline lives
-# in the repo; every other file under bench/baselines/ is transient.
-# -------------------------------------------------
-bench/baselines/*
-!bench/baselines/focei_theoph_pre_rewrite.rds
-
-
-# -------------------------------------------------
-# Temporary / generated files
-# -------------------------------------------------
-.f*
-*.log
-*.tmp
-
-# -------------------------------------------------
-# Compiled objects
-# -------------------------------------------------
+# Compiled objects and scratch
 *.o
 *.so
 *.dll
-.positai
+.f*
+*.log
+*.tmp
+deriv2Tests/wd/
 
-# -------------------------------------------------
-# Stray codegen leftovers under tests/testthat/. Tests already
-# setwd(tempdir()) before any cOde/CppODE call, so nothing should
-# land here — these patterns guard against pre-rewrite paths slipping
-# through and leaving artefacts behind. The only tracked non-.R files
-# under tests/testthat/ are helper-*.R, setup.R, fixtures/, and _snaps/.
-# -------------------------------------------------
+# Codegen and solver outputs written by tests under tests/testthat
 tests/testthat/*.c
 tests/testthat/*.cpp
 tests/testthat/*.o
 tests/testthat/*.so
 tests/testthat/*.dll
 tests/testthat/reactions_for_Alyssa*
-# testthat auto-creates _snaps/ on every run, even when no test uses
-# snapshots. If snapshot tests are added later, drop matching un-ignore
-# rules here (e.g. !tests/testthat/_snaps/some-test/).
 tests/testthat/_snaps/
 
-# -------------------------------------------------
-# Python caches (inst/code helpers shelled out via reticulate)
-# -------------------------------------------------
+# bench baselines are transient, except the tracked pre-rewrite baseline
+bench/baselines/*
+!bench/baselines/focei_theoph_pre_rewrite.rds
+
+# Python caches from the reticulate helpers under inst/code
 __pycache__/
 *.pyc
 
-# -------------------------------------------------
-# Claude stuff
-# -------------------------------------------------
+# Local tooling
+.positai
 CLAUDE.md
-/doc/
-/Meta/

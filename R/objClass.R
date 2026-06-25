@@ -425,89 +425,26 @@ constraintL2 <- function(mu, sigma = 1, Omega = NULL,
   myfn <- function(..., fixed = NULL, deriv = TRUE, deriv2 = FALSE, conditions = condition, env = NULL) {
 
     p <- list(...)[[match.fnargs(list(...), "pars")]]
-    dP <- attr(p, "deriv", exact = TRUE)
-    dP2 <- if (deriv2) attr(p, "deriv2", exact = TRUE) else NULL
+    dP  <- if (deriv) attr(p, "deriv", exact = TRUE) else NULL
+    dP2 <- if (deriv && deriv2) attr(p, "deriv2", exact = TRUE) else NULL
 
-    use_cpp <- deriv
+    sigma_pars <- if (est) sigma[names(mu)] else rep("", length(mu))
+    sigma_vec  <- if (est) rep(0.0, length(mu)) else as.numeric(sigma[names(mu)])
+    kr <- constraintL2_scalar_kernel(
+      pars = p,
+      dP_opt = if (!is.null(dP)) dP else NULL,
+      dP2_opt = if (!is.null(dP2)) dP2 else NULL,
+      inner_par_names = names(p),
+      fixed_opt = fixed,
+      mu_names = names(mu),
+      mu = as.numeric(mu),
+      sigma = sigma_vec,
+      sigma_pars = as.character(sigma_pars),
+      est = est,
+      deriv = deriv
+    )
 
-    if (use_cpp) {
-      inner_par_names <- names(p)
-      # Build sigma_par names (only meaningful if est==TRUE)
-      sigma_pars <- if (est) sigma[names(mu)] else rep("", length(mu))
-      sigma_vec  <- if (est) rep(0.0, length(mu)) else as.numeric(sigma[names(mu)])
-      kr <- constraintL2_scalar_kernel(
-        pars = p,
-        dP_opt = if (!is.null(dP)) dP else NULL,
-        dP2_opt = if (!is.null(dP2)) dP2 else NULL,
-        inner_par_names = inner_par_names,
-        fixed_opt = fixed,
-        mu_names = names(mu),
-        mu = as.numeric(mu),
-        sigma = sigma_vec,
-        sigma_pars = as.character(sigma_pars),
-        est = est
-      )
-      out <- objlist(value = kr$value, gradient = kr$gradient,
-                     hessian = kr$hessian)
-      attr(out, attr.name) <- out$value
-      attr(out, "env") <- env
-      return(out)
-    }
-
-    # ---- R fallback (existing path) ----
-    allp <- c(p, fixed)
-    avail <- intersect(names(mu), names(allp))
-    if (!length(avail))
-      return(objlist(value = 0))
-
-    pa <- allp[avail]
-    sg <- if (est) exp(allp[sigma[avail]]) else sigma[avail]
-    r <- pa - mu[avail]
-
-    val <- sum(r^2 / sg^2) + est * sum(2 * log(sg))
-
-    if (!deriv)
-      return(objlist(value = val))
-
-    gr <- setNames(numeric(length(p)), names(p))
-    hs <- matrix(0, length(p), length(p), dimnames = list(names(p), names(p)))
-
-    p1 <- intersect(avail, names(p))
-    gr[p1] <- 2 * r[p1] / sg[p1]^2
-    diag(hs)[p1] <- 2 / sg[p1]^2
-
-    if (est) for (sp in intersect(unique(sigma[avail]), names(p))) {
-      idx <- sigma[avail] == sp
-      gr[sp] <- sum(-2 * r[idx]^2 / sg[idx]^2 + 2)
-      hs[sp, sp] <- sum(4 * r[idx]^2 / sg[idx]^2)
-      cm <- intersect(names(idx)[idx], p1)
-      hs[cm, sp] <- hs[sp, cm] <- -4 * r[cm] / sg[cm]^2
-    }
-
-    if (!is.null(dP)) {
-      gi <- gr
-      gr <- drop(gi %*% dP); names(gr) <- colnames(dP)
-      hs <- t(dP) %*% hs %*% dP
-      dimnames(hs) <- list(colnames(dP), colnames(dP))
-
-      # Exact Hessian addition: gi . dP2 contributes the (dL/dp) * (d^2 p/dtheta^2)
-      # term that the sandwich (dP^T H dP) drops.
-      if (!is.null(dP2)) {
-        common <- intersect(names(gi), dimnames(dP2)[[1]])
-        if (length(common) > 0L) {
-          theta_names <- colnames(dP)
-          dP2_sub <- dP2[common, theta_names, theta_names, drop = FALSE]
-          gi_sub <- gi[common]
-          # H_add[k1, k2] = sum_p gi_p * dP2[p, k1, k2]
-          flat <- matrix(dP2_sub, nrow = length(common), ncol = length(theta_names)^2)
-          h_add_flat <- crossprod(flat, gi_sub)
-          h_add <- matrix(h_add_flat, length(theta_names), length(theta_names))
-          hs <- hs + h_add
-        }
-      }
-    }
-
-    out <- objlist(value = val, gradient = gr, hessian = hs)
+    out <- objlist(value = kr$value, gradient = kr$gradient, hessian = kr$hessian)
     attr(out, attr.name) <- out$value
     attr(out, "env") <- env
     out
@@ -777,95 +714,30 @@ datapointL2 <- function(name, time, value, sigma = 1, attr.name = "validation", 
     if (is.null(conditions) && !condition %in% names(prediction))
       stop("datapointL2 requests unavailable condition. Call the objective function explicitly stating the conditions argument.")
 
-    datapar <- setdiff(names(mu), names(fixed))
-    parapar <- setdiff(names(pouter), c(datapar, names(fixed)))
-
-    time.index <- which(prediction[[condition]][, "time"] == t)
-    if (!length(time.index))
+    prdf <- prediction[[condition]]
+    if (!any(prdf[, "time"] == t))
       stop("datapointL2() requests time point for which no prediction is available. Please add missing time point by the times argument in normL2()")
-    withDeriv <- !is.null(attr(prediction[[condition]], "deriv"))
 
-    use_cpp <- withDeriv && deriv
-    if (use_cpp) {
-      prdf <- prediction[[condition]]
-      dpred_attr  <- attr(prdf, "deriv")
-      d2pred_attr <- if (deriv2) attr(prdf, "deriv2") else NULL
-      kr <- datapointL2_kernel(
-        pouter           = pouter,
-        fixed_opt        = fixed,
-        prdf             = prdf,
-        dpred_attr_opt   = dpred_attr,
-        d2pred_attr_opt  = d2pred_attr,
-        obs_name         = as.character(mu),
-        t                = as.numeric(t),
-        sigma            = as.numeric(sigma),
-        value_par        = names(mu)[1]
-      )
-      out <- objlist(value = kr$value, gradient = kr$gradient,
-                     hessian = kr$hessian)
-      attr(out, attr.name)    <- out$value
-      attr(out, "prediction") <- kr$prediction
-      attr(out, "env")        <- env
-      class(out) <- NULL
-      return(out)
-    }
+    dpred_attr  <- if (deriv) attr(prdf, "deriv") else NULL
+    d2pred_attr <- if (deriv && deriv2) attr(prdf, "deriv2") else NULL
+    kr <- datapointL2_kernel(
+      pouter           = pouter,
+      fixed_opt        = fixed,
+      prdf             = prdf,
+      dpred_attr_opt   = dpred_attr,
+      d2pred_attr_opt  = d2pred_attr,
+      obs_name         = as.character(mu),
+      t                = as.numeric(t),
+      sigma            = as.numeric(sigma),
+      value_par        = names(mu)[1],
+      deriv            = deriv
+    )
 
-    pred  <- prediction[[condition]][time.index, ][mu]
-    deriv <- NULL
-    deriv2_pred <- NULL
-    if (withDeriv) {
-      dfull <- attr(prediction[[condition]], "deriv")
-      if (length(dim(dfull)) == 3L) {
-        # new format: [time x variable x parameter]
-        avail_pars <- dimnames(dfull)[[3]]
-        use_pars   <- intersect(parapar, avail_pars)
-        if (length(use_pars)) {
-          dtmp  <- dfull[time.index, mu, use_pars, drop = TRUE]
-          deriv <- setNames(as.numeric(dtmp), use_pars)
-        }
-      } else {
-        # fallback to old matrix format with "var.par" column names
-        mu.para <- intersect(paste(mu, parapar, sep = "."), names(dfull))
-        deriv   <- dfull[mu.para]
-      }
-      if (deriv2) {
-        d2full <- attr(prediction[[condition]], "deriv2")
-        if (!is.null(d2full) && length(dim(d2full)) == 4L) {
-          avail_pars <- dimnames(d2full)[[3]]
-          use_pars   <- intersect(parapar, avail_pars)
-          if (length(use_pars)) {
-            d2tmp <- d2full[time.index, mu, use_pars, use_pars, drop = TRUE]
-            deriv2_pred <- matrix(d2tmp, length(use_pars), length(use_pars),
-                                  dimnames = list(use_pars, use_pars))
-          }
-        }
-      }
-    }
-
-    res <- as.numeric(pred - c(fixed, pouter)[names(mu)])
-    val <- (res / sigma)^2
-
-    gr <- hs <- NULL
-    if (withDeriv) {
-      dres.dp <- setNames(numeric(length(pouter)), names(pouter))
-      if (length(deriv))    dres.dp[names(deriv)] <- deriv
-      if (length(datapar))  dres.dp[datapar] <- -1
-      gr <- 2 * res * dres.dp / sigma^2
-      hs <- 2 * outer(dres.dp, dres.dp, "*") / sigma^2
-      colnames(hs) <- rownames(hs) <- names(pouter)
-
-      if (!is.null(deriv2_pred)) {
-        # Exact second-order term: 2 * res * d^2 pred / sigma^2.
-        rn <- rownames(deriv2_pred)
-        hs[rn, rn] <- hs[rn, rn] + 2 * res * deriv2_pred / sigma^2
-      }
-    }
-    
-    out <- objlist(value = val, gradient = gr, hessian = hs)
-    attr(out, attr.name)   <- out$value
-    attr(out, "prediction") <- pred
-    attr(out, "env")       <- env
-    class(out)             <- NULL
+    out <- objlist(value = kr$value, gradient = kr$gradient, hessian = kr$hessian)
+    attr(out, attr.name)    <- out$value
+    attr(out, "prediction") <- kr$prediction
+    attr(out, "env")        <- env
+    class(out) <- NULL
     out
   }
   class(myfn)             <- c("objfn", "fn")

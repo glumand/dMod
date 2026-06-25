@@ -21,7 +21,7 @@ Iterated three-layer test on the stoichiometric matrix of an \code{eqnlist}
 vanishes at SS; if a feeder's rate involves exactly one state, that
 state must be zero.
 \item \emph{Sink cluster (LP)}: subsets whose combined mass leaks
-monotonically (mass-balance LP via \code{lpSolve::lp}, only when installed).
+monotonically (mass-balance LP via \code{lpSolve::lp}).
 }
 For each zero-state the column is dropped, the state symbol is substituted
 by \code{"0"} in remaining rates, structurally-zero reactions are removed, and

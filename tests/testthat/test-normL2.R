@@ -476,6 +476,75 @@ test_that("getParameters(normL2(..., errmodel = ec$e)) includes errmodel pars", 
 })
 
 
+# ---- BLOQ + error model: end-to-end wiring ------------------------------
+# The errmodel-derived sigma (and its parameter derivatives) must reach the
+# BLOQ partition of the kernel, not only the ALOQ rows. Validate the M3 value
+# against the closed form built with sigma = srel * pred on both partitions,
+# and the full gradient against finite differences (this exercises dsigma
+# propagation into the BLOQ rows).
+test_that("normL2 BLOQ M3 + proportional errmodel: value and gradient match", {
+  skip_if_no_compile()
+  ec <- .build_prop_errmodel_chain("bloqprop")
+
+  pars <- c(A = 1.0, k = 0.5, srel = 0.1)
+  data <- fx_decay_data_bloq(pars = pars[c("A", "k")], sigma = 0.05,
+                             lloq = 0.1, times = seq(0, 10, by = 1))
+  data$C1$sigma <- NA_real_   # both ALOQ and BLOQ rows draw sigma from errmodel
+
+  d   <- data$C1
+  obj <- normL2(data, ec$prd, errmodel = ec$e, opt.BLOQ = "M3",
+                use.bessel = FALSE)
+  o <- obj(pars)
+
+  # Use the exact prediction normL2 integrated (its env), so the closed-form
+  # reference is not perturbed by a separate integrator-grid call.
+  env_pred <- attr(o, "env")$prediction[["C1"]]
+  pred <- env_pred[match(d$time, env_pred[, "time"]), "y"]
+  sigma_pred <- pars[["srel"]] * pred
+  bloq <- d$value <= d$lloq
+  expect_true(any(bloq) && any(!bloq))   # fixture has both partitions
+
+  expected <- truth_nll_aloq(pred[!bloq], d$value[!bloq], sigma_pred[!bloq]) +
+              truth_nll_bloq_m3(pred[bloq], d$lloq[bloq], sigma_pred[bloq])
+  expect_equal(o$value, expected, tolerance = 1e-6)
+
+  skip_if_not_installed("numDeriv")
+  g_fd <- numDeriv::grad(
+    function(p) obj(setNames(p, names(pars)), deriv = FALSE)$value, pars)
+  expect_equal(unname(o$gradient[names(pars)]), unname(g_fd), tolerance = 1e-3)
+})
+
+
+test_that("normL2 BLOQ M4 + proportional errmodel: value and gradient match", {
+  skip_if_no_compile()
+  ec <- .build_prop_errmodel_chain("bloqpropm4")
+
+  pars <- c(A = 1.0, k = 0.5, srel = 0.1)
+  data <- fx_decay_data_bloq(pars = pars[c("A", "k")], sigma = 0.05,
+                             lloq = 0.1, times = seq(0, 10, by = 1))
+  data$C1$sigma <- NA_real_
+
+  d   <- data$C1
+  obj <- normL2(data, ec$prd, errmodel = ec$e, opt.BLOQ = "M4NM",
+                use.bessel = FALSE)
+  o <- obj(pars)
+
+  env_pred <- attr(o, "env")$prediction[["C1"]]
+  pred <- env_pred[match(d$time, env_pred[, "time"]), "y"]
+  sigma_pred <- pars[["srel"]] * pred
+  bloq <- d$value <= d$lloq
+
+  expected <- truth_nll_aloq(pred[!bloq], d$value[!bloq], sigma_pred[!bloq]) +
+              truth_nll_bloq_m4(pred[bloq], d$lloq[bloq], sigma_pred[bloq])
+  expect_equal(o$value, expected, tolerance = 1e-6)
+
+  skip_if_not_installed("numDeriv")
+  g_fd <- numDeriv::grad(
+    function(p) obj(setNames(p, names(pars)), deriv = FALSE)$value, pars)
+  expect_equal(unname(o$gradient[names(pars)]), unname(g_fd), tolerance = 1e-3)
+})
+
+
 # ============================================================================
 # Cross-backend parity (C++ kernel vs R reference)
 # ============================================================================

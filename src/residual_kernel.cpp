@@ -1,5 +1,5 @@
 // dMod shared residual kernel implementation.
-// Math reference: residual_kernel.h header and R/objClass.R::nll_ALOQ / nll_BLOQ.
+// Math reference: residual_kernel.h header.
 
 #include "residual_kernel.h"
 
@@ -130,7 +130,7 @@ void accumulate_aloq_residual(
     // M4BEAL ALOQ-side correction term: +2 log Phi(w0).
     double w0 = 0.0, G_w0 = 0.0;
     if (m4beal_aloq) {
-      const double pred_val_for_w0 = pred_i;  // R uses pred (not pred-lloq) on the ALOQ side
+      const double pred_val_for_w0 = pred_i;  // w0 uses the prediction, not pred - lloq
       w0 = bessel * pred_val_for_w0 * inv_s;
       value_acc += 2.0 * Phi_log(w0);
       G_w0 = G_by_Phi(w0, w0);
@@ -143,10 +143,8 @@ void accumulate_aloq_residual(
     // Build dwr[k] = bessel * inv_s * dpred[k] - wr * inv_s * dsigma[k];
     //       dw0[k] = bessel * inv_s * dpred[k] - w0 * inv_s * dsigma[k] (M4BEAL or deriv2-exact)
     //       dlogs[k] = inv_s * dsigma[k].
-    //
-    // Note: wr here is the bessel-scaled version. This matches R/objClass.R:951-952
-    // where the bessel correction is applied to the dxdp coefficient (not dsdp), but
-    // the wr factor multiplying dsdp is already bessel-scaled.
+    // The bessel correction scales the dpred coefficient only; the wr factor
+    // multiplying dsigma is already bessel-scaled.
     if (has_dsig) {
       for (int k = 0; k < n_par; ++k) {
         const double dx = dpred_i[k];
@@ -193,15 +191,10 @@ void accumulate_aloq_residual(
       if (opts.aloq_part3) coef_dsig2 += -2.0 * inv_s2;
     }
     if (m4beal_aloq) {
-      double c = -w0 * G_w0 - G_w0 * G_w0;
-      if (c > 0.0) coef_dw02 = 2.0 * c;
+      coef_dw02 = 2.0 * (-w0 * G_w0 - G_w0 * G_w0);
       if (has_dsig) {
         coef_cross += -2.0 * G_w0 * inv_s2;
-        if (opts.aloq_part1) {
-          double q = G_w0 * w0;
-          if (q < 0.0) q = 0.0;
-          coef_dsig2 += 4.0 * q * inv_s;
-        }
+        coef_dsig2 += 4.0 * G_w0 * w0 * inv_s2;
       }
     }
 
@@ -226,20 +219,17 @@ void accumulate_aloq_residual(
       }
     }
 
-    // Stash deriv2-exact weight for this row.
-    // ALOQ exact weight (R nll_ALOQ lines 999-1010): w_i = 2 * wr_i * inv_s_i.
-    // For M4BEAL, the +2 log Phi(w0) ALOQ correction would in principle add a
-    // 2*G(w0)*inv_s contribution, but R's nll_ALOQ does not include it; we
-    // keep parity with R here (the BLOQ-side M4* deriv2 path handles its own
-    // c1/c2/c3 weights).
+    // d2pred exact weight: 2 * wr/sigma from the base term; M4BEAL adds the
+    // exact second-order part of its +2 log Phi(w0) correction, 2 * G(w0)/sigma.
     if (opts.use_deriv2_exact) {
       W_d2[i] = 2.0 * wr * inv_s;
+      if (m4beal_aloq) W_d2[i] += 2.0 * G_w0 * inv_s;
     }
-    // d2sigma weight: derived from 2*wr*d2wr (contributes -2 wr^2 / sigma)
-    // plus 2*d2(log sigma) (contributes +2/sigma). Net: (2/sigma)(1 - wr^2).
-    // M4BEAL ALOQ correction (+2 log Phi(w0)) is excluded for parity with R.
+    // d2sigma exact weight: (2/sigma)(1 - wr^2) from the base term; M4BEAL adds
+    // -2 * w0 * G(w0)/sigma.
     if (has_d2sig) {
       W_d2sig[i] = 2.0 * inv_s * (1.0 - wr * wr);
+      if (m4beal_aloq) W_d2sig[i] += -2.0 * w0 * G_w0 * inv_s;
     }
   }  // for each row
 
@@ -279,8 +269,7 @@ void accumulate_bloq_residual(
         "accumulate_bloq: lloq must be non-null for BLOQ rows");
   }
 
-  // M4 modes (M4NM/M4BEAL) require non-negative lloq; matches the R guard
-  // in nll_BLOQ (R/objClass.R:1055-1059).
+  // M4 modes (M4NM/M4BEAL) require non-negative lloq.
   if (opts.bloq_mode == BloqMode::M4NM || opts.bloq_mode == BloqMode::M4BEAL) {
     for (int i = 0; i < n_obs; ++i) {
       if (y_data[i] < 0.0) {
@@ -309,7 +298,7 @@ void accumulate_bloq_residual(
     const double inv_s  = 1.0 / sig;
     const double inv_s2 = inv_s * inv_s;
     const double pred_i = pred[i];
-    const double val_i  = y_data[i];   // R uses pmax(value, lloq); for BLOQ rows this == lloq
+    const double val_i  = y_data[i];   // LOQ-substituted value; equals lloq on BLOQ rows
 
     // wr and w0 (bessel-scaled), matching res() output for BLOQ rows
     //   wr = (pred - val) / sigma, w0 = pred / sigma; both * bessel.
@@ -324,7 +313,7 @@ void accumulate_bloq_residual(
       const double obj_raw = -2.0 * std::log(1.0 - Phi(wr) / Phi(w0));
       double obj_i = obj_raw;
       if (!std::isfinite(obj_i)) {
-        // R/objClass.R:1073-1078 fallback expansion.
+        // Stability fallback expansion when the closed form overflows.
         const double diff_w = w0 - wr;
         const double logd   = std::log(diff_w);
         const double intercept = (logd > 0.0) ? 1.8 : (-1.9 * logd + 0.9);
@@ -376,8 +365,7 @@ void accumulate_bloq_residual(
       // c2 = 1 / (1/G(w0,w0) - 1/G(w0,wr))
       // c3 = G(w0,w0)
       // Closed form: c1 = phi(wr) / (Phi(w0) - Phi(wr)); c2 = phi(w0) / same.
-      // Use this stable closed form; matches R's `stable(wr, w0, wr)` for the Hessian
-      // and avoids the indirect "1/(1/G - 1/G)" form from R's gradient block.
+      // Stable closed form, avoiding the indirect "1/(1/G - 1/G)" expression.
       const double dP   = Phi(w0) - Phi(wr);
       const double phi_wr = std::exp(phi_log(wr));
       const double phi_w0 = std::exp(phi_log(w0));
@@ -432,80 +420,59 @@ void accumulate_bloq_residual(
         }
       }
     } else {
-      // M4* branch. Build the per-row Hessian additions from R nll_BLOQ:1144-1186.
-      //
-      // stable_wr_w0_wr = phi(wr) / (Phi(w0) - Phi(wr)); fallback when infinite:
-      //                   set to 1/(w0 - wr) + wr.
-      // stable_w0_w0_wr = phi(w0) / (Phi(w0) - Phi(wr)); fallback when infinite:
-      //                   set to 0.
-      //
-      // A1 = -wr * stable_wr_w0_wr, A2 = stable_wr_w0_wr
-      // A3 = -w0 * stable_w0_w0_wr, A4 = stable_w0_w0_wr
-      // G_w0 = G(w0, w0); A5 = -w0*G_w0 - G_w0^2; A6 = G_w0
+      // M4* branch: exact Hessian of f = -2 log(Phi(w0) - Phi(wr)) + 2 log Phi(w0).
+      // First derivatives: df = a dwr + b dw0 with a = 2 phi(wr)/D and
+      // b = 2 phi(w0) (1/Phi(w0) - 1/D), D = Phi(w0) - Phi(wr). The Hessian is
+      // the exact d(a dwr + b dw0): the dwr/dw0 quadratic forms plus the
+      // a*d2wr + b*d2w0 chain-rule terms (whose d2pred / d2sigma parts are the
+      // w_deriv2 / w_deriv2_sig weights computed above).
       const double dP     = Phi(w0) - Phi(wr);
       const double phi_wr = std::exp(phi_log(wr));
       const double phi_w0 = std::exp(phi_log(w0));
-      double swr = phi_wr / dP;
-      double sw0 = phi_w0 / dP;
+      double swr = phi_wr / dP;   // phi(wr) / D
+      double sw0 = phi_w0 / dP;   // phi(w0) / D
       if (!std::isfinite(swr)) swr = 1.0 / (w0 - wr) + wr;
       if (!std::isfinite(sw0)) sw0 = 0.0;
+      const double G_w0 = G_by_Phi(w0, w0);   // phi(w0) / Phi(w0)
 
-      const double A1 = -wr * swr;
-      const double A2 = swr;
-      const double A3 = -w0 * sw0;
-      const double A4 = sw0;
-      const double G_w0 = G_by_Phi(w0, w0);
-      const double A5 = -w0 * G_w0 - G_w0 * G_w0;
-      const double A6 = G_w0;
+      // Half the first-derivative coefficients: a = 2 half_a, b = 2 half_b.
+      const double half_a = swr;
+      const double half_b = G_w0 - sw0;
+
+      // Exact second-derivative coefficients of the dwr/dw0 quadratic forms.
+      const double C_wrwr  = 2.0 * (-wr * swr + swr * swr);
+      const double C_w0w0  = 2.0 * (-w0 * G_w0 - G_w0 * G_w0 + w0 * sw0 + sw0 * sw0);
+      const double C_cross = -2.0 * swr * sw0;
 
       if (opts.bloq_part1) {
-        // 2 * (crossprod(dwr, A1*dwr) + crossprod(dw0, A3*dw0) + crossprod(dw0, A5*dw0))
-        const double c1 = 2.0 * A1;
-        const double c3 = 2.0 * A3;
-        const double c5 = 2.0 * A5;
         for (int k2 = 0; k2 < n_par; ++k2) {
           const double dwr_k2 = dwr[k2];
           const double dw0_k2 = dw0[k2];
           for (int k1 = 0; k1 < n_par; ++k1) {
             hess_acc[k1 + k2 * n_par] +=
-                c1 * dwr[k1] * dwr_k2 + (c3 + c5) * dw0[k1] * dw0_k2;
+                C_wrwr  * dwr[k1] * dwr_k2
+              + C_w0w0  * dw0[k1] * dw0_k2
+              + C_cross * (dwr[k1] * dw0_k2 + dw0[k1] * dwr_k2);
           }
         }
       }
 
-      if (opts.bloq_part2) {
-        // First: -2 * crossprod(A2*dwr - A4*dw0)
+      // dpred/dsigma cross term from the a*d2wr + b*d2w0 chain rule.
+      if (opts.bloq_part2 && has_dsig) {
+        const double c = -2.0 * (half_a + half_b) * inv_s2;   // -(a + b) inv_s^2
         for (int k2 = 0; k2 < n_par; ++k2) {
-          const double v_k2 = A2 * dwr[k2] - A4 * dw0[k2];
+          const double dxk2 = dpred_i[k2];
+          const double dsk2 = dsigma_i[k2];
           for (int k1 = 0; k1 < n_par; ++k1) {
-            const double v_k1 = A2 * dwr[k1] - A4 * dw0[k1];
-            hess_acc[k1 + k2 * n_par] += -2.0 * v_k1 * v_k2;
-          }
-        }
-        if (has_dsig) {
-          // Second: 2 * sum of three cross terms
-          //   crossprod(A2*(-inv_s^2)*dpred, dsigma) + crossprod(A2*(-inv_s^2)*dsigma, dpred)
-          // + crossprod(A4*(-inv_s^2)*dpred, dsigma) + crossprod(A4*(-inv_s^2)*dsigma, dpred)
-          // + crossprod(A6*(-inv_s^2)*dpred, dsigma) + crossprod(A6*(-inv_s^2)*dsigma, dpred)
-          const double cA = -inv_s2 * (A2 + A4 + A6);
-          const double c  = 2.0 * cA;
-          for (int k2 = 0; k2 < n_par; ++k2) {
-            const double dxk2 = dpred_i[k2];
-            const double dsk2 = dsigma_i[k2];
-            for (int k1 = 0; k1 < n_par; ++k1) {
-              hess_acc[k1 + k2 * n_par] +=
-                  c * (dpred_i[k1] * dsk2 + dsigma_i[k1] * dxk2);
-            }
+            hess_acc[k1 + k2 * n_par] +=
+                c * (dpred_i[k1] * dsk2 + dsigma_i[k1] * dxk2);
           }
         }
       }
 
+      // dsigma^2 term from the a*d2wr + b*d2w0 chain rule.
       if (opts.bloq_part3 && has_dsig) {
-        // R/objClass.R:1179-1185 Part3:
-        //   + 2 * (crossprod(dsdp, A2*2*wr*inv_s^2 * dsdp)
-        //        + crossprod(dsdp, A4*2*w0*inv_s^2 * dsdp)
-        //        + crossprod(dsdp, A6*2*w0*inv_s^2 * dsdp))
-        const double c = 4.0 * inv_s2 * (A2 * wr + (A4 + A6) * w0);
+        const double c = 4.0 * inv_s2 * (half_a * wr + half_b * w0);  // 2(a wr + b w0) inv_s^2
         for (int k2 = 0; k2 < n_par; ++k2) {
           const double dsk2 = dsigma_i[k2];
           for (int k1 = 0; k1 < n_par; ++k1) {

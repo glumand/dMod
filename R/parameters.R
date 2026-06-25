@@ -610,6 +610,21 @@ resetWarmStarts <- function(fn, verbose = TRUE) {
   X
 }
 
+## Zero forcing symbols in all rates and drop their equations, then return
+## an eqnvec. Forcings (a state held at 0) leave the equation set so they
+## are never solved for. Shared by the steady-state preamble and by
+## symmetryDetection().
+#' @keywords internal
+.zero_and_drop_forcings <- function(trafo, forcings) {
+  if (is.null(forcings) || !length(forcings)) return(as.eqnvec(trafo))
+  if (inherits(trafo, "eqnlist"))
+    trafo$rates <- replaceSymbols(forcings, rep("0", length(forcings)), trafo$rates)
+  else
+    trafo <- replaceSymbols(forcings, rep("0", length(forcings)), trafo)
+  trafo <- as.eqnvec(trafo)
+  trafo[setdiff(names(trafo), forcings)]
+}
+
 ## Shared SS preamble: coerce to eqnvec, zero+drop forcings (a state with
 ## rhs == 0 stays at its initial value so it can be cut), run sink-state
 ## detection, promote constant-rhs states to parameters, and eliminate

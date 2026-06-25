@@ -59,8 +59,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // constraintL2_scalar_kernel
-List constraintL2_scalar_kernel(NumericVector pars, Nullable<NumericMatrix> dP_opt, Nullable<NumericVector> dP2_opt, CharacterVector inner_par_names, Nullable<NumericVector> fixed_opt, CharacterVector mu_names, NumericVector mu, NumericVector sigma, CharacterVector sigma_pars, bool est);
-RcppExport SEXP _dMod_constraintL2_scalar_kernel(SEXP parsSEXP, SEXP dP_optSEXP, SEXP dP2_optSEXP, SEXP inner_par_namesSEXP, SEXP fixed_optSEXP, SEXP mu_namesSEXP, SEXP muSEXP, SEXP sigmaSEXP, SEXP sigma_parsSEXP, SEXP estSEXP) {
+List constraintL2_scalar_kernel(NumericVector pars, Nullable<NumericMatrix> dP_opt, Nullable<NumericVector> dP2_opt, CharacterVector inner_par_names, Nullable<NumericVector> fixed_opt, CharacterVector mu_names, NumericVector mu, NumericVector sigma, CharacterVector sigma_pars, bool est, bool deriv);
+RcppExport SEXP _dMod_constraintL2_scalar_kernel(SEXP parsSEXP, SEXP dP_optSEXP, SEXP dP2_optSEXP, SEXP inner_par_namesSEXP, SEXP fixed_optSEXP, SEXP mu_namesSEXP, SEXP muSEXP, SEXP sigmaSEXP, SEXP sigma_parsSEXP, SEXP estSEXP, SEXP derivSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -74,13 +74,14 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< NumericVector >::type sigma(sigmaSEXP);
     Rcpp::traits::input_parameter< CharacterVector >::type sigma_pars(sigma_parsSEXP);
     Rcpp::traits::input_parameter< bool >::type est(estSEXP);
-    rcpp_result_gen = Rcpp::wrap(constraintL2_scalar_kernel(pars, dP_opt, dP2_opt, inner_par_names, fixed_opt, mu_names, mu, sigma, sigma_pars, est));
+    Rcpp::traits::input_parameter< bool >::type deriv(derivSEXP);
+    rcpp_result_gen = Rcpp::wrap(constraintL2_scalar_kernel(pars, dP_opt, dP2_opt, inner_par_names, fixed_opt, mu_names, mu, sigma, sigma_pars, est, deriv));
     return rcpp_result_gen;
 END_RCPP
 }
 // datapointL2_kernel
-List datapointL2_kernel(NumericVector pouter, Nullable<NumericVector> fixed_opt, NumericMatrix prdf, Nullable<NumericVector> dpred_attr_opt, Nullable<NumericVector> d2pred_attr_opt, std::string obs_name, double t, double sigma, std::string value_par);
-RcppExport SEXP _dMod_datapointL2_kernel(SEXP pouterSEXP, SEXP fixed_optSEXP, SEXP prdfSEXP, SEXP dpred_attr_optSEXP, SEXP d2pred_attr_optSEXP, SEXP obs_nameSEXP, SEXP tSEXP, SEXP sigmaSEXP, SEXP value_parSEXP) {
+List datapointL2_kernel(NumericVector pouter, Nullable<NumericVector> fixed_opt, NumericMatrix prdf, Nullable<NumericVector> dpred_attr_opt, Nullable<NumericVector> d2pred_attr_opt, std::string obs_name, double t, double sigma, std::string value_par, bool deriv);
+RcppExport SEXP _dMod_datapointL2_kernel(SEXP pouterSEXP, SEXP fixed_optSEXP, SEXP prdfSEXP, SEXP dpred_attr_optSEXP, SEXP d2pred_attr_optSEXP, SEXP obs_nameSEXP, SEXP tSEXP, SEXP sigmaSEXP, SEXP value_parSEXP, SEXP derivSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -93,7 +94,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type t(tSEXP);
     Rcpp::traits::input_parameter< double >::type sigma(sigmaSEXP);
     Rcpp::traits::input_parameter< std::string >::type value_par(value_parSEXP);
-    rcpp_result_gen = Rcpp::wrap(datapointL2_kernel(pouter, fixed_opt, prdf, dpred_attr_opt, d2pred_attr_opt, obs_name, t, sigma, value_par));
+    Rcpp::traits::input_parameter< bool >::type deriv(derivSEXP);
+    rcpp_result_gen = Rcpp::wrap(datapointL2_kernel(pouter, fixed_opt, prdf, dpred_attr_opt, d2pred_attr_opt, obs_name, t, sigma, value_par, deriv));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -468,8 +470,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_dMod_bmm_lb", (DL_FUNC) &_dMod_bmm_lb, 6},
     {"_dMod_bmm_rb", (DL_FUNC) &_dMod_bmm_rb, 6},
     {"_dMod_bmm_bb", (DL_FUNC) &_dMod_bmm_bb, 6},
-    {"_dMod_constraintL2_scalar_kernel", (DL_FUNC) &_dMod_constraintL2_scalar_kernel, 10},
-    {"_dMod_datapointL2_kernel", (DL_FUNC) &_dMod_datapointL2_kernel, 9},
+    {"_dMod_constraintL2_scalar_kernel", (DL_FUNC) &_dMod_constraintL2_scalar_kernel, 11},
+    {"_dMod_datapointL2_kernel", (DL_FUNC) &_dMod_datapointL2_kernel, 10},
     {"_dMod_constraintL2_mvn_kernel", (DL_FUNC) &_dMod_constraintL2_mvn_kernel, 11},
     {"_dMod_focei_kernel_ping", (DL_FUNC) &_dMod_focei_kernel_ping, 4},
     {"_dMod_focei_eval_one_subject", (DL_FUNC) &_dMod_focei_eval_one_subject, 8},

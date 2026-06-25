@@ -1,7 +1,6 @@
 // dMod shared residual kernel.
 //
-// Math reference (load-bearing, see R/objClass.R nll_ALOQ / nll_BLOQ for the
-// authoritative R version):
+// Math reference (load-bearing):
 //
 //   wr  = bessel * (pred - val) / sigma   ("weighted residual")
 //   w0  = bessel * pred / sigma           ("weighted zero"; only used for M4)
@@ -22,15 +21,16 @@
 //                +                       -2 wr * G(-wr) / sigma * d2sigma/dtheta^2
 //     M4*:  obj  += -2 log(1 - Phi(wr)/Phi(w0))               (with stability)
 //           grad += 2 (c1 dwr - c2 dw0 + c3 dw0)
-//           hess += corresponding 3-part GN form (see nll_BLOQ)
+//           hess += corresponding 3-part GN form
 //                + (if use_deriv2_exact) 2 (c1-c2+c3)/sigma * d2pred/dtheta^2
 //                +                       -2/sigma (c1*wr + (c3-c2)*w0) * d2sigma/dtheta^2
 //
-//   M4BEAL additionally adds an ALOQ-side correction:
+//   M4BEAL additionally adds an exact ALOQ-side correction:
 //     obj  += 2 log Phi(w0)
 //     grad += 2 G(w0) dw0/dtheta
-//     hess += 2 max(0, -w0*G(w0) - G(w0)^2) outer(dw0, dw0) + cross-sigma term
+//     hess += 2 (-w0*G(w0) - G(w0)^2) outer(dw0, dw0) + cross-sigma term
 //          + (if use_deriv2_exact) 2 G(w0)/sigma * d2pred/dtheta^2
+//          +                       -2 w0 G(w0)/sigma * d2sigma/dtheta^2
 //
 // Conventions:
 //   - dpred is stored row-major: dpred[row*n_par + p] = d pred_row / d par_p.

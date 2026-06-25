@@ -264,9 +264,9 @@ static std::vector<int> name_indices(const CharacterVector& haystack,
 // evalConditionResidual / res / nll. Multi-output and eta-dependent sigma are
 // supported: when sigma depends on eta (proportional/combined error models),
 // the corresponding columns of attr(err, "deriv") feed Js_k = d sigma/d eta_k
-// into the gradient and Hessian. The math mirrors R/objClass.R nll_ALOQ
-// (M3-class likelihood, no BLOQ correction) with the GN-without-deriv2
-// convention: residual second derivatives of pred and sigma are dropped, but
+// into the gradient and Hessian. The math is the M3-class likelihood (no BLOQ
+// correction) with the GN-without-deriv2 convention: residual second
+// derivatives of pred and sigma are dropped, but
 // all first-derivative cross terms (Part1/2/3) are retained.
 //
 // Per call: ONE model_cb + ONE err_cb. `Omega_inv` is precomputed once per
