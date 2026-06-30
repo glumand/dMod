@@ -1051,6 +1051,10 @@ objframe <- function(mydata, deriv = NULL, deriv.err = NULL,
   }
 
 
+  # detach outfn from the S3 dispatch frame; it only needs `mappings`
+  environment(outfn) <- list2env(list(mappings = mappings),
+                                 parent = asNamespace("dMod"))
+
   attr(outfn, "mappings") <- mappings
   attr(outfn, "parameters") <- union(attr(x1, "parameters"), attr(x2, "parameters"))
   attr(outfn, "compileInfo") <- mergeCompileInfo(attr(x1, "compileInfo"), attr(x2, "compileInfo"))

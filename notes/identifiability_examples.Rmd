@@ -1,0 +1,318 @@
+---
+title: "Structural Identifiability via Lie Derivatives: Two Examples"
+author: "Simon Beyer"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+# Background
+
+A parameter $\theta$ is **structurally non-identifiable** when the model produces
+the same output for a whole family of parameter values, so that no amount of
+noise-free data can tell those values apart. We detect non-identifiabilities via
+the **observability-identifiability matrix** (OIM).
+
+## The Lie Derivative
+
+Given a vector field $f(x)$ and scalar function $\phi(x)$, the Lie derivative is:
+
+$$L_f \phi = \frac{\partial \phi}{\partial x} \cdot f(x) = \sum_i \frac{\partial \phi}{\partial x_i} f_i(x)$$
+
+This is the time derivative of $\phi$ along system trajectories,
+$L_f \phi = \frac{d\phi}{dt}\big|_{\dot x = f}$,
+and higher orders follow recursively: $L_f^k \phi = L_f(L_f^{k-1}\phi)$.
+
+## The Observability-Identifiability Matrix
+
+For a system $\dot x = f(x,\theta)$, $y = g(x,\theta)$, the output curve near
+$t = t_0$ is fully described by the Taylor coefficients
+$(g,\, L_f g,\, L_f^2 g, \ldots)$ evaluated at $x(t_0)$.
+Collecting their gradients with respect to $\theta$ gives the OIM:
+
+$$\mathcal{O}(\theta) = \begin{pmatrix}
+\partial_\theta\, g \\
+\partial_\theta\, L_f g \\
+\partial_\theta\, L_f^2 g \\
+\vdots
+\end{pmatrix}\Bigg|_{x = x(t_0)}$$
+
+**Rank condition:** $\operatorname{rank}(\mathcal{O}) = \dim\theta$ if and only if
+the model is locally structurally identifiable. The null space $\ker(\mathcal{O})$
+gives the non-identifiable directions. Rows are added until the rank stops growing;
+at most $n + q - 1$ rows are ever needed ($n$ states, $q$ parameters).
+
+## Scaling Symmetries and Their Generators
+
+A **symmetry** is a smooth one-parameter family of transformations
+$\Phi_\varepsilon\colon\theta\mapsto\theta(\varepsilon)$ that leaves
+$g(x(t),\theta)$ unchanged for all $t$. Its **infinitesimal generator** is
+
+$$\xi(\theta) = \frac{d}{d\varepsilon}\Phi_\varepsilon(\theta)\Big|_{\varepsilon=0}$$
+
+which is a null vector of $\mathcal{O}$: $\mathcal{O}\,\xi = 0$.
+The finite orbit is recovered by integrating $\dot\theta = \xi(\theta)$.
+
+A **scaling (toric) symmetry** has the monomial form
+$\theta_i(\varepsilon) = \lambda^{c_i}\theta_i(0)$, so its generator is
+
+$$\xi = \sum_i c_i\,\theta_i\,\frac{\partial}{\partial \theta_i}$$
+
+with constant integer exponents $c_i$.
+Each component $\xi_i \propto \theta_i$ is a monomial — scaling symmetries
+can therefore be found by pure integer linear algebra on the monomial-exponent
+matrix, without any point evaluation.
+
+A **non-scaling symmetry** has generator components that are general rational
+functions of $\theta$. It cannot be detected by the integer kernel alone and
+requires the full OIM null space or the Lie symmetry search.
+
+---
+
+# Example 1: Scaling Non-Identifiability (MM Transcription–Translation)
+
+## Model
+
+A transcription factor $x_1$ is introduced as a bolus and drives
+Michaelis–Menten transcription of mRNA $x_2$, which is translated into
+protein $x_3$ measured with unknown gain:
+
+$$\dot x_1 = -k_1 x_1$$
+$$\dot x_2 = \frac{v\, x_1}{K_m + x_1} - k_2\, x_2$$
+$$\dot x_3 = k_3\, x_2 - k_4\, x_3$$
+$$g = \mathrm{scale} \cdot x_3$$
+
+**Parameters:** $\theta = (v,\, k_1,\, k_2,\, k_3,\, k_4,\, K_m,\, \mathrm{scale})^\top$
+
+**Initial condition:** $x_1(t_0) = \delta$ (bolus), $x_2(t_0) = x_3(t_0) = 0$.
+
+## Lie Derivatives at $t_0$
+
+Let $\alpha = \delta/(K_m+\delta)$.
+Since $x_2(t_0) = x_3(t_0) = 0$:
+
+$$L_f^0 g\big|_0 = 0, \qquad L_f^1 g\big|_0 = 0$$
+
+$$L_f^2 g\big|_0 = \mathrm{scale}\cdot k_3\cdot v\alpha$$
+
+$$L_f^3 g\big|_0 = \mathrm{scale}\cdot k_3\cdot v\alpha
+                  \left(-\frac{k_1 K_m}{K_m+\delta} - k_2 - k_4\right)$$
+
+Higher derivatives produce new information; the rank saturates after
+$L_f^7 g$ (verified numerically via finite-field arithmetic).
+
+## Rank Analysis
+
+| Lie order $k$ | $\operatorname{rank}(\mathcal O)$ |
+|:---:|:---:|
+| 0--1 | 0 |
+| 2 | 1 |
+| 3 | 2 |
+| 4 | 3 |
+| 5 | 4 |
+| 6 | 5 |
+| 7 | **5** (saturated) |
+
+$\operatorname{rank}(\mathcal O) = 5 < 7$: null space has **dimension 2**.
+
+## Non-Identifiable Directions
+
+$$\xi_1 = \begin{pmatrix} -v/k_3 \\ 0 \\ 0 \\ 1 \\ 0 \\ 0 \\ 0 \end{pmatrix}, \qquad
+\xi_2 = \begin{pmatrix} -v/\mathrm{scale} \\ 0 \\ 0 \\ 0 \\ 0 \\ 0 \\ 1 \end{pmatrix}$$
+
+in the order $(v,\, k_1,\, k_2,\, k_3,\, k_4,\, K_m,\, \mathrm{scale})$.
+
+Both are **scaling symmetries**: the components are monomials in $\theta$.
+Integrating $\dot\theta = \xi_1$ gives the orbit
+$v \mapsto \lambda^{-1}v$, $k_3 \mapsto \lambda k_3$ (all others fixed):
+the mRNA-to-protein flux and the maximal transcription rate trade against
+each other at fixed product $v k_3$.
+Similarly $\xi_2$ generates $v \mapsto \mu^{-1}v$,
+$\mathrm{scale} \mapsto \mu\,\mathrm{scale}$.
+
+Identifiable combinations:
+
+$$\boxed{\psi_1 = v\cdot k_3, \qquad \psi_2 = v\cdot\mathrm{scale}}$$
+
+$k_1,\, k_2,\, k_4,\, K_m$ are individually identifiable.
+
+## The Non-Identifiable Manifold
+
+The two symmetries act simultaneously. Integrating $\dot\theta = \lambda\xi_1 + \mu\xi_2$
+gives the explicit two-parameter family of output-equivalent parameter vectors:
+
+$$\mathcal{M}(\psi_1, \psi_2, k_1, k_2, k_4, K_m) =
+\left\{\, \theta \;\middle|\;
+v = \frac{\psi_1}{k_3} = \frac{\psi_2}{\mathrm{scale}},\quad k_3 > 0
+\,\right\}$$
+
+Choosing $v > 0$ as the free parameter, the manifold is the **1D curve**
+
+$$v \;\mapsto\; \begin{pmatrix} v \\ k_1 \\ k_2 \\ \psi_1/v \\ k_4 \\ K_m \\ \psi_2/v \end{pmatrix}, \qquad v \in (0,\infty)$$
+
+**Positivity** is automatically preserved: $k_3 = \psi_1/v > 0$ and
+$\mathrm{scale} = \psi_2/v > 0$ for all $v > 0$. Every point on this
+hyperbolic curve produces exactly the same output trajectory.
+
+## Reparametrisation
+
+Fix one representative per equivalence class by setting $v = 1$
+(normalise the maximal transcription rate). Then:
+
+$$\tilde k_3 = \psi_1 = k_3\big|_{v=1}, \qquad
+  \widetilde{\mathrm{scale}} = \psi_2 = \mathrm{scale}\big|_{v=1}$$
+
+The reduced model with $\theta_{\rm red} = (\tilde k_3,\, k_1,\, k_2,\, k_4,\, K_m,\, \widetilde{\mathrm{scale}})^\top$
+is locally identifiable. Positivity holds for all $\tilde k_3, \widetilde{\mathrm{scale}} > 0$.
+
+---
+
+# Example 2: Non-Scaling Non-Identifiability (Catenary Two-Compartment Model)
+
+## Model
+
+A **catenary compartment model** describes exchange of a substance between
+two connected compartments with first-order transfer rates in both directions —
+the name refers to the chain-like topology $x_1 \leftrightarrow x_2$, as opposed
+to a mammillary arrangement. Such models are standard in pharmacokinetics to
+describe drug distribution between plasma and tissue.
+
+$$\dot x_1 = -k_1 x_1 + k_2 x_2$$
+$$\dot x_2 = k_3 x_1 - k_4 x_2$$
+$$g = x_1 + x_2$$
+
+**Parameters:** $\theta = (k_1,\, k_2,\, k_3,\, k_4)^\top$
+
+**Initial condition:** $x_1(t_0) = \delta$, $x_2(t_0) = 0$.
+
+Only the **total amount** $x_1 + x_2$ is observed.
+
+## Lie Derivatives at $t_0$
+
+**$L_f^0 g\big|_0 = \delta$**
+
+**$L_f^1 g\big|_0$:**
+
+$$L_f^1 g = f_1 + f_2 = (k_3-k_1)x_1 + (k_2-k_4)x_2
+\xrightarrow{\;t_0\;} \delta(k_3-k_1)$$
+
+**$L_f^2 g\big|_0$:**
+
+$$L_f^2 g\big|_0 = \delta\bigl[k_1(k_1-k_3) + k_3(k_2-k_4)\bigr]$$
+
+**$L_f^3 g\big|_0$:**
+
+$$L_f^3 g\big|_0 = \delta\bigl[-k_1\bigl(k_1(k_1-k_3)+k_3(k_2-k_4)\bigr)
+                              - k_3\bigl(k_2(k_1-k_3)+k_4(k_2-k_4)\bigr)\bigr]$$
+
+## Observability-Identifiability Matrix
+
+$$\mathcal O = \begin{pmatrix}
+0 & 0 & 0 & 0 \\
+-\delta & 0 & \delta & 0 \\
+\delta(2k_1-k_3) & \delta k_3 & \delta(k_2-k_4-k_1) & -\delta k_3 \\
+\star & \star & \star & \star
+\end{pmatrix}$$
+
+| Lie order $k$ | $\operatorname{rank}(\mathcal O)$ |
+|:---:|:---:|
+| 0 | 0 |
+| 1 | 1 |
+| 2 | 2 |
+| 3 | 3 |
+| 4 | **3** (saturated) |
+
+Null space has **dimension 1**.
+
+## Non-Identifiable Direction and Its Orbit
+
+Solving $\mathcal O\,\xi = 0$:
+
+$$\xi = \begin{pmatrix} -1 \\ (k_1+k_2-k_4)/k_3 \\ -1 \\ 1 \end{pmatrix}$$
+
+The $k_2$-component is a rational function of $\theta$ — this is a
+**non-scaling symmetry**. Integrating $\dot\theta = \xi$ gives the orbit:
+
+$$k_1(\varepsilon) = k_1 - \varepsilon, \quad
+k_3(\varepsilon) = k_3 - \varepsilon, \quad
+k_4(\varepsilon) = k_4 + \varepsilon$$
+
+$$k_2(\varepsilon) = k_2 + \varepsilon\,\frac{-k_1 - k_2 + 2k_3 + k_4}{k_3}
+                    + \varepsilon^2(\ldots)$$
+
+(solved from the linear ODE $\dot k_2 = (k_1+k_2-k_4)/k_3$ with
+$k_3 = k_3 - \varepsilon$).
+
+The true invariants — functions constant along the orbit — are found by
+inspection:
+
+$$\psi_1 = k_1 - k_3, \qquad \psi_2 = k_3 + k_4$$
+
+since $\frac{d}{d\varepsilon}(k_1-k_3) = -1-(-1) = 0$ and
+$\frac{d}{d\varepsilon}(k_3+k_4) = -1+1 = 0$.
+The remaining free direction is $k_3$ itself.
+
+## The Non-Identifiable Manifold
+
+Integrating $\dot\theta = \xi$ gives the orbit
+
+$$k_1(\varepsilon) = k_1 - \varepsilon, \quad
+k_3(\varepsilon) = k_3 - \varepsilon, \quad
+k_4(\varepsilon) = k_4 + \varepsilon, \quad
+k_2(\varepsilon) = k_2 + \varepsilon\,\frac{-k_1 - k_2 + 2k_3 + k_4}{k_3} + O(\varepsilon^2)$$
+
+The invariants $\psi_1 = k_1 - k_3$ and $\psi_2 = k_3 + k_4$ are constant along
+the orbit since $d(k_1-k_3)/d\varepsilon = -1-(-1) = 0$ and
+$d(k_3+k_4)/d\varepsilon = -1+1 = 0$.
+Using $k_3$ as the free parameter, the **non-identifiable manifold** is the
+1D curve
+
+$$k_3 \;\mapsto\;
+\begin{pmatrix} \psi_1 + k_3 \\ k_2 \\ k_3 \\ \psi_2 - k_3 \end{pmatrix},
+\qquad k_3 \in \bigl(\max(0,\,-\psi_1),\; \psi_2\bigr)$$
+
+**Positivity constraints** determine the admissible range:
+
+| Parameter | Expression | Positive when |
+|---|---|---|
+| $k_1$ | $\psi_1 + k_3$ | $k_3 > -\psi_1$ |
+| $k_3$ | $k_3$ | $k_3 > 0$ |
+| $k_4$ | $\psi_2 - k_3$ | $k_3 < \psi_2$ |
+| $k_2$ | $k_2$ (invariant) | always |
+
+So $k_3 \in (\max(0,-\psi_1),\, \psi_2)$, a **bounded open interval** — unlike the
+scaling case where the free parameter ranged over all of $(0,\infty)$.
+The manifold is a **line segment** in $\mathbb{R}^4$, not a hyperbola.
+
+## Reparametrisation
+
+Fix $k_3 = 1$ (one representative per equivalence class). Then:
+
+$$k_1 = \psi_1 + 1, \quad k_2 = k_2, \quad k_3 = 1, \quad k_4 = \psi_2 - 1$$
+
+Positivity requires $\psi_1 > -1$ and $\psi_2 > 1$.
+The reduced model with $\theta_{\rm red} = (\psi_1,\, k_2,\, \psi_2)^\top$
+is locally identifiable (full OIM rank verified).
+
+## Contrast with Example 1
+
+| Property | Example 1 (MM cascade) | Example 2 (catenary) |
+|---|---|---|
+| Null space dimension | 2 | 1 |
+| Symmetry type | **scaling** | **non-scaling** |
+| Generator components | monomials $\propto \theta_i$ | rational functions of $\theta$ |
+| Fast integer kernel | ✓ sufficient | ✗ misses this direction |
+| Identifiable combinations | products $vk_3$, $v\cdot\mathrm{scale}$ | differences $k_1-k_3$, $k_3+k_4$ |
+| Reparametrisation | fix scale and $k_3$, rename $v$ | fix $k_3=1$, shift remaining rates |
+
+The non-scaling direction in Example 2 cannot be found by
+`method = "scaling"` in `symmetryDetection()`; it requires
+`method = "observability"` or `method = "liesym"`.
+

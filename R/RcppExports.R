@@ -113,6 +113,50 @@ smcBetaBisect <- function(logL, logwPrev, betaOld, targetESS, tol = 1e-6, maxIte
     .Call(`_dMod_smc_beta_bisect`, logL, logwPrev, betaOld, targetESS, tol, maxIter)
 }
 
+symObsNullMulti <- function(tapes, nLeaves, nStates, zSlots, point, pIn, Nt, cores = 1L) {
+    .Call(`_dMod_symObsNullMulti`, tapes, nLeaves, nStates, zSlots, point, pIn, Nt, cores)
+}
+
+symObsNullBatch <- function(tapes, nLeaves, nStates, zSlots, points, primes, Nt, cores = 1L) {
+    .Call(`_dMod_symObsNullBatch`, tapes, nLeaves, nStates, zSlots, points, primes, Nt, cores)
+}
+
+symObsNullChain <- function(chains, nLeaves, nStates, zSlots, point, pIn, Nt, Mtot, cores = 1L) {
+    .Call(`_dMod_symObsNullChain`, chains, nLeaves, nStates, zSlots, point, pIn, Nt, Mtot, cores)
+}
+
+symSolveMod <- function(A, b, pIn) {
+    .Call(`_dMod_symSolveMod`, A, b, pIn)
+}
+
+symSteadyStateSeed <- function(plan, paramVals, lVals, pIn) {
+    .Call(`_dMod_symSteadyStateSeed`, plan, paramVals, lVals, pIn)
+}
+
+symFitRational <- function(sampleU, mons, rvals, pIn) {
+    .Call(`_dMod_symFitRational`, sampleU, mons, rvals, pIn)
+}
+
+symRatRecon <- function(residues, primes) {
+    .Call(`_dMod_symRatRecon`, residues, primes)
+}
+
+symSparsePoly <- function(seq, monoTab, monoRes, pIn) {
+    .Call(`_dMod_symSparsePoly`, seq, monoTab, monoRes, pIn)
+}
+
+symMonoResidues <- function(expts, bases, pIn) {
+    .Call(`_dMod_symMonoResidues`, expts, bases, pIn)
+}
+
+symBMorder <- function(seq, pIn) {
+    .Call(`_dMod_symBMorder`, seq, pIn)
+}
+
+symCauchyEval <- function(tnodes, rvals, dN, dD, pIn) {
+    .Call(`_dMod_symCauchyEval`, tnodes, rvals, dN, dD, pIn)
+}
+
 trustL1_impl <- function(objfun, parinit, mu, lambda, one_sided, rinit, rmax, parscale = NULL, iterlim = 100L, fterm = 1e-6, mterm = 1e-6, minimize = TRUE, blather = FALSE, parupper = NULL, parlower = NULL, printIter = FALSE, traceFile = NULL) {
     .Call(`_dMod_trustL1_impl`, objfun, parinit, mu, lambda, one_sided, rinit, rmax, parscale, iterlim, fterm, mterm, minimize, blather, parupper, parlower, printIter, traceFile)
 }

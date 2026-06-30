@@ -258,10 +258,10 @@ distributed_computing <- function(
         paste0(
           "mkdir -p ", output_folder_abs, "/", jobname,"_folder/results/; ",
           ssh_command, "-n ", machine, # go to remote
-          " 'tar -C ", jobname, "_folder", " -czf - ./'", # compress all files on remote)
+          " 'ZSTD_NBTHREADS=0 tar -C ", jobname, "_folder", " -I zstd -cf - ./'", # compress all files on remote)
           " | ", # pipe to local
           "",
-          "tar -C ", output_folder_abs, "/", jobname,"_folder/results/ -xzf -"
+          "tar -C ", output_folder_abs, "/", jobname,"_folder/results/ -I zstd -xf -"
         )
       )
     } else {
@@ -270,8 +270,8 @@ distributed_computing <- function(
         paste0(
           "mkdir -p ", output_folder_abs, "/", jobname,"_folder/results/; ",
           ssh_command, "-n ", machine, " '",
-          "find ", jobname, "_folder -type f -name \"*result.RData\" -exec tar -czf - {} +'",
-          " | tar --strip-components=1 -xz -C ", shQuote(paste0(output_folder_abs, "/", jobname,"_folder/results/"))
+          "ZSTD_NBTHREADS=0 find ", jobname, "_folder -type f -name \"*result.RData\" -exec tar -I zstd -cf - {} +'",
+          " | tar --strip-components=1 -I zstd -x -C ", shQuote(paste0(output_folder_abs, "/", jobname,"_folder/results/"))
         )
       )
     }
@@ -344,7 +344,7 @@ distributed_computing <- function(
   
   
   # export current workspace
-  save.image(file = paste0(wd_path,jobname, "_workspace.RData")) 
+  save.image(file = paste0(wd_path,jobname, "_workspace.RData"), compress = FALSE)
   
   
   # WRITE R
@@ -508,8 +508,8 @@ distributed_computing <- function(
     compile_files <- append(compile_files, Sys.glob(paste0("*.c")))
     compile_files <- paste(compile_files, collapse = " ")
     
-    tar_locale <- paste0("tar -jcf - ", compile_files, " ", wd_path, "*")
-    tar_remote <- paste0("tar -C ./ -jxf - ; mv -t ./", jobname, "_folder ", compile_files, "; ")
+    tar_locale <- paste0("tar -I 'zstd -T0' -cf - ", compile_files, " ", wd_path, "*")
+    tar_remote <- paste0("tar -C ./ -I zstd -xf - ; mv -t ./", jobname, "_folder ", compile_files, "; ")
     
     sourcefiles <- paste(
       c(list.files(pattern = glob2rx("*.c")), list.files(pattern = glob2rx("*.cpp"))),
@@ -517,7 +517,8 @@ distributed_computing <- function(
     )
     
     compile_remote <- paste0(
-      "module load math/R; R CMD SHLIB ", sourcefiles, " -o ", jobname, "_shared_object.so; "
+      "module load math/R; MAKEFLAGS='-j", cores, "' R CMD SHLIB ",
+      sourcefiles, " -o ", jobname, "_shared_object.so; "
     )
     
   } else if (link) {
@@ -530,8 +531,8 @@ distributed_computing <- function(
     # unlink(list.files(pattern = "(\\.so)$"))
     
     compile_files <- paste(object_files, collapse = " ")
-    tar_locale <- paste0("tar -jcf - ", compile_files, " ", wd_path, "*")
-    tar_remote <- paste0("tar -C ./ -jxf - ; mv -t ./", jobname, "_folder ", compile_files, "; ")
+    tar_locale <- paste0("tar -I 'zstd -T0' -cf - ", compile_files, " ", wd_path, "*")
+    tar_remote <- paste0("tar -C ./ -I zstd -xf - ; mv -t ./", jobname, "_folder ", compile_files, "; ")
     
     compile_remote <- paste0(
       "module load math/R; R CMD SHLIB ", paste(object_files, collapse = " "),
@@ -544,8 +545,8 @@ distributed_computing <- function(
     compile_files <- append(compile_files, Sys.glob(paste0("*.o")))
     compile_files <- paste(compile_files, collapse = " ")
     
-    tar_locale <- paste0("tar -jcf - ", compile_files, " ", wd_path, "*")
-    tar_remote <- paste0("tar -C ./ -jxf - ; mv -t ./", jobname, "_folder ", compile_files, "; ")
+    tar_locale <- paste0("tar -I 'zstd -T0' -cf - ", compile_files, " ", wd_path, "*")
+    tar_remote <- paste0("tar -C ./ -I zstd -xf - ; mv -t ./", jobname, "_folder ", compile_files, "; ")
     compile_remote <- ""
   }
   

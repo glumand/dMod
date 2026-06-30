@@ -2,60 +2,230 @@
 % Please edit documentation in R/symmetryDetection.R
 \name{symmetryDetection}
 \alias{symmetryDetection}
-\title{Search for symmetries in the loaded model}
+\title{Search for structural non-identifiabilities of a model}
 \usage{
 symmetryDetection(
-  f,
-  obsvect = NULL,
-  prediction = NULL,
-  initial = NULL,
-  ansatz = "uni",
-  pMax = 2,
-  inputs = NULL,
+  f = NULL,
+  g = NULL,
+  trafo = NULL,
+  method = c("observability", "liesym", "scaling"),
+  parameters = NULL,
   fixed = NULL,
+  forcings = NULL,
+  events = NULL,
+  conditions = NULL,
+  t0 = NULL,
+  equilibrate = FALSE,
+  reduceCQ = TRUE,
+  closedForm = FALSE,
   cores = 1,
-  allTrafos = FALSE
+  control = reconstControl(),
+  liesym = liesymControl(),
+  scaling = scalingControl()
 )
 }
 \arguments{
-\item{f}{object containing the ODE for which \code{as.eqnvec()} is defined}
+\item{f}{The model right-hand sides: an \link{eqnlist}, an \link{eqnvec}, or a named
+character vector keyed by state name (anything \link{as.eqnvec} accepts). With an
+\link{eqnlist}, conserved quantities can be reduced first (\code{reduceCQ}).}
 
-\item{obsvect}{vector of observation functions}
+\item{g}{The observation functions, as an \link{eqnvec} or named character vector.}
 
-\item{prediction}{vector containing prediction to be tested}
+\item{trafo}{Optional parameter transformation as an \link{eqnvec} or named
+character vector. A parameter-named entry (inner symbol = expression in the
+outer parameters) is substituted into \code{f} and \code{g}; a state-named entry is
+that state's initial condition (a parameter, number or rational expression).
+A solved steady state from \link{steadyStates} can be passed whole.}
 
-\item{initial}{vector containing initial values}
+\item{method}{One of \code{"observability"} (default), \code{"liesym"} or \code{"scaling"};
+see Description.}
 
-\item{ansatz}{type of infinitesimal ansatz used for the analysis (uni, par, multi)}
+\item{parameters}{Character vector of extra symbols to treat as parameters.}
 
-\item{pMax}{maximal degree of infinitesimal ansatz}
+\item{fixed}{Character vector of symbols that are known and therefore not
+unknowns. For \code{"observability"} they are excluded from the coordinates \code{z}:
+a fixed parameter is a known constant, and a fixed state keeps its dynamics
+but carries no unknown initial value. For \code{"liesym"} their infinitesimal
+ansatz is set to zero.}
 
-\item{inputs}{specify the input variables}
+\item{forcings}{Character vector of externally driven (input) state names.
+For \code{"observability"} a forcing is an integrated state with default initial
+value 0 that is excluded from the \code{f = 0} steady-state constraint (so the
+constraint solves over the non-forcing states with every forcing held at
+0); for \code{"liesym"} and \code{"scaling"} the same states are the inputs whose
+infinitesimal ansatz is fixed. Listed explicitly here; an \code{RHS = 0} state
+that is not a forcing is instead treated as a constant and substituted by
+its value.}
 
-\item{fixed}{variables to concider fixed}
+\item{events}{Optional \link{eventlist}. For \code{"observability"} the event value is
+looked up in \code{conditions} when it names a grid column, so the boolean
+switches and the stimulus levels of a condition grid reach the analysis.
+Events at or before \code{t0} set the pre-stimulus regime and compose the first
+segment's initial condition; events after \code{t0} split the post-stimulus
+timeline into analytic segments, one local Taylor jet each, all stacked, with
+the state propagated exactly across each gap (Details).}
 
-\item{cores}{maximal number of cores used for the analysis}
+\item{conditions}{Optional data frame of experimental conditions (a dMod
+condition grid: one row per condition, columns named by model symbols or by
+event-value placeholders). When supplied, \code{"observability"} runs the
+multi-condition analysis: each condition is compiled with its own symbol
+substitutions (a numeric cell bakes a symbol to a constant, a symbol cell
+renames it, e.g. a knockdown-specific rate) and its event-defined initial
+values, and the observability matrices of all conditions are stacked. A
+direction is reported non-identifiable only when it is unobservable in every
+condition (the intersection nullspace), and known inputs are constants of
+each condition rather than free symbols, so they never appear in a
+reconstructed direction. The directions are returned in closed form.}
 
-\item{allTrafos}{do not remove transformations with a common parameter factor}
+\item{t0}{Optional numeric start time of the first segment's Taylor expansion
+(default: the earliest event time, else 0). Events at \code{t0} are the first
+stimulus (composed into the start-point initial condition); the distinct
+event times after \code{t0} are the boundaries of the later segments. A dynamic
+state's event perturbs its value by \code{replace} / \code{add} / \code{multiply};
+constant-state (switch) events are regime substitutions.}
+
+\item{equilibrate}{Logical. For \code{"observability"}, start the states at a steady
+state of \code{f} with forcings held at 0, solved exactly over a finite field
+without a symbolic solution (parameters are never solved for); t0 events such
+as a dose are applied on top. A free power or Hill exponent is supported,
+whether or not its base has a linear turnover term: the term \code{base^exp} is
+recast to a rational coordinate \code{E = base^exp} with a companion \code{L = log(base)}, so the verdict (which parameters, including the exponent, are
+identifiable) is exact. With \code{closedForm}, \code{E} and \code{L} are
+sampled as coordinates and back-substituted, so a non-identifiable direction
+is returned in closed form even when it involves \code{base^exp} or \code{log(base)}.
+State initial conditions given in \code{trafo} are ignored when equilibrating.}
+
+\item{reduceCQ}{Logical. If the model is an \link{eqnlist} with conserved
+quantities, eliminate one pivot species per conserved quantity first.}
+
+\item{closedForm}{Logical. For \code{"observability"}, reconstruct the non-scaling
+directions as exact rational functions of the parameters, not just their
+support. Scaling directions are peeled exactly from the integer kernel and
+reported in closed form regardless of this flag. A narrow entry is fit
+densely; an entry coupling many variables is recovered by sparse
+(Ben-Or-Tiwari) interpolation. Every reconstructed direction is certified
+against the nullspace at a fresh prime; one that cannot be reconstructed or
+certified is returned with its support and \code{closedForm = FALSE} instead.}
+
+\item{cores}{Number of threads. For \code{"observability"} the per-condition Taylor
+build is parallelised over conditions and the reconstruction's sample bank
+over evaluation points; for \code{"liesym"} and \code{"scaling"} it is the worker count
+of the symbolic search.}
+
+\item{control}{A \code{\link[=reconstControl]{reconstControl()}} list tuning the \code{"observability"} engine's
+saturation and closed-form reconstruction (relevance caps, fit degrees, term
+and gap-order caps). Raise the caps to recover wide or high-degree directions.}
+
+\item{liesym}{A \code{\link[=liesymControl]{liesymControl()}} list tuning the \code{"liesym"} engine: the
+infinitesimal ansatz and degree, the extra Lie-derivative order, the symbolic
+backend and verification, and the evaluation point.}
+
+\item{scaling}{A \code{\link[=scalingControl]{scalingControl()}} list tuning the \code{"scaling"} engine: the
+symbolic backend and the evaluation point.}
+}
+\value{
+For \code{"observability"}: a list with \code{identifiable}, \code{rank}, \code{dim},
+\code{lieOrderUsed} and \code{nonIdentifiable}. Each direction carries a \code{type}:
+\code{"scaling"} directions give the integer toric weights \code{c_i} (the symmetry is
+\verb{z_i -> lambda^\{c_i\} z_i}); \code{"general"} directions give the reconstructed
+tangent components as rational expressions (or only the \code{support} when
+\code{closedForm = FALSE}, or with a \code{reason} naming the \code{reconstControl} cap that
+stopped a requested closed form). The multi-condition path adds \code{conditions}, the number
+of distinct conditions, \code{segments}, the number of stacked analytic segments
+(events after \code{t0} split each condition into several), and \code{gapOrderUsed}, the
+gap power-series order at which the rank saturated (0 with no gaps). For
+\code{"scaling"}: \code{count} and the same \code{nonIdentifiable} weights. For
+\code{"liesym"}: a list of generators, each with \code{infinitesimals},
+\code{transformation}, \code{type} and \code{verified}. The result has class
+\code{symmetryDetection}; \code{print()} gives a one-line summary and \code{summary()}
+lists the directions.
 }
 \description{
-This function follows the method published in [1]. The
-underlying Python implementation (originally written for Python 2.7 /
-sympy 0.7) was ported to Python 3 and is now driven through
-\code{reticulate} instead of the archived \code{rPython} package. The Python
-environment is provisioned via \code{reticulate::py_require()} in
-\code{.onLoad()} and pulls in \code{sympy}, \code{scipy}, and \code{numpy}.
+Detects structural non-identifiabilities of a reaction network
+plus its observation map, driven through the Python module
+\code{symmetryDetectionVersion2} via \code{reticulate}. The model \code{f}, observables \code{g}
+and optional transformation \code{trafo} are given as equations (anything
+\link{as.eqnvec} accepts). The engine is chosen with \code{method}:
+\itemize{
+\item \code{"observability"} (default): the rank of the observability-identifiability
+matrix over a finite field. Full column rank means structurally locally
+identifiable; otherwise the nullspace gives the non-identifiable directions
+and the symbols they involve. Exact and scalable, defined only for rational
+right-hand sides and observables. The sensible default.
+\item \code{"liesym"}: the polynomial Lie-symmetry ansatz of Merkt et al. (2015),
+returning the explicit closed-form generator and transformation. More
+expensive (grows with \code{pMax}); use it when the explicit symmetry is wanted.
+\item \code{"scaling"}: the scaling symmetries that multiply each state and parameter
+by a power of one common factor, from the integer kernel of the
+monomial-exponent conditions. Returns only the scaling part.
+}
+}
+\details{
+\strong{Segments and exact propagation.} With events after \code{t0}, the post-stimulus
+timeline is split at the distinct event times into analytic segments, one local
+Taylor jet per segment over a shared coordinate space, all stacked (across
+conditions) like conditions. A later segment's start state is the previous
+segment's state flowed across the inter-event gap and mapped by the event. That
+finite-time nonlinear flow is transcendental, so it is carried not by plugging
+in the numeric gap length but by keeping the gap length a \emph{formal power-series
+variable} \eqn{\Delta t}: the kernel propagates the state as its exact Taylor
+series in \eqn{\Delta t} (the coefficients it already computes), and an
+identifiability direction must annihilate every \eqn{\Delta t} coefficient (a
+polynomial vanishing for generic timing). The gap order is raised alongside the
+Lie order until the rank stabilises (\code{gapOrderUsed}), giving the \strong{exact
+identifiability for generic inter-event timing}, transient channels included.
+Truncating the gap order early is sound (a conservative lower bound on the rank).
+
+This makes parameters identifiable that only enter through a transient between
+events (e.g. an inhibitor pre-incubation whose relaxed state seeds the stimulus
+phase): apply it at equilibrium (\code{t0} at the inhibitor time) so the gap is
+propagated. A \code{replace}/\code{add}/\code{multiply} event on a dynamic state is applied
+exactly to the propagated state. A dose on a conserved-moiety \emph{pivot} species
+eliminated by \code{reduceCQ} is not seen (it is no longer a state); keep that
+species (\code{reduceCQ = FALSE}) to dose it.
+}
+\note{
+The interface, defaults and output structure may still change between
+releases.
 }
 \examples{
 \dontrun{
-eq <- NULL
-eq <- addReaction(eq, "A", "B", "k1*A")
-eq <- addReaction(eq, "B", "A", "k2*B")
+# The canonical scaling symmetry, found by all three engines: a reversible
+# reaction observed only through alpha * A leaves the absolute scale free.
+eq <- eqnlist() |>
+  addReaction("A", "B", "k1 * A") |>
+  addReaction("B", "A", "k2 * B")
 
-observables <- eqnvec(Aobs = "alpha * A")
+summary(symmetryDetection(eq, eqnvec(Aobs = "alpha * A")))          # observability
+summary(symmetryDetection(eq, eqnvec(Aobs = "alpha * A"), method = "liesym"))
+summary(symmetryDetection(eq, eqnvec(Aobs = "alpha * A"), method = "scaling"))
 
-symmetryDetection(eq, observables)
+# A steady-state initial condition as an expression: a state-named trafo entry
+# is the initial condition, seeded with its parameter sensitivities.
+summary(symmetryDetection(eqnvec(x = "b - a*x"), eqnvec(y = "s*x"),
+                          trafo = eqnvec(x = "b/a"), closedForm = TRUE))
 
+# Several experimental conditions: a switch held at one generic value makes
+# k1 and k2 look unidentifiable, but two values (set per condition by an
+# event, read from the grid) identify both.
+fu <- eqnvec(A = "-(k1 + u * k2) * A", u = "0")
+events <- addEvent(eventlist(), var = "u", time = -1, value = "var_u",
+                   method = "replace")
+grid <- data.frame(var_u = c(0, 1), row.names = c("ctrl", "stim"))
+symmetryDetection(fu, eqnvec(y = "A"), method = "observability",
+                  events = events, conditions = grid)$identifiable
+
+# Pre-equilibrated model with a dose event: the steady state b/a is the
+# relaxation attractor; a known dose makes (a, b, s) identifiable.
+dose <- addEvent(eventlist(), var = "x", time = 0, value = "dose",
+                 method = "replace")
+summary(symmetryDetection(eqnvec(x = "b - a*x"), eqnvec(y = "s*x"),
+                          method = "observability", events = dose,
+                          conditions = data.frame(dose = 2, row.names = "stim")))
+
+# Full worked script (scaling, closed-form directions, an enzyme assay, a
+# transcription-translation rate curve, conditions and steady states):
+file.edit(system.file("examples", "symmetryDetection.R", package = "dMod"))
 }
 }
 \references{
