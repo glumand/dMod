@@ -127,6 +127,14 @@ def _make_parse(local_dict):
     return parse
 
 
+def _make_local_parse(all_lines):
+    """Symbol table (model names as symbols, not sympy constants) with the dMod
+    function aliases, plus a parser bound to it."""
+    local = _build_symbol_table(all_lines)
+    local.update(_function_aliases())
+    return local, _make_parse(local)
+
+
 def _read_equations(lines, parse):
     variables, functions = [], []
     for raw in lines:
@@ -352,7 +360,7 @@ def makeAnsatz(ansatz, allVariables, m, q, pMax, fixed):
     return infis, diffInfis, rs
 
 
-def transformInfisToPoly(infis, diffInfis, allVariables, rs, ansatz):
+def transformInfisToPoly(infis, diffInfis, allVariables, rs):
     n = len(allVariables)
     k = len(diffInfis)
     infisPoly = [Apoly(infis[i], allVariables, rs) for i in range(n)]
@@ -426,21 +434,6 @@ def _obs_rows(obsExpr, infisSym, allVariables, rs):
             "an invertible outer function g = phi(h) to its argument h, or use "
             "method='observability'.")
     return list(poly.coefs)
-
-
-def doInitEquation(k, initDenominators, initDerivativesNum, initFunctions,
-                   infis, allVariables, rs):
-    n = len(allVariables)
-    m = len(initFunctions)
-    polynomial = infis[k].mul(initDenominators[k]).mul(initDenominators[k])
-    for i in range(n):
-        polynomial.sub(infis[i].mul(initDerivativesNum[k][i]))
-    polynomial = polynomial.as_expr()
-    for i in range(m):
-        if polynomial.has(allVariables[i]):
-            polynomial = polynomial.subs(allVariables[i], initFunctions[i])
-    polynomial = Apoly(polynomial, allVariables, rs)
-    return list(polynomial.coefs)
 
 
 ###########################################################################
@@ -735,7 +728,7 @@ def _is_zero(expr):
     return spy.simplify(spy.expand(num)) == 0
 
 
-def _verify_generator(infis, allVariables, diffEquations, ssFields, obsExprs):
+def _verify_generator(infis, allVariables, diffEquations, obsExprs):
     n = len(allVariables)
     # observation / Lie-chain invariance: X(o) = 0
     for o in obsExprs:
@@ -748,21 +741,19 @@ def _verify_generator(infis, allVariables, diffEquations, ssFields, obsExprs):
     # flow conditions [f, X] = 0 for each dynamic field. The field has a
     # component only for the dynamic states (index < len(fields)); parameter
     # and input directions evolve trivially (component 0).
-    for fields in (diffEquations, ssFields):
-        if not fields:
-            continue
-        mf = len(fields)
-        for k in range(mf):
-            fk = fields[k]
-            bracket = 0
-            for l in range(n):
-                fl = fields[l] if l < mf else 0
-                if fl != 0 and infis[k] != 0:
-                    bracket += fl * spy.diff(infis[k], allVariables[l])
-                if infis[l] != 0 and fk != 0:
-                    bracket -= infis[l] * spy.diff(fk, allVariables[l])
-            if not _is_zero(bracket):
-                return False
+    fields = diffEquations
+    mf = len(fields)
+    for k in range(mf):
+        fk = fields[k]
+        bracket = 0
+        for l in range(n):
+            fl = fields[l] if l < mf else 0
+            if fl != 0 and infis[k] != 0:
+                bracket += fl * spy.diff(infis[k], allVariables[l])
+            if infis[l] != 0 and fk != 0:
+                bracket -= infis[l] * spy.diff(fk, allVariables[l])
+        if not _is_zero(bracket):
+            return False
     return True
 
 
@@ -780,8 +771,7 @@ def _rationalize(functions, allVariables):
     return nums, dens
 
 
-def symmetryDetection(allVariables, diffEquations, observables, obsFunctions,
-                      initFunctions, predictions, predFunctions, ssFunctions,
+def symmetryDetection(allVariables, diffEquations, obsFunctions,
                       ansatz='uni', pMax=2, inputs=(), fixed=(), lieOrder=0,
                       allTrafos=False, verify=True):
     n = len(allVariables)
@@ -792,7 +782,7 @@ def symmetryDetection(allVariables, diffEquations, observables, obsFunctions,
     sys.stdout.flush()
 
     infisSym, diffInfis, rs = makeAnsatz(ansatz, allVariables, m, q, pMax, list(fixed))
-    infis, diffInfis = transformInfisToPoly(infisSym, diffInfis, allVariables, rs, ansatz)
+    infis, diffInfis = transformInfisToPoly(infisSym, diffInfis, allVariables, rs)
 
     numerators, denominators = _rationalize(diffEquations, allVariables)
     derivativesNum = _quotient_derivatives(numerators, denominators, allVariables)
@@ -814,23 +804,6 @@ def symmetryDetection(allVariables, diffEquations, observables, obsFunctions,
         obsExprs.extend(chain)
     h = len(obsExprs)
 
-    # initial conditions
-    o = len(initFunctions)
-    if o:
-        initNum, initDen = _rationalize(initFunctions, allVariables)
-        initDerivativesNum = _quotient_derivatives(initNum, initDen, allVariables)
-    else:
-        initDen = []
-        initDerivativesNum = []
-
-    # steady-state-initial second flow field f_ss
-    if ssFunctions:
-        ssNum, ssDen = _rationalize(ssFunctions, allVariables)
-        ssDerivativesNum = _quotient_derivatives(ssNum, ssDen, allVariables)
-        ssFieldExprs = [spy.together(spy.sympify(f)) for f in ssFunctions]
-    else:
-        ssFieldExprs = []
-
     sys.stdout.write('done\nBuilding system...')
     sys.stdout.flush()
 
@@ -840,13 +813,6 @@ def symmetryDetection(allVariables, diffEquations, observables, obsFunctions,
                                infis, diffInfis, allVariables, rs, ansatz))
     for k in range(h):
         rows.extend(_obs_rows(obsExprs[k], infisSym, allVariables, rs))
-    for k in range(o):
-        rows.extend(doInitEquation(k, initDen, initDerivativesNum, initFunctions,
-                                   infis, allVariables, rs))
-    if ssFunctions:
-        for k in range(len(ssFunctions)):
-            rows.extend(doEquation(k, ssNum, ssDen, ssDerivativesNum,
-                                   infis, diffInfis, allVariables, rs, ansatz))
 
     ncols = len(rs)
     sys.stdout.write('done\nSolving system of size %dx%d (%s)...'
@@ -873,14 +839,10 @@ def symmetryDetection(allVariables, diffEquations, observables, obsFunctions,
 
     verified = None
     if verify:
-        verified = [_verify_generator(infisTmp, allVariables, fieldExprs,
-                                      ssFieldExprs, obsExprs)
+        verified = [_verify_generator(infisTmp, allVariables, fieldExprs, obsExprs)
                     for infisTmp in infisAll]
 
     printTransformations(infisAll, allVariables, verified)
-
-    if predictions:
-        checkPredictions(predictions, predFunctions, infisAll, allVariables)
 
     # structured return
     result = []
@@ -894,29 +856,6 @@ def symmetryDetection(allVariables, diffEquations, observables, obsFunctions,
             'verified': (None if verified is None else bool(verified[l])),
         })
     return result
-
-
-def checkPredictions(predictions, predFunctions, infisAll, allVariables):
-    n = len(allVariables)
-    print('\nChecking predictions:')
-    for i in range(len(predictions)):
-        admits = True
-        lines = []
-        for j in range(len(infisAll)):
-            infiPred = 0
-            for k in range(n):
-                if infisAll[j][k] != 0:
-                    infiPred += infisAll[j][k] * spy.diff(predFunctions[i], allVariables[k])
-            infiPred = spy.simplify(infiPred)
-            if infiPred != 0:
-                admits = False
-                lines.append('  ' + str(predictions[i]) + '  (#' + str(j + 1) + '): ' + str(infiPred))
-        if admits:
-            print('  ' + str(predictions[i]) + ': admits all')
-        else:
-            for ln in lines:
-                print(ln)
-
 
 
 # raised when an expression is not a rational function of the coordinates
@@ -1170,9 +1109,7 @@ def evalRationalMod(expr, names, vals, q):
     q = int(q)
     if not isinstance(names, (list, tuple)): names = [names]
     if not isinstance(vals, (list, tuple)): vals = [vals]
-    local = _build_symbol_table([str(expr)] + [str(n) for n in names])
-    local.update(_function_aliases())
-    parse = _make_parse(local)
+    local, parse = _make_local_parse([str(expr)] + [str(n) for n in names])
     e = spy.together(spy.sympify(parse(str(expr))).subs(
         {spy.Symbol(str(n)): spy.Integer(int(v))
          for n, v in zip(names, vals)}))
@@ -1183,12 +1120,16 @@ def evalRationalMod(expr, names, vals, q):
     return int((num % q) * pow(den, q - 2, q) % q)
 
 
+_LINSOLVE_OPS_CAP = 2000  # bail to the numeric solver past this elimination size
+
+
 def _linear_solution(polys, solveStates):
     """Generic linear-elimination solution of polys = 0 for `solveStates`, each a
     rational function of the parameters. Returns {state: expr} or None when the
-    system is not generically linear (a coupled residual remains). The order is
-    fixed generically; a point where a pivot denominator vanishes mod p is caught
-    at evaluation and routed to the symbolic solve."""
+    system is not generically linear (a coupled residual remains, or an
+    intermediate expression exceeds `_LINSOLVE_OPS_CAP` and is left to the numeric
+    solver). The order is fixed generically; a point where a pivot denominator
+    vanishes mod p is caught at evaluation and routed to the symbolic solve."""
     remSet = set(solveStates)
     remP = [spy.sympify(pl) for pl in polys]
     elim = []
@@ -1199,6 +1140,8 @@ def _linear_solution(polys, solveStates):
             pl = remP[idx]
             if pl is None or not (pl.free_symbols & remSet):
                 continue
+            if pl.count_ops() > _LINSOLVE_OPS_CAP:
+                return None
             picked = None
             for v in pl.free_symbols & remSet:
                 pv = spy.Poly(pl, v)
@@ -1216,7 +1159,10 @@ def _linear_solution(polys, solveStates):
             remP[idx] = None
             for j in range(len(remP)):
                 if remP[j] is not None and v in remP[j].free_symbols:
-                    remP[j] = spy.fraction(spy.together(remP[j].subs(v, expr)))[0]
+                    sub = remP[j].subs(v, expr)
+                    if sub.count_ops() > _LINSOLVE_OPS_CAP:
+                        return None
+                    remP[j] = spy.fraction(spy.together(sub))[0]
             remSet.discard(v)
             progress = True
     if remSet:
@@ -1418,7 +1364,7 @@ def _compile_t0events(events, paramNames):
 
 def solveSteadyStateModular(model, stateNames, paramNames, paramVals, prime,
                             forcings=None, backend='sympy', t0events=None,
-                            recast=None, lVals=None):
+                            recast=None, lVals=None, jointMode=False):
     """Numeric point on the interior component of f = 0 over GF(prime) with its
     implicit-function-theorem parameter sensitivities.
 
@@ -1437,9 +1383,7 @@ def solveSteadyStateModular(model, stateNames, paramNames, paramVals, prime,
     key = (tuple(model), tuple(stateNames), tuple(paramNames), tuple(sorted(forcings)))
     cached = _ssModularCache.get(key)
     if cached is None:
-        local = _build_symbol_table(model + list(paramNames))
-        local.update(_function_aliases())
-        parse = _make_parse(local)
+        local, parse = _make_local_parse(model + list(paramNames))
         rhsByName = {}
         for raw in model:
             line = _clean(raw)
@@ -1507,6 +1451,29 @@ def solveSteadyStateModular(model, stateNames, paramNames, paramVals, prime,
             for th in paramSyms}
     Jxeff = [[_eval_terms(JxTerms[i][j], ptvals, p) for j in range(nS)]
              for i in range(nS)]
+
+    # raw resting Jacobian rows for the implicit/joint determining system: the
+    # constraint df_rest . xi = 0 (tangency to the resting manifold) in the
+    # UNELIMINATED (x, theta) coordinates. Snapshot BEFORE the recast folding below
+    # mutates Jxeff/JtBy. Row i is d f_rest[i] / d(solveStates, params). State
+    # columns are Jxeff, parameter columns are JtBy (which already carry the recast
+    # gen coordinate E as a param). Returned so R can stack these rows and run the
+    # scaling peel over the enlarged coordinate set (dfStateCols / dfParamCols name
+    # the columns).
+    dfJx = [list(row) for row in Jxeff]
+    dfJt = {nm: list(col) for nm, col in JtBy.items()}
+    dfStateCols = [str(sst) for sst in solveStates]
+    dfParamCols = [str(th) for th in paramSyms]
+
+    if jointMode:
+        # joint/implicit mode uses only the pre-event resting value (valBy) and the
+        # raw constraint Jacobian df_rest; the IFT parameter-duals, the recast dual
+        # chain and the t0-event composition below are all for the eliminated icSeed
+        # and are unused here. Returning now also skips the (occasionally singular)
+        # dual solve, so a point that seeds fine is not rejected for a dual failure.
+        return {'ok': True, 'stateNames': list(stateNames), 'valBy': dict(valBy),
+                'dfJx': dfJx, 'dfJt': dfJt, 'dfStateCols': dfStateCols,
+                'dfParamCols': dfParamCols}
 
     # power/Hill recast. A normal entry holds E = base^exp generic and folds its
     # chain rule into the base and exponent columns, so the IFT duals of the solved
@@ -1620,99 +1587,12 @@ def solveSteadyStateModular(model, stateNames, paramNames, paramVals, prime,
                 for nm in paramNames:
                     dx[nm][i] = (old * vdu[nm] + v0 * oldd[nm]) % p
     return {'ok': True, 'xstar': xstar, 'dx': dx, 'stateNames': list(stateNames),
-            'recast': recastOut}
+            'recast': recastOut,
+            'dfJx': dfJx, 'dfJt': dfJt, 'dfStateCols': dfStateCols,
+            'dfParamCols': dfParamCols, 'valBy': dict(valBy)}
 
 
-def compileSeedPlan(model, stateNames, paramNames, forcings=None, recast=None,
-                    t0events=None):
-    """Compile the per-point steady-state seed to value tapes and plain metadata,
-    so the C++ kernel can produce the icSeed in integer arithmetic. The state
-    values (linear solution), the IFT Jacobians and the t0 event values are emitted
-    as straight-line tapes over the parameters (and the solve-states, for the
-    Jacobian). Returns {'genericLinear': False} when the resting state is not
-    generically linear; the caller then seeds it with the symbolic solve instead."""
-    model = _as_list(model)
-    forcings = set(_as_list(forcings))
-    stateNames = _as_list(stateNames)
-    paramNames = _as_list(paramNames)
-    recast = list(recast) if recast else []
-    t0events = list(t0events) if t0events else []
-
-    local = _build_symbol_table(model + list(paramNames))
-    local.update(_function_aliases())
-    parse = _make_parse(local)
-    rhsByName = {}
-    for raw in model:
-        line = _clean(raw)
-        if '=' in line:
-            lhs, rhs = line.split('=', 1)
-            rhsByName[lhs.strip()] = parse(rhs)
-    stateSyms = [spy.Symbol(nm) for nm in stateNames]
-    paramSyms = [spy.Symbol(nm) for nm in paramNames]
-    solveStates = [s for s in stateSyms if str(s) not in forcings]
-    forcingSubs = {spy.Symbol(nm): spy.Integer(0) for nm in forcings}
-    fSym = [spy.sympify(rhsByName[str(s)]).subs(forcingSubs) for s in solveStates]
-    polys = [spy.expand(spy.fraction(spy.together(fi))[0]) for fi in fSym]
-    sol = _linear_solution(polys, solveStates)
-    if sol is None:
-        return {'genericLinear': False}
-    nS = len(solveStates)
-
-    # state values: one tape over the parameters
-    linSlot = {str(th): i for i, th in enumerate(paramSyms)}
-    try:
-        lop, la, lb, lcn, lcd, lout = _emit_tape_shared(
-            [sol[s] for s in solveStates], [], linSlot, len(paramSyms))
-    except _NotRational:
-        return {'genericLinear': False}
-
-    # Jacobians for the IFT: one tape over the parameters and the solve-states,
-    # outputs Jx (row-major nS x nS) then Jt (paramSyms-major, nS each)
-    jacSlot = {str(th): i for i, th in enumerate(paramSyms)}
-    for k, s in enumerate(solveStates):
-        jacSlot[str(s)] = len(paramSyms) + k
-    Jx = [[spy.diff(fi, sj) for sj in solveStates] for fi in fSym]
-    Jt = {str(th): [spy.diff(fi, th) for fi in fSym] for th in paramSyms}
-    jacExprs = [Jx[i][j] for i in range(nS) for j in range(nS)] + \
-               [Jt[str(th)][i] for th in paramSyms for i in range(nS)]
-    try:
-        jop, ja, jb, jcn, jcd, jout = _emit_tape_shared(
-            jacExprs, [], jacSlot, len(paramSyms) + nS)
-    except _NotRational:
-        return {'genericLinear': False}
-
-    plan = {
-        'genericLinear': True,
-        'nStates': len(stateNames), 'nSolve': nS,
-        'stateNames': list(stateNames), 'paramNames': list(paramNames),
-        'solveStateNames': [str(s) for s in solveStates],
-        'linOp': lop, 'linA': la, 'linB': lb, 'linCnum': lcn, 'linCden': lcd,
-        'linOut': lout,
-        'jacOp': jop, 'jacA': ja, 'jacB': jb, 'jacCnum': jcn, 'jacCden': jcd,
-        'jacOut': jout,
-        'recast': [{'E': str(rc['E']), 'L': str(rc['L']), 'base': str(rc['base']),
-                    'exp': str(rc['exp']), 'inverted': bool(rc.get('inverted'))}
-                   for rc in recast],
-    }
-
-    # t0 event values: one forward-mode tape over the parameters, so each event
-    # yields its value and its parameter duals in one evaluation
-    keep = [e for e in t0events if str(e['var']) in set(stateNames)]
-    if keep:
-        try:
-            eop, ea, eb, ecn, ecd, eout = _emit_tape_shared(
-                [spy.sympify(parse(str(e['value']))) for e in keep], [],
-                linSlot, len(paramSyms))
-        except _NotRational:
-            return {'genericLinear': False}
-        plan.update({'evOp': eop, 'evA': ea, 'evB': eb, 'evCnum': ecn,
-                     'evCden': ecd, 'evOut': eout,
-                     'evVar': [str(e['var']) for e in keep],
-                     'evMethod': [str(e['method']) for e in keep]})
-    return plan
-
-
-def _detect_power_atoms(perCond, S):
+def _detect_power_atoms(perCond):
     """Find base^exp terms with a non-numeric exponent. base must be a single
     symbol and exp = c*n (c rational, n a symbol); returns the unique (base, n)
     pairs, or None if a power is outside this form (then it stays non-rational)."""
@@ -1781,15 +1661,20 @@ def _apply_power_recast(pairs, S, perCond):
 def recastBacksub(expr, eNames, lNames, bases, exps):
     """Substitute the recast coordinates of a reconstructed direction back to
     their meaning, E -> base**exp and L -> log(base), and cancel. `expr` is a
-    rational expression string; the name vectors are aligned per recast atom."""
-    e = parse_expr(_clean(str(expr)), local_dict={}, evaluate=True)
+    rational expression string; the name vectors are aligned per recast atom.
+    Every name goes through the shared symbol table so model names like E, I, N
+    are taken as symbols, not sympy constants."""
     asList = lambda v: list(v) if isinstance(v, (list, tuple)) else [v]
+    eNames, lNames, bases, exps = (asList(eNames), asList(lNames),
+                                   asList(bases), asList(exps))
+    local, parse = _make_local_parse(
+        [str(expr)] + [str(x) for x in eNames + lNames + bases + exps])
+    e = parse(str(expr))
     subs = {}
-    for E, L, base, exp in zip(asList(eNames), asList(lNames),
-                               asList(bases), asList(exps)):
-        b = spy.Symbol(str(base))
-        subs[spy.Symbol(str(E))] = b ** spy.sympify(str(exp))
-        subs[spy.Symbol(str(L))] = spy.log(b)
+    for E, L, base, exp in zip(eNames, lNames, bases, exps):
+        b = parse(str(base))
+        subs[parse(str(E))] = b ** parse(str(exp))
+        subs[parse(str(L))] = spy.log(b)
     return str(spy.cancel(e.subs(subs)))
 
 
@@ -1797,7 +1682,8 @@ def compileObservabilityTapeMulti(model, observation, conditionSubs, conditionIC
                                   fixed=None, parameters=None, backend='sympy',
                                   equilibrate=False, forcings=None,
                                   segEquilibrate=None, conditionEvents=None,
-                                  conditionT0Events=None):
+                                  conditionT0Events=None, jointSteadyState=False,
+                                  jointFixedStates=None):
     """Compile one observability tape per experimental condition over a shared
     coordinate space, for the multi-condition observability path.
 
@@ -1843,9 +1729,7 @@ def compileObservabilityTapeMulti(model, observation, conditionSubs, conditionIC
         for k, v in dict(d).items():
             extra += [str(k), str(v)]
     all_lines = model + observation + _as_list(parameters) + extra
-    local = _build_symbol_table(all_lines)
-    local.update(_function_aliases())
-    parse = _make_parse(local)
+    local, parse = _make_local_parse(all_lines)
 
     variables, diffEquations, _ = _read_equations(model, parse)
     obsVars, obsFunctions, _ = _read_equations(observation, parse)
@@ -1889,7 +1773,7 @@ def compileObservabilityTapeMulti(model, observation, conditionSubs, conditionIC
     powerRecast = []
     invSolveName = {}
     if equilibrate:
-        pairs = _detect_power_atoms(perCond, S)
+        pairs = _detect_power_atoms(perCond)
         if pairs is None:
             return {'ok': False, 'nonrational':
                     ['unsupported power form: base must be a symbol and exponent c*param']}
@@ -1941,7 +1825,15 @@ def compileObservabilityTapeMulti(model, observation, conditionSubs, conditionIC
     freeState = {str(X): False for X in S}
     for c, (f_c, g_c, ic_c, f_ss) in enumerate(perCond):
         if segEq[c]:
-            continue  # equilibrate-seeded: no state is a free coordinate
+            # joint/implicit mode: keep every equilibrate state as a free coordinate
+            # (its value is seeded on-manifold to x* by R, the steady-state constraint
+            # enters as stacked df rows) so the direction is low-degree in (x, theta).
+            if jointSteadyState:
+                jfs = set(jointFixedStates or [])
+                for X in S:
+                    if str(X) not in forcings and str(X) not in jfs:
+                        freeState[str(X)] = True
+            continue  # equilibrate-seeded: no state is a free coordinate (unless joint)
         for X in S:
             if X in spy.sympify(ic_c[str(X)]).free_symbols:
                 freeState[str(X)] = True
@@ -1994,7 +1886,45 @@ def compileObservabilityTapeMulti(model, observation, conditionSubs, conditionIC
             'obsLines': ['%s = %s' % (str(obsVars[j]), spy.sympify(g_c[j]))
                          for j in range(len(g_c))],
         }
-        if segEq[c]:
+        if segEq[c] and jointSteadyState:
+            # joint/implicit mode: every non-forcing state is a free leaf whose
+            # order-0 value R seeds to the on-manifold resting value x* per sample.
+            # The IC tape aliases each state slot to its own leaf (identity), so the
+            # kernel gives each state an independent dual column. The resting model
+            # is kept so R can solve x* and read the df constraint rows [Jx|Jt].
+            jfs = set(jointFixedStates or [])
+            icMap = {X: (X if (str(X) not in forcings and str(X) not in jfs)
+                         else spy.Integer(0)) for X in S}
+            # steady state BEFORE the events: the t0 events (a dose at t0) are applied
+            # to the state COORDINATE x_ss here, so the observability jet starts at
+            # x0 = E(x_ss) while the df constraint is on the pre-event x_ss. R seeds
+            # the state leaf with the pre-event value (valBy), and the IC tape carries
+            # E with its chain-rule duals w.r.t. the leaves.
+            t0evs = (conditionT0Events[c]
+                     if conditionT0Events and c < len(conditionT0Events) else [])
+            for e in t0evs:
+                Xv = spy.Symbol(str(e['var']))
+                if Xv not in icMap:
+                    continue
+                val = spy.sympify(pval(e['value'])).subs(subsMap)
+                meth = str(e['method'])
+                if meth == 'replace':
+                    icMap[Xv] = val
+                elif meth == 'add':
+                    icMap[Xv] = icMap[Xv] + val
+                elif meth == 'multiply':
+                    icMap[Xv] = icMap[Xv] * val
+            try:
+                icOp, icA, icB, icCnum, icCden, icOut = _emit_tape_shared(
+                    [icMap[X] for X in S], [], leafSlot, nLeaves)
+            except _NotRational:
+                return {'ok': False}
+            tape.update({'icOp': icOp, 'icA': icA, 'icB': icB, 'icCnum': icCnum,
+                         'icCden': icCden, 'icOut': icOut})
+            tape['constraintModel'] = [
+                '%s = %s' % (invSolveName.get(str(S[i]), str(S[i])),
+                             spy.sympify(f_ss[i])) for i in range(nReal)]
+        elif segEq[c]:
             # equilibrate-seeded first segment. A generically-linear resting state
             # (no recast) is solved symbolically and emitted as an IC tape, so the
             # kernel seeds each state with its steady-state value and computes the
@@ -2097,6 +2027,11 @@ def compileObservabilityTapeMulti(model, observation, conditionSubs, conditionIC
         out['realStateNames'] = [invSolveName.get(str(X), str(X))
                                  for X in S[:nReal]]
         out['powerRecast'] = powerRecast
+        if jointSteadyState:
+            out['jointSteadyState'] = True
+            # state z-columns (the free states that entered znames), for the R joint
+            # branch to seed on-manifold and stack the df constraint rows
+            out['zStateNames'] = zStateNames
     return out
 
 
@@ -2204,6 +2139,55 @@ def _scaling_nonid(gens, znames, nz):
     return nonId
 
 
+def _scaling_gens_recast(gens, znames, nz, recast):
+    """Impose the recast relations c_E = exp * c_base on the integer scaling lattice
+    span(gens) and return the PHYSICAL scaling generators, whose weights may involve
+    the exponent parameter. A free Hill exponent makes c_E = nhill * c_base, which no
+    integer weight can satisfy, so the plain integer kernel treats E as free and
+    misses (or over-reports) the Hill scaling. Solving span(gens) intersect {relations}
+    over Q(exp) recovers it exactly, e.g. xi_kinh = -nhill * kinh, xi_FB = FB -- no
+    finite-field sampling, so it is instant at any model size. E = base^exp holds in
+    both recast branches, so the same relation applies whether or not `inverted`.
+    Returns lists of sympy expressions (possibly symbolic in the exponents)."""
+    if not gens:
+        return []
+    G = spy.Matrix(gens)                      # rows = basis vectors, cols = coords
+    idx = {nm: j for j, nm in enumerate(znames)}
+    relRows = []
+    for rc in recast:
+        E, base, exp = str(rc['E']), str(rc['base']), str(rc['exp'])
+        if E not in idx or base not in idx:
+            continue
+        expSym = spy.sympify(exp)
+        jE, jB = idx[E], idx[base]
+        # (G[:,E] - exp*G[:,base]) . alpha = 0 over the basis coefficients alpha
+        relRows.append([G[i, jE] - expSym * G[i, jB] for i in range(G.rows)])
+    if not relRows:
+        return [[spy.Integer(x) for x in g] for g in gens]
+    alphas = spy.Matrix(relRows).nullspace()   # over Q(exp)
+    out = []
+    for a in alphas:
+        v = [spy.together(sum(a[i] * G[i, j] for i in range(G.rows)))
+             for j in range(nz)]
+        # L = log(base) transforms ADDITIVELY under the scaling: it shifts by c_base
+        # (log(lam^{c_base} base) = c_base*log(lam) + L), so its generator weight is
+        # c_base. The multiplicative kernel above leaves L at 0; set it here so the
+        # generator matches the joint nullspace (which carries the L shift).
+        for rc in recast:
+            base, L = str(rc['base']), str(rc['L'])
+            if base in idx and L in idx:
+                v[idx[L]] = v[idx[base]]
+        # clear denominators so the weights are polynomial in the exponents
+        dens = [spy.denom(x) for x in v if x != 0]
+        Lden = spy.Integer(1)
+        for d in dens:
+            Lden = spy.lcm(Lden, d)
+        v = [spy.expand(x * Lden) for x in v]
+        if any(x != 0 for x in v):
+            out.append(v)
+    return out
+
+
 def scalingSymmetries(allVariables, diffEquations, obsFunctions, m, params,
                       fixed=(), verbose=True):
     """Exact scaling (toric) symmetries z_i -> lam^{c_i} z_i via the integer
@@ -2244,7 +2228,8 @@ def scalingSymmetries(allVariables, diffEquations, obsFunctions, m, params,
     }
 
 
-def scalingSymmetriesMulti(perCondModel, perCondObs, inputs=None, fixed=None):
+def scalingSymmetriesMulti(perCondModel, perCondObs, inputs=None, fixed=None,
+                           recast=None):
     """Scaling symmetries common to every condition: the integer kernel of the
     monomial-exponent conditions of all conditions, stacked over a shared weight
     space (each condition contributes its own intermediate columns). The kernel
@@ -2261,9 +2246,7 @@ def scalingSymmetriesMulti(perCondModel, perCondObs, inputs=None, fixed=None):
         return {'method': 'scaling', 'count': 0, 'nonIdentifiable': []}
 
     all_lines = [l for lines in perCondModel + perCondObs for l in lines]
-    local = _build_symbol_table(all_lines)
-    local.update(_function_aliases())
-    parse = _make_parse(local)
+    local, parse = _make_local_parse(all_lines)
 
     stateNames = [_clean(l).split('=', 1)[0].strip() for l in perCondModel[0]]
     stateSyms = [local.get(nm, spy.Symbol(nm)) for nm in stateNames]
@@ -2289,11 +2272,15 @@ def scalingSymmetriesMulti(perCondModel, perCondObs, inputs=None, fixed=None):
     znames = [str(s) for s in zvars]
     m = len(stateSyms)
 
-    rows, interOffset = [], nz
+    rows, interOffset, skipped = [], nz, 0
     for c in range(K):
-        sparse, ninter, _ = _scaling_rows(perF[c], perG[c], m, zvars, interOffset)
+        sparse, ninter, sk = _scaling_rows(perF[c], perG[c], m, zvars, interOffset)
         rows.extend(sparse)
         interOffset += ninter
+        skipped += sk
+    if skipped:
+        print('scalingSymmetriesMulti: %d non-polynomial term(s) skipped '
+              '(a scaling they would forbid may be over-reported)' % skipped)
     ncols = interOffset
     dense = _materialize_rows(rows, ncols)
     for j in range(nz):
@@ -2302,7 +2289,16 @@ def scalingSymmetriesMulti(perCondModel, perCondObs, inputs=None, fixed=None):
             row[j] = 1
             dense.append(row)
 
-    nonId = _scaling_nonid(_scaling_gens(dense, ncols, nz), znames, nz)
+    gens = _scaling_gens(dense, ncols, nz)
+    # with a power/Hill recast, the integer kernel treats each E = base^exp as a free
+    # coordinate; impose c_E = exp*c_base to recover the parameter-weighted (Hill)
+    # scalings exactly over Q(exp), instead of leaving them to the rational fit.
+    recast = _as_list(recast)
+    if recast:
+        physical = _scaling_gens_recast(gens, znames, nz, recast)
+        nonId = _scaling_nonid(physical, znames, nz)
+    else:
+        nonId = _scaling_nonid(gens, znames, nz)
     return {'method': 'scaling', 'count': len(nonId), 'nonIdentifiable': nonId}
 
 
@@ -2310,57 +2306,31 @@ def scalingSymmetriesMulti(perCondModel, perCondObs, inputs=None, fixed=None):
 #####################     R entry point     ##############################
 ###########################################################################
 
-def symmetryDetectiondMod(model, observation, prediction=None, initial=None,
+def symmetryDetectiondMod(model, observation,
                           ansatz='uni', pMax=2, inputs=None, fixed=None,
-                          parallel=1, allTrafos=False,
-                          ssEquations=None, lieOrder=0, exact=True,
+                          allTrafos=False, lieOrder=0, exact=True,
                           verify=True, backend='sympy', parameters=None,
-                          method='liesym', point=None, symbolic=False):
+                          method='liesym'):
     global _EXACT
     _EXACT = bool(exact)
     _select_backend(backend)
 
     model = _as_list(model)
     observation = _as_list(observation)
-    prediction = _as_list(prediction)
-    initial = _as_list(initial)
-    ssEquations = _as_list(ssEquations)
     inputNames = _as_list(inputs)
     fixedNames = _as_list(fixed)
     extraParams = _as_list(parameters)
 
-    all_lines = (model + observation + prediction + initial + ssEquations
-                 + inputNames + fixedNames + extraParams)
-    local = _build_symbol_table(all_lines)
-    local.update(_function_aliases())
-    parse = _make_parse(local)
+    all_lines = model + observation + inputNames + fixedNames + extraParams
+    local, parse = _make_local_parse(all_lines)
 
     sys.stdout.write('\nReading input...')
     sys.stdout.flush()
 
     variables, diffEquations, params = _read_equations(model, parse)
 
-    observables, obsFunctions, params = _read_observation(
+    _, obsFunctions, params = _read_observation(
         observation, variables, params, parse)
-
-    if initial:
-        initFunctions, params = _read_initial(initial, variables, params, parse)
-    else:
-        initFunctions = []
-
-    if prediction:
-        predictions, predFunctions = _read_predictions(
-            prediction, variables, params, parse)
-    else:
-        predictions, predFunctions = [], []
-
-    # steady-state-initial field (forcings already zeroed on the R side),
-    # aligned to the dynamic state order
-    ssFunctions = []
-    if ssEquations:
-        ssVars, ssFun, _ = _read_equations(ssEquations, parse)
-        ssMap = {str(ssVars[i]): ssFun[i] for i in range(len(ssVars))}
-        ssFunctions = [ssMap.get(str(v), spy.Integer(0)) for v in variables]
 
     # explicit parameters
     for pn in extraParams:
@@ -2391,8 +2361,7 @@ def symmetryDetectiondMod(model, observation, prediction=None, initial=None,
             fixed=fixedSyms)
 
     return symmetryDetection(
-        allVariables, diffEquations, observables, obsFunctions, initFunctions,
-        predictions, predFunctions, ssFunctions, ansatz=ansatz, pMax=int(pMax),
+        allVariables, diffEquations, obsFunctions, ansatz=ansatz, pMax=int(pMax),
         inputs=inputSyms, fixed=fixedSyms, lieOrder=int(lieOrder),
         allTrafos=bool(allTrafos), verify=bool(verify))
 
@@ -2406,52 +2375,3 @@ def _read_observation(observation, variables, parameters, parse):
         if par in obsParameters:
             obsParameters.remove(par)
     return obsVars, obsFunctions, parameters + obsParameters
-
-
-def _read_initial(initial, variables, parameters, parse):
-    initVars, initFunctions, initParameters = _read_equations(initial, parse)
-    o = len(initVars)
-    m = len(variables)
-    i = 0
-    while i < len(initParameters):
-        if initParameters[i] in variables + parameters:
-            initParameters.pop(i)
-        else:
-            i += 1
-    for i in range(o):
-        if initVars[i] == initFunctions[i]:
-            initFunctions[i] = spy.Symbol(str(initVars[i]) + '_0')
-            initParameters.append(initFunctions[i])
-    substituted = True
-    counter = 0
-    while substituted:
-        substituted = False
-        for k in range(o):
-            for j in range(o):
-                if initFunctions[k].has(initVars[j]):
-                    initFunctions[k] = initFunctions[k].subs(initVars[j], initFunctions[j])
-                    substituted = True
-        counter += 1
-        if counter > 100:
-            raise UserWarning('Infinite recursion in the initial value functions')
-    initFunctionsOrdered = [0] * m
-    for i in range(m):
-        try:
-            initFunctionsOrdered[i] = initFunctions[initVars.index(variables[i])]
-        except ValueError:
-            initFunctionsOrdered[i] = spy.Symbol(str(variables[i]) + '_0')
-            initParameters.append(initFunctionsOrdered[i])
-    return initFunctionsOrdered, parameters + initParameters
-
-
-def _read_predictions(prediction, variables, parameters, parse):
-    predVars, predFunctions, predParameters = _read_equations(prediction, parse)
-    i = 0
-    while i < len(predParameters):
-        if predParameters[i] in variables + parameters:
-            predParameters.pop(i)
-        else:
-            i += 1
-    if len(predParameters) != 0:
-        raise UserWarning('New parameters occured in predictions: ' + str(predParameters))
-    return predVars, predFunctions

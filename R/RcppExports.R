@@ -129,10 +129,6 @@ symSolveMod <- function(A, b, pIn) {
     .Call(`_dMod_symSolveMod`, A, b, pIn)
 }
 
-symSteadyStateSeed <- function(plan, paramVals, lVals, pIn) {
-    .Call(`_dMod_symSteadyStateSeed`, plan, paramVals, lVals, pIn)
-}
-
 symFitRational <- function(sampleU, mons, rvals, pIn) {
     .Call(`_dMod_symFitRational`, sampleU, mons, rvals, pIn)
 }

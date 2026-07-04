@@ -230,16 +230,20 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
 #' Builds the linear CQ coefficient matrix `C` (rows = totals, columns =
 #' participating species) and picks one pivot species per total by Gaussian
 #' elimination, so that `C[, pivots]` is invertible even for overlapping
-#' totals. Tie-breaks prefer species not needed by later totals, then
-#' non-`parameters`, then alphabetical order.
+#' totals. Tie-breaks prefer species not in `avoid`, then species not needed
+#' by later totals, then non-`parameters`, then alphabetical order.
 #'
 #' @param totals Named list of CQ expressions (from [getTotals()]).
 #' @param states State names participating in the model.
 #' @param parameters Outer parameters, used only for the pivot tie-break.
+#' @param avoid Species to keep as states where possible (not eliminated),
+#'   e.g. a moiety species that appears under a free exponent and so must
+#'   stay a bare symbol. Honoured only when a total has another candidate.
 #' @return `list(C_mat, pivots, cq_sets)`. `pivots` is aligned to `totals`
 #'   with `NA` where a total has fewer than two free species.
 #' @keywords internal
-.cq_pivot_decomposition <- function(totals, states, parameters = character(0)) {
+.cq_pivot_decomposition <- function(totals, states, parameters = character(0),
+                                    avoid = character(0)) {
   cq_sets <- lapply(totals, function(expr) intersect(getSymbols(expr), states))
   all_cq_species <- unique(unlist(cq_sets, use.names = FALSE))
   n_cq <- length(totals)
@@ -262,6 +266,7 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
     if (length(cand) < 2L) next
     nz <- cand[abs(C_red[i, cand]) > 1e-12]
     if (!length(nz)) next
+    if (length(keep <- setdiff(nz, avoid))) nz <- keep
     future <- if (i < n_cq)
       unique(unlist(cq_sets[(i + 1L):n_cq], use.names = FALSE)) else character(0)
     pool <- if (length(safe <- setdiff(nz, future))) safe else nz
@@ -291,16 +296,18 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
 #'   gates the diagnostic warning when `totals` is empty.
 #' @param f,states,parameters Equation set, state names, user parameters.
 #' @param expressInTotals See above.
+#' @param avoid Species to keep as states where possible, passed to
+#'   [.cq_pivot_decomposition()].
 #' @return `list(f, parameters, cq_info, elim_states)`. `cq_info`/
 #'   `elim_states` are non-empty only in `TRUE` mode.
 #' @keywords internal
 .detect_and_substitute_cq <- function(totals, has_smatrix, f, states, parameters,
-                                      expressInTotals = TRUE) {
+                                      expressInTotals = TRUE, avoid = character(0)) {
   cq_info <- list(); elim_states <- character(0)
 
   if (length(totals)) {
     if (is.null(parameters)) parameters <- character(0)
-    dec <- .cq_pivot_decomposition(totals, states, parameters)
+    dec <- .cq_pivot_decomposition(totals, states, parameters, avoid)
     C_mat <- dec$C_mat
     substitutions <- list()
     for (i in seq_along(totals)) {

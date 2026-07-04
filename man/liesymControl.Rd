@@ -11,8 +11,7 @@ liesymControl(
   exact = TRUE,
   verify = TRUE,
   allTrafos = FALSE,
-  backend = c("symengine", "sympy"),
-  point = NULL
+  backend = c("symengine", "sympy")
 )
 }
 \arguments{
@@ -32,9 +31,6 @@ floating-point path (\code{FALSE}).}
 factor instead of dropping them.}
 
 \item{backend}{\code{"symengine"} (faster, falls back to sympy) or \code{"sympy"}.}
-
-\item{point}{Optional named numeric vector: the evaluation point for the
-symbolic search (default: a deterministic generic point).}
 }
 \value{
 A \code{liesymControl} list.

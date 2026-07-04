@@ -4,13 +4,10 @@
 \alias{scalingControl}
 \title{Tuning control for \code{symmetryDetection(method = "scaling")}}
 \usage{
-scalingControl(backend = c("symengine", "sympy"), point = NULL)
+scalingControl(backend = c("symengine", "sympy"))
 }
 \arguments{
 \item{backend}{\code{"symengine"} (faster, falls back to sympy) or \code{"sympy"}.}
-
-\item{point}{Optional named numeric vector: the evaluation point for the
-symbolic search (default: a deterministic generic point).}
 }
 \value{
 A \code{scalingControl} list.

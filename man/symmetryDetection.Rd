@@ -14,11 +14,12 @@ symmetryDetection(
   forcings = NULL,
   events = NULL,
   conditions = NULL,
-  t0 = NULL,
   equilibrate = FALSE,
   reduceCQ = TRUE,
   closedForm = FALSE,
   cores = 1,
+  cores.conditions = cores,
+  cores.GLp = cores,
   control = reconstControl(),
   liesym = liesymControl(),
   scaling = scalingControl()
@@ -31,11 +32,16 @@ character vector keyed by state name (anything \link{as.eqnvec} accepts). With a
 
 \item{g}{The observation functions, as an \link{eqnvec} or named character vector.}
 
-\item{trafo}{Optional parameter transformation as an \link{eqnvec} or named
-character vector. A parameter-named entry (inner symbol = expression in the
-outer parameters) is substituted into \code{f} and \code{g}; a state-named entry is
-that state's initial condition (a parameter, number or rational expression).
-A solved steady state from \link{steadyStates} can be passed whole.}
+\item{trafo}{Optional parameter transformation. Either one \link{eqnvec} (applied to
+every condition) or, for \code{"observability"}, a \emph{list} of \link{eqnvec}s, one per
+condition. A parameter-named entry (inner symbol = expression in the outer
+parameters) is substituted into \code{f} and \code{g}; a state-named entry is that
+state's initial condition (a parameter, number or rational expression). A
+solved steady state from \link{steadyStates} can be passed whole. A per-condition
+list defines the conditions (or aligns with the \code{conditions} grid rows): each
+entry may bake a parameter to a different number or expression per condition,
+exactly like a condition grid, and the two compose. It is the explicit route
+for per-condition steady states (a \code{steadyStates()} result per condition).}
 
 \item{method}{One of \code{"observability"} (default), \code{"liesym"} or \code{"scaling"};
 see Description.}
@@ -60,10 +66,11 @@ its value.}
 \item{events}{Optional \link{eventlist}. For \code{"observability"} the event value is
 looked up in \code{conditions} when it names a grid column, so the boolean
 switches and the stimulus levels of a condition grid reach the analysis.
-Events at or before \code{t0} set the pre-stimulus regime and compose the first
-segment's initial condition; events after \code{t0} split the post-stimulus
-timeline into analytic segments, one local Taylor jet each, all stacked, with
-the state propagated exactly across each gap (Details).}
+The Taylor expansion starts at the earliest event time (or 0 with no events):
+the steady state holds up to that moment and the earliest events are composed
+onto it as the first segment's initial condition; events at later times split
+the timeline into analytic segments, one local Taylor jet each, all stacked,
+with the state propagated exactly across each gap (Details).}
 
 \item{conditions}{Optional data frame of experimental conditions (a dMod
 condition grid: one row per condition, columns named by model symbols or by
@@ -77,17 +84,10 @@ condition (the intersection nullspace), and known inputs are constants of
 each condition rather than free symbols, so they never appear in a
 reconstructed direction. The directions are returned in closed form.}
 
-\item{t0}{Optional numeric start time of the first segment's Taylor expansion
-(default: the earliest event time, else 0). Events at \code{t0} are the first
-stimulus (composed into the start-point initial condition); the distinct
-event times after \code{t0} are the boundaries of the later segments. A dynamic
-state's event perturbs its value by \code{replace} / \code{add} / \code{multiply};
-constant-state (switch) events are regime substitutions.}
-
 \item{equilibrate}{Logical. For \code{"observability"}, start the states at a steady
 state of \code{f} with forcings held at 0, solved exactly over a finite field
-without a symbolic solution (parameters are never solved for); t0 events such
-as a dose are applied on top. A free power or Hill exponent is supported,
+without a symbolic solution (parameters are never solved for); the earliest
+events (e.g. a dose) are applied on top. A free power or Hill exponent is supported,
 whether or not its base has a linear turnover term: the term \code{base^exp} is
 recast to a rational coordinate \code{E = base^exp} with a companion \code{L = log(base)}, so the verdict (which parameters, including the exponent, are
 identifiable) is exact. With \code{closedForm}, \code{E} and \code{L} are
@@ -107,10 +107,20 @@ densely; an entry coupling many variables is recovered by sparse
 against the nullspace at a fresh prime; one that cannot be reconstructed or
 certified is returned with its support and \code{closedForm = FALSE} instead.}
 
-\item{cores}{Number of threads. For \code{"observability"} the per-condition Taylor
-build is parallelised over conditions and the reconstruction's sample bank
-over evaluation points; for \code{"liesym"} and \code{"scaling"} it is the worker count
-of the symbolic search.}
+\item{cores}{Number of threads for \code{"observability"}: the default for both
+\code{cores.conditions} and \code{cores.GLp} when those are not set explicitly. The
+\code{"liesym"} and \code{"scaling"} engines are exact and serial and ignore it.}
+
+\item{cores.conditions, cores.GLp}{\code{"observability"} parallelism, split across two
+independent axes (default: \code{cores} each). \code{cores.conditions} threads the C++
+observability kernel over conditions/segments. \code{cores.GLp} forks a worker pool
+that solves the finite-field steady-state seeds of the reconstruction's sample
+points in parallel (Linux only; falls back to serial elsewhere). The two axes
+are used in separate stages, so parallelise over whichever is larger for the
+problem (many conditions vs. many sample points) and leave the other at 1 to
+avoid oversubscription. \code{cores.GLp} speeds up the closed-form reconstruction of
+models whose equilibrated resting state has a coupled (non-generically-linear)
+steady state, where each sample point needs a symbolic finite-field solve.}
 
 \item{control}{A \code{\link[=reconstControl]{reconstControl()}} list tuning the \code{"observability"} engine's
 saturation and closed-form reconstruction (relevance caps, fit degrees, term
@@ -132,7 +142,7 @@ tangent components as rational expressions (or only the \code{support} when
 \code{closedForm = FALSE}, or with a \code{reason} naming the \code{reconstControl} cap that
 stopped a requested closed form). The multi-condition path adds \code{conditions}, the number
 of distinct conditions, \code{segments}, the number of stacked analytic segments
-(events after \code{t0} split each condition into several), and \code{gapOrderUsed}, the
+(later events split each condition into several), and \code{gapOrderUsed}, the
 gap power-series order at which the rank saturated (0 with no gaps). For
 \code{"scaling"}: \code{count} and the same \code{nonIdentifiable} weights. For
 \code{"liesym"}: a list of generators, each with \code{infinitesimals},
@@ -157,11 +167,14 @@ returning the explicit closed-form generator and transformation. More
 expensive (grows with \code{pMax}); use it when the explicit symmetry is wanted.
 \item \code{"scaling"}: the scaling symmetries that multiply each state and parameter
 by a power of one common factor, from the integer kernel of the
-monomial-exponent conditions. Returns only the scaling part.
+monomial-exponent conditions. Returns only the scaling part. A known-value
+dose (\code{events}) pins the dosed state (weight 0); a condition grid or
+per-condition \code{trafo} list intersects the per-condition scaling lattices.
+A steady state is a no-op here, so \code{equilibrate} does not apply.
 }
 }
 \details{
-\strong{Segments and exact propagation.} With events after \code{t0}, the post-stimulus
+\strong{Segments and exact propagation.} With events after the earliest one, the
 timeline is split at the distinct event times into analytic segments, one local
 Taylor jet per segment over a shared coordinate space, all stacked (across
 conditions) like conditions. A later segment's start state is the previous
@@ -178,8 +191,8 @@ Truncating the gap order early is sound (a conservative lower bound on the rank)
 
 This makes parameters identifiable that only enter through a transient between
 events (e.g. an inhibitor pre-incubation whose relaxed state seeds the stimulus
-phase): apply it at equilibrium (\code{t0} at the inhibitor time) so the gap is
-propagated. A \code{replace}/\code{add}/\code{multiply} event on a dynamic state is applied
+phase): place the inhibitor event at the earliest time so the gap to the stimulus
+is propagated. A \code{replace}/\code{add}/\code{multiply} event on a dynamic state is applied
 exactly to the propagated state. A dose on a conserved-moiety \emph{pivot} species
 eliminated by \code{reduceCQ} is not seen (it is no longer a state); keep that
 species (\code{reduceCQ = FALSE}) to dose it.

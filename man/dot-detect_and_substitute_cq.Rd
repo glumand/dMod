@@ -10,7 +10,8 @@
   f,
   states,
   parameters,
-  expressInTotals = TRUE
+  expressInTotals = TRUE,
+  avoid = character(0)
 )
 }
 \arguments{
@@ -23,6 +24,9 @@ gates the diagnostic warning when \code{totals} is empty.}
 \item{f, states, parameters}{Equation set, state names, user parameters.}
 
 \item{expressInTotals}{See above.}
+
+\item{avoid}{Species to keep as states where possible, passed to
+\code{\link[=.cq_pivot_decomposition]{.cq_pivot_decomposition()}}.}
 }
 \value{
 \code{list(f, parameters, cq_info, elim_states)}. \code{cq_info}/

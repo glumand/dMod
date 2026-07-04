@@ -243,19 +243,33 @@ def _zero_out_state(row_idx, SM, F, X, zeroStates):
     X.row_del(row_idx)
     SM.row_del(row_idx)
 
-def _sign_class(expr):
-    # Classify a polynomial (after expand) by its term coefficients.
-    # Assumes all free symbols are positive (rate constants, concentrations,
-    # r_* helpers). Returns '+' if every monomial has a positive rational
-    # coefficient, '-' if every coefficient is negative, '0' for the zero
-    # polynomial, '±' for mixed or symbolic-coefficient cases.
+def _flip_sign(cls):
+    # Sign class under multiplication by -1.
+    return {'+': '-', '-': '+'}.get(cls, cls)
+
+def _mono_sign_definite(mono, positive_syms):
+    # Monomial sign is set by its coefficient only if every symbolic factor is
+    # known non-negative: declared positive, or raised to an even power.
+    for base, exp in mono.as_powers_dict().items():
+        if not base.free_symbols or base in positive_syms:
+            continue
+        if getattr(exp, 'is_even', False):
+            continue
+        return False
+    return True
+
+def _sign_class(expr, positive_syms=None):
+    # Sign of a polynomial under positive_syms (None = all symbols positive):
+    # '+'/'-' if all monomials share a provable sign, '0' if zero, else '±'.
     expr=sympy.expand(expr)
     if expr==0:
         return '0'
     has_pos=False
     has_neg=False
     for t in sympy.Add.make_args(expr):
-        coeff=t.as_coeff_Mul()[0]
+        coeff, mono=t.as_coeff_Mul()
+        if positive_syms is not None and not _mono_sign_definite(mono, positive_syms):
+            return '±'
         if coeff.is_negative:
             has_neg=True
         elif coeff.is_positive:
@@ -270,15 +284,13 @@ def _sign_class(expr):
         return '-'
     return '0'
 
-def _rational_sign_class(expr):
-    # Sign classification for a rational function. We cancel first so a
-    # spurious (a-a)/a does not look mixed, then split into numerator and
-    # denominator and check each independently. Assumes free symbols are
-    # positive; returns '+'/'-'/'±'/'0' with the obvious combination rule.
+def _rational_sign_class(expr, positive_syms=None):
+    # Sign of a rational function: cancel, then combine numerator/denominator
+    # signs. Returns '+'/'-'/'±'/'0'.
     expr=cancel(expr)
     numer, denom=sympy.fraction(expr)
-    ns=_sign_class(numer)
-    ds=_sign_class(denom)
+    ns=_sign_class(numer, positive_syms)
+    ds=_sign_class(denom, positive_syms)
     if ns=='0':
         return '0'
     if ns=='±' or ds=='±':
@@ -289,14 +301,14 @@ def _rational_sign_class(expr):
         return '-'
     return '±'
 
-def _try_positive_direct_solve(SM, F, X):
+def _try_positive_direct_solve(SM, F, X, positive_syms=None):
     # Find a state y whose own ODE is (a) linear in y and (b) has a
-    # structurally positive closed-form steady-state solution y = -In/Out,
-    # assuming all free symbols are positive. Returns (row_idx, y, sol) or
-    # None. Used BEFORE cycle breaking to resolve the parts of the network
-    # that don't actually need an r_* helper — this avoids leaking negative
-    # r_* contributions into downstream states whose own ODE would otherwise
-    # have been positive by construction.
+    # structurally positive closed-form steady-state solution y = -In/Out
+    # under positive_syms (None = all symbols positive). Returns
+    # (row_idx, y, sol) or None. Used BEFORE cycle breaking to resolve the
+    # parts of the network that don't actually need an r_* helper — this
+    # avoids leaking negative r_* contributions into downstream states whose
+    # own ODE would otherwise have been positive by construction.
     for i in range(len(X)):
         y=X[i]
         eq=sympy.S.Zero
@@ -313,8 +325,8 @@ def _try_positive_direct_solve(SM, F, X):
         residual=cancel(eq-In-y*Out)
         if residual!=0:
             continue
-        In_cls=_rational_sign_class(In)
-        Out_cls=_rational_sign_class(Out)
+        In_cls=_rational_sign_class(In, positive_syms)
+        Out_cls=_rational_sign_class(Out, positive_syms)
         if In_cls=='0' or Out_cls=='0':
             continue
         if (In_cls=='+' and Out_cls=='-') or (In_cls=='-' and Out_cls=='+'):
@@ -358,23 +370,13 @@ def _simplify_with_sqrt(expr):
     sq_factored = sympy.sqrt(D_factored)
     return (factor(P_scaled) + factor(Q_scaled)*sq_factored) / factor(R)
 
-def _try_positive_quadratic_solve(SM, F, X):
-    # Find a state y whose ODE is exactly quadratic in y (after multiplying out
-    # rational denominators) with sign structure
-    #     a*y^2 + b*y + c = 0,    sign(a) = +,  sign(c) = -
-    # so the product of roots c/a is negative and exactly one root is positive.
-    # Emits the closed-form positive root
-    #     y = (-b + sqrt(b^2 - 4*a*c)) / (2*a)
-    # directly, avoiding sympy.solve() (which explodes on coupled systems).
-    # Sign analysis assumes all free symbols are positive — same convention as
-    # _try_positive_direct_solve and _rational_sign_class.
-    #
-    # Used AFTER _try_positive_direct_solve exhausts its linear candidates,
-    # so that R2-style cycles (where the last cycle state's ODE becomes
-    # quadratic in itself after upstream linear solves) can be resolved as a
-    # STATE rather than via a flux-parameter pivot — keeping rate constants
-    # out of mysteadies entries and the chain-substitution of neglect
-    # parameters contained to state expressions.
+def _try_positive_quadratic_solve(SM, F, X, positive_syms=None, branches=False):
+    # Resolve a state y whose ODE is quadratic in y (a*y^2 + b*y + c = 0,
+    # normalised to sign(a)=+) as a closed-form root, avoiding sympy.solve().
+    # sign(c)=- gives the unique positive root (-b + sqrt(disc))/(2a); with
+    # branches=True, sign(c)=+ & sign(b)=- gives two positive roots, emitted
+    # with a selector branch_y in {-1,+1}. Other patterns pivot instead.
+    # Returns (row_idx, y, sol, branch) or None.
     for i in range(len(X)):
         y=X[i]
         eq=sympy.S.Zero
@@ -384,9 +386,7 @@ def _try_positive_quadratic_solve(SM, F, X):
                 eq=eq+row[k]*F[k]
         if eq==0:
             continue
-        # Multiply through any rational denominators: at a biologically
-        # meaningful steady state, the denominator is a positive sum and
-        # cannot vanish, so zeros of `eq` and zeros of `num` coincide.
+        # SS denominators are positive sums, so zeros of eq and its numerator coincide.
         num, _den = sympy.fraction(sympy.together(eq))
         try:
             poly = sympy.Poly(num, y)
@@ -395,20 +395,19 @@ def _try_positive_quadratic_solve(SM, F, X):
         if poly.degree() != 2:
             continue
         a, b, c = poly.all_coeffs()
-        a_cls=_rational_sign_class(a)
-        c_cls=_rational_sign_class(c)
-        # Normalise so a is positive (multiplying the whole equation by -1
-        # flips every coefficient and leaves the roots unchanged).
-        if a_cls=='-' and c_cls=='+':
+        a_cls=_rational_sign_class(a, positive_syms)
+        c_cls=_rational_sign_class(c, positive_syms)
+        if a_cls=='-':   # normalise to sign(a)=+ (roots unchanged)
             a, b, c = -a, -b, -c
-            a_cls, c_cls = '+', '-'
-        if a_cls!='+' or c_cls!='-':
-            # Sign structure doesn't guarantee a unique positive root —
-            # fall back to the existing flux-parameter-pivot pipeline.
+            a_cls, c_cls = '+', _flip_sign(c_cls)
+        if a_cls!='+':
             continue
         disc = b**2 - 4*a*c
-        sol = cancel((-b + sympy.sqrt(disc)) / (2*a))
-        return (i, y, sol)
+        if c_cls=='-':
+            return (i, y, cancel((-b + sympy.sqrt(disc)) / (2*a)), None)
+        if branches and c_cls=='+' and _rational_sign_class(b, positive_syms)=='-':
+            branch=sympy.Symbol('branch_'+str(y))
+            return (i, y, cancel((-b + branch*sympy.sqrt(disc)) / (2*a)), branch)
     return None
 
 def checkNegRows(M):
@@ -918,7 +917,112 @@ def CountNZE(V):
         if(v!=0):
             counter=counter+1
     return(counter)
-    
+
+# testSteady='fast' checks f_i(x_ss) == 0 by Schwartz-Zippel: evaluate each
+# residual at random points in GF(p); a non-zero rational function vanishes
+# there with probability <= deg/p, so a few points give near-certainty cheaply.
+# Primes are == 3 mod 4 so a field sqrt is d**((p+1)//4) for a quadratic residue.
+_MODP_PRIMES=(2147483647, 1000000007)
+
+class _ResampleModp(Exception):
+    pass
+class _UnsupportedModp(Exception):
+    pass
+
+def _collect_exponent_syms(expr):
+    # Symbols that appear inside a non-numeric exponent (e.g. Hill coefficients
+    # in C3**nhill). These are assigned small integers so the exponent stays a
+    # concrete integer during modular evaluation.
+    syms=set()
+    for pw in expr.atoms(sympy.Pow):
+        if not pw.exp.is_number:
+            syms|=pw.exp.free_symbols
+    return syms
+
+def _eval_exponent(e, env_int):
+    if e.is_number:
+        return int(e)
+    return int(e.subs(env_int))
+
+def _eval_modp(expr, env, p):
+    # Evaluate expr at the point env (symbol -> int) in GF(p). Raises
+    # _ResampleModp on a zero denominator / non-residue sqrt, _UnsupportedModp
+    # on a node we do not model (caller falls back to the symbolic test).
+    if expr.is_Integer:
+        return int(expr) % p
+    if expr.is_Rational:
+        return (int(expr.p) * pow(int(expr.q), -1, p)) % p
+    if expr.is_Symbol:
+        return env[expr] % p
+    if expr.is_Add:
+        return sum(_eval_modp(a, env, p) for a in expr.args) % p
+    if expr.is_Mul:
+        r=1
+        for a in expr.args:
+            r=r*_eval_modp(a, env, p) % p
+        return r
+    if expr.is_Pow:
+        base, e = expr.args
+        if e.is_Rational and e.q == 2:
+            d=_eval_modp(base, env, p)
+            if d == 0:
+                if int(e.p) > 0:
+                    return 0
+                raise _ResampleModp()
+            if pow(d, (p-1)//2, p) != 1:
+                raise _ResampleModp()
+            s=pow(d, (p+1)//4, p)
+            return pow(s, int(e.p) % (p-1), p)
+        n=_eval_exponent(e, env)
+        bv=_eval_modp(base, env, p)
+        if n == 0:
+            return 1
+        if bv == 0:
+            if n > 0:
+                return 0
+            raise _ResampleModp()
+        return pow(bv, n % (p-1), p)
+    if expr.is_number:
+        v=sympy.nsimplify(expr)
+        if v.is_Rational:
+            return (int(v.p) * pow(int(v.q), -1, p)) % p
+    raise _UnsupportedModp()
+
+def _residual_is_zero_modp(expr, trials=3, primes=_MODP_PRIMES):
+    # Returns True (almost surely == 0), False (definitely != 0), or None
+    # (could not test -> caller should use the symbolic fallback).
+    expr=sympy.sympify(expr)
+    if expr == 0:
+        return True
+    exp_syms=_collect_exponent_syms(expr)
+    fsyms=list(expr.free_symbols)
+    for p in primes:
+        good=0
+        attempts=0
+        while good < trials and attempts < trials*30:
+            attempts+=1
+            env={}
+            for s in fsyms:
+                name=str(s)
+                if name.startswith('branch_'):
+                    env[s]=random.choice([1, p-1])
+                elif s in exp_syms:
+                    env[s]=random.randint(2, 5)
+                else:
+                    env[s]=random.randint(1, p-1)
+            try:
+                val=_eval_modp(expr, env, p)
+            except _ResampleModp:
+                continue
+            except _UnsupportedModp:
+                return None
+            good+=1
+            if val % p != 0:
+                return False
+        if good == 0:
+            return None
+    return True
+
 def Alyssa(filename,
           injections=[],
           givenCQs=[],
@@ -928,13 +1032,25 @@ def Alyssa(filename,
           testSteady='T',
           walltime=0,
           simplify=True,
-          solveQuadratic=False):
+          solveQuadratic=False,
+          positive=True,
+          branches=False):
     filename=str(filename)
     _start_time = time.time()
     def _check_walltime():
         if walltime > 0 and time.time() - _start_time > walltime:
             return True
         return False
+    # Positive symbols for the sign-based solvers: True = all (None sentinel),
+    # False = none, or an explicit list of names.
+    if positive is True or positive is False:
+        positive_syms = None if positive else set()
+    elif isinstance(positive, str):
+        positive_syms = {parse_expr(positive)}
+    elif isinstance(positive, (list, tuple, set)):
+        positive_syms = set(parse_expr(str(s)) for s in positive)
+    else:
+        positive_syms = None if bool(positive) else set()
     file=csv.reader(open(filename), delimiter=',')
     print('Reading csv-file ...',flush=True)
     L=[]
@@ -955,11 +1071,8 @@ def Alyssa(filename,
             counter=counter+1       
     
 ##### Define flux vector F
-    # Track which fluxes were zeroed *by an injection substitution*. Those
-    # fluxes pull their participating states out of the analysis (mirrors
-    # v1.1 semantics: a state driven only by a forcing is treated as an
-    # exogenous quantity, not as a candidate for steady-state resolution
-    # nor for sink-cluster annihilation downstream).
+    # Track fluxes zeroed by an injection substitution; their injected states
+    # are treated as exogenous (see the zero-flux handling below).
     F=[]
     flux_zeroed_by_injection=[]
 
@@ -1000,16 +1113,16 @@ def Alyssa(filename,
 
     
 ##### Check for zero fluxes
-    # Two distinct cases:
-    #  * Flux was zeroed by an injection (forcing) substitution: also drop
-    #    the participating state ROWS. Restores the v1.1 semantics that
-    #    forcing-driven states are treated as exogenous (this is what users
-    #    rely on when calling steadyStates(..., forcings = ...)).
-    #  * Flux is identically zero for any other reason: only drop the
-    #    column. Participating states must stay in the analysis because
-    #    they appear in other reactions and the NegRows / PosRows /
-    #    FindSinkCluster machinery is what's meant to flag a species
-    #    without any source as zero in steady state.
+    # A flux zeroed by an injection (forcing) drops only the injected state rows
+    # (the forcing is exogenous); co-reactants and products stay so NegRows /
+    # PosRows / FindSinkCluster can still flag e.g. a complex left without a
+    # source. Any other zero flux drops only its column.
+    injection_syms=set()
+    for inj in injections:
+        try:
+            injection_syms.add(parse_expr(inj))
+        except Exception:
+            pass
     icounter=0
     jcounter=0
     n_flux_orig=len(F)
@@ -1019,10 +1132,8 @@ def Alyssa(filename,
             from_injection=flux_zeroed_by_injection[i] if i<len(flux_zeroed_by_injection) else False
             F.row_del(idx)
             if from_injection:
-                # v1.1-style row removal: any state with a non-zero
-                # stoichiometric entry in this flux column drops out.
                 col=SM.col(idx)
-                rows_to_drop=[r for r in range(SM.rows) if col[r]!=0]
+                rows_to_drop=[r for r in range(SM.rows) if col[r]!=0 and X[r] in injection_syms]
                 for r in sorted(rows_to_drop, reverse=True):
                     X.row_del(r)
                     SM.row_del(r)
@@ -1340,7 +1451,7 @@ def Alyssa(filename,
         # producing initial conditions that are not actually at steady state.
         found=False
         while True:
-            direct=_try_positive_direct_solve(SM, F, X)
+            direct=_try_positive_direct_solve(SM, F, X, positive_syms)
             if direct is None:
                 break
             row_idx, y, sol = direct
@@ -1349,28 +1460,19 @@ def Alyssa(filename,
         return found
 
     def _do_quadratic_state_solve():
-        # After _do_direct_positive_solve exhausts its linear-in-self
-        # candidates, this attempts quadratic-in-self states (e.g. the last
-        # remaining state in an R1<->R2<->R1_R2-style cycle whose ODE becomes
-        # quadratic after upstream linear substitutions). When the
-        # sign-structure guarantees a unique positive root, we emit the
-        # closed-form quadratic formula and resolve the state as a STATE —
-        # this is the only way to break the cycle without pivoting on a flux
-        # parameter and therefore dragging that flux parameter (and the
-        # transitive chain of substituted upstream rate constants) into
-        # mysteadies. See _try_positive_quadratic_solve for the sign analysis.
-        # Cubic-and-higher cycles still fall through to flux-parameter pivots.
-        # Off by default — emits sqrt expressions that some downstream
-        # workflows can't consume. Opt in via `solveQuadratic=True`.
+        # Resolve quadratic-in-self states as closed-form roots (e.g. the last
+        # state of an R1<->R2<->R1_R2 cycle) instead of pivoting on a flux
+        # parameter. Off by default: emits sqrt. Opt in via solveQuadratic=True.
         if not solveQuadratic:
             return False
         found=False
         while True:
-            quad=_try_positive_quadratic_solve(SM, F, X)
+            quad=_try_positive_quadratic_solve(SM, F, X, positive_syms, branches)
             if quad is None:
                 break
-            row_idx, y, sol = quad
-            _apply_state_solve(row_idx, y, sol, 'quadratically')
+            row_idx, y, sol, branch = quad
+            label='quadratically' + (' (2 branches)' if branch is not None else '')
+            _apply_state_solve(row_idx, y, sol, label)
             found=True
         return found
 
@@ -1758,36 +1860,54 @@ def Alyssa(filename,
             print(f'   Simplified {ls}',flush=True)
     
 #### Test Solution
-    if(testSteady=='T'):
-        print('Testing Steady State...\n',flush=True)
+    # testSteady: 'fast' = probabilistic GF(p), 'exact' = symbolic, else skip.
+    if testSteady in ('fast', 'modp', 'exact', 'T'):
+        fast = testSteady in ('fast', 'modp')
+        print('Testing Steady State'+(' (probabilistic mod p)' if fast else '')+'...\n',flush=True)
         NonSteady=False
+        subs_pairs=[(parse_expr(ls), parse_expr(rs))
+                    for ls, rs in (eq.split(' = ', 1) for eq in reversed(eqOut))]
         for i in range(len(ODE)):
             expr=parse_expr(str(ODE[i]))
-            for j in range(len(zeroStates)):
-                zeroState=zeroStates[j]
-                expr=expr.subs(zeroState, 0)
-            for j in range(len(eqOut)):
-                ls, rs = eqOut[-(j+1)].split('=')
-                ls=parse_expr(ls)
-                rs=parse_expr(rs)
-                expr=expr.subs(ls, rs)
-            expr=_simplify(expr)
-            if(expr!=0):
-                print('   Equation '+str(ODE[i]),flush=True)
-                print('   results:'+str(expr),flush=True)
-                NonSteady=True
+            for zs in zeroStates:
+                expr=expr.subs(zs, 0)
+            for lsym, rexpr in subs_pairs:
+                expr=expr.subs(lsym, rexpr)
+            if fast:
+                verdict=_residual_is_zero_modp(expr)
+                if verdict is False:
+                    print('   Equation '+str(ODE[i]),flush=True)
+                    print('   is nonzero at a random point in GF(p)',flush=True)
+                    NonSteady=True
+                elif verdict is None:
+                    res=_simplify(expr)
+                    if res!=0:
+                        print('   Equation '+str(ODE[i]),flush=True)
+                        print('   results (exact fallback):'+str(res),flush=True)
+                        NonSteady=True
+            else:
+                expr=_simplify(expr)
+                if(expr!=0):
+                    print('   Equation '+str(ODE[i]),flush=True)
+                    print('   results:'+str(expr),flush=True)
+                    NonSteady=True
         if(NonSteady):
             print('Solution is wrong!\n',flush=True)
+        elif fast:
+            print('Solution is correct (almost surely, mod p)!\n',flush=True)
         else:
             print('Solution is correct!\n',flush=True)
-            
-    elif(testSteady=='F'):
-        print('Skipping the Testing of Steady State...\n',flush=True)
-        
     else:
         print('Skipping the Testing of Steady State...\n',flush=True)
     
 #### Print Equations
+    # Echo every forcing as = 0: injections are held at 0 and dropped as
+    # exogenous, so add any not already zeroed structurally.
+    zero_names={str(s) for s in zeroStates}
+    for inj in injections:
+        if inj not in zero_names:
+            zeroStates.append(parse_expr(inj))
+            zero_names.add(inj)
     print('I obtained the following equations:\n',flush=True)
     if(outputFormat=='M'):
         eqOutReturn=[]

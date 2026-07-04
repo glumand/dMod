@@ -4,7 +4,12 @@
 \alias{.cq_pivot_decomposition}
 \title{Conserved-quantity coefficient matrix and pivot choice}
 \usage{
-.cq_pivot_decomposition(totals, states, parameters = character(0))
+.cq_pivot_decomposition(
+  totals,
+  states,
+  parameters = character(0),
+  avoid = character(0)
+)
 }
 \arguments{
 \item{totals}{Named list of CQ expressions (from \code{\link[=getTotals]{getTotals()}}).}
@@ -12,6 +17,10 @@
 \item{states}{State names participating in the model.}
 
 \item{parameters}{Outer parameters, used only for the pivot tie-break.}
+
+\item{avoid}{Species to keep as states where possible (not eliminated),
+e.g. a moiety species that appears under a free exponent and so must
+stay a bare symbol. Honoured only when a total has another candidate.}
 }
 \value{
 \code{list(C_mat, pivots, cq_sets)}. \code{pivots} is aligned to \code{totals}
@@ -21,7 +30,7 @@ with \code{NA} where a total has fewer than two free species.
 Builds the linear CQ coefficient matrix \code{C} (rows = totals, columns =
 participating species) and picks one pivot species per total by Gaussian
 elimination, so that \code{C[, pivots]} is invertible even for overlapping
-totals. Tie-breaks prefer species not needed by later totals, then
-non-\code{parameters}, then alphabetical order.
+totals. Tie-breaks prefer species not in \code{avoid}, then species not needed
+by later totals, then non-\code{parameters}, then alphabetical order.
 }
 \keyword{internal}

@@ -482,20 +482,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// symSteadyStateSeed
-List symSteadyStateSeed(List plan, IntegerVector paramVals, IntegerVector lVals, double pIn);
-RcppExport SEXP _dMod_symSteadyStateSeed(SEXP planSEXP, SEXP paramValsSEXP, SEXP lValsSEXP, SEXP pInSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< List >::type plan(planSEXP);
-    Rcpp::traits::input_parameter< IntegerVector >::type paramVals(paramValsSEXP);
-    Rcpp::traits::input_parameter< IntegerVector >::type lVals(lValsSEXP);
-    Rcpp::traits::input_parameter< double >::type pIn(pInSEXP);
-    rcpp_result_gen = Rcpp::wrap(symSteadyStateSeed(plan, paramVals, lVals, pIn));
-    return rcpp_result_gen;
-END_RCPP
-}
 // symFitRational
 List symFitRational(IntegerMatrix sampleU, IntegerMatrix mons, IntegerVector rvals, double pIn);
 RcppExport SEXP _dMod_symFitRational(SEXP sampleUSEXP, SEXP monsSEXP, SEXP rvalsSEXP, SEXP pInSEXP) {
@@ -658,7 +644,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"_dMod_symObsNullBatch", (DL_FUNC) &_dMod_symObsNullBatch, 8},
     {"_dMod_symObsNullChain", (DL_FUNC) &_dMod_symObsNullChain, 9},
     {"_dMod_symSolveMod", (DL_FUNC) &_dMod_symSolveMod, 3},
-    {"_dMod_symSteadyStateSeed", (DL_FUNC) &_dMod_symSteadyStateSeed, 4},
     {"_dMod_symFitRational", (DL_FUNC) &_dMod_symFitRational, 4},
     {"_dMod_symRatRecon", (DL_FUNC) &_dMod_symRatRecon, 2},
     {"_dMod_symSparsePoly", (DL_FUNC) &_dMod_symSparsePoly, 4},

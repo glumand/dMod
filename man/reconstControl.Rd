@@ -17,7 +17,9 @@ reconstControl(
   termCap = 60L,
   generalDegNum = 4L,
   generalDegDen = 3L,
-  gapOrderCap = 8L
+  gapOrderCap = 8L,
+  minsupportCandCap = 20000L,
+  timeout = Inf
 )
 }
 \arguments{
@@ -49,7 +51,21 @@ Laurent / general path (guards memory).}
 degree bounds of the general sparse-rational (Cauchy + Ben-Or-Tiwari) path.}
 
 \item{gapOrderCap}{Cap on the gap power-series order raised when propagating the
-state exactly across post-\code{t0} event boundaries.}
+state exactly across later (post-stimulus) event boundaries.}
+
+\item{minsupportCandCap}{Cap on the number of column subsets the minimal-support
+peel enumerates when hunting narrow nullspace cocircuits. A genuinely wide
+direction has no small-support cocircuit, so an exhaustive scan would test
+\code{choose(support, s)} subsets fruitlessly; the peel stops at this cap and lets
+any wide direction fall through to the free-column fit. Raise it only to peel
+cocircuits of unusually large support.}
+
+\item{timeout}{Wall-clock budget in seconds for the closed-form reconstruction
+(\code{closedForm = TRUE}). When it is exceeded, the directions still being
+reconstructed are returned support-only (\code{closedForm = FALSE}) with a
+\code{reason}, so a hard general (non-scaling) direction aborts cleanly instead of
+running unbounded. \code{Inf} (the default) imposes no limit and reproduces the
+previous behaviour exactly.}
 }
 \value{
 A \code{reconstControl} list.

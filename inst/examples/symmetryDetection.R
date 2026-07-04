@@ -6,7 +6,7 @@
 # derivations are in vignette("symmetryDetection").
 
 library(dMod)
-
+setwd(tempdir())
 
 ## 1. The canonical scaling symmetry, found by all three engines -------------
 #
@@ -160,12 +160,10 @@ symmetryDetection(eqnvec(x = "kpr - dp*x^q + kin*u", u = "0"), eqnvec(y = "s*x")
 # receptor and the unphosphorylated kinase pools are hidden: the system is only
 # partially observed. Everything is mass-action (rational right-hand sides, no
 # free exponents), so every non-identifiable direction is recovered in closed
-# form, including the one non-monomial direction. This is the contrast with the
-# SMAD model below, where the analogous feedback directions stay "general,
-# closed form not found": there the feedback enters through a Hill term with a
-# free exponent nhill, so the compensating coordinate is transcendental in the
-# unknowns and falls outside the rational class the finite-field reconstruction
-# can represent (the support is still reported, only the exact vector is not).
+# form, including the one non-monomial direction. The SMAD model below adds a
+# feedback through a Hill term with a free exponent nhill; that direction is a
+# weighted scaling whose weight is the exponent itself (xi_kinh = -nhill * kinh),
+# recovered in closed form via its minimal support in log coordinates.
 
 reactions <- eqnlist() |>
   addReaction("EGF + EGFR", "EGF_EGFR", "k_bind * EGF * EGFR") |>
@@ -193,54 +191,46 @@ summary(egf)
 
 ## 9. Multiple stimuli: analytic segments and exact gap propagation ----------
 #
-# Events after t0 split the post-stimulus timeline at the distinct event times
-# into analytic segments, one local jet each, all stacked (like conditions, but
-# over time). The state is propagated exactly across each inter-event gap by
-# keeping the gap length a formal power-series variable: an identifiability
-# direction must annihilate every gap-order coefficient (a polynomial that
-# vanishes for generic timing), and the gap order is raised until the rank
-# saturates (gapOrderUsed). Events at or before t0 are the pre-stimulus regime and
-# the first stimulus, so a protocol whose events all sit at t <= t0 stays one
-# segment.
+# The Taylor expansion starts at the earliest event time; events at later times
+# split the timeline at the distinct event times into analytic segments, one local
+# jet each, all stacked (like conditions, but over time). The state is propagated
+# exactly across each inter-event gap by keeping the gap length a formal
+# power-series variable: an identifiability direction must annihilate every
+# gap-order coefficient (a polynomial that vanishes for generic timing), and the
+# gap order is raised until the rank saturates (gapOrderUsed). A protocol whose
+# events all sit at the earliest time stays a single segment.
 
-# A receptor R driven by a step forcing u, the SMAD pattern below in miniature:
-# the switch and the stimulus both sit at t <= t0, so this is a single segment.
-f <- eqnvec(R = "kpr*(1 - bool) - kdg*R + kon*u*R", u = "0", bool = "0")
+# A receptor R driven by a step forcing u, the SMAD pattern below in miniature.
+# With the stimulus applied at t = 0 (the only event) this is a single segment.
+f <- eqnvec(R = "kpr - kdg*R + kon*u*R", u = "0")
 gR <- eqnvec(y = "scale*R")
-ev <- eventlist() |>
-  addEvent(var = "bool", time = -30, value = "var_bool", method = "replace") |>
-  addEvent(var = "u",    time = 0,   value = "init_u",   method = "replace")
-cg <- data.frame(init_u = 1, var_bool = 0, row.names = "Ctrl")
+ev <- addEvent(eventlist(), var = "u", time = 0, value = "init_u", method = "replace")
+cg <- data.frame(init_u = 1, row.names = "Ctrl")
 one <- symmetryDetection(f, gR, method = "observability", equilibrate = TRUE,
-                         events = ev, conditions = cg, forcings = c("u", "bool"), t0 = 0)
+                         events = ev, conditions = cg, forcings = "u")
 
 summary(one)
 
-# a real post-t0 event (a washout of u at t = 60) opens a second segment whose
-# relaxation is propagated exactly and stacked on top
+# a later event (a washout of u at t = 60) opens a second segment whose relaxation
+# is propagated exactly across the gap and stacked on top
 ev2 <- ev |> addEvent(var = "u", time = 60, value = "0", method = "replace")
 two <- symmetryDetection(f, gR, method = "observability", equilibrate = TRUE,
-                         events = ev2, conditions = cg, forcings = c("u", "bool"), t0 = 0)
+                         events = ev2, conditions = cg, forcings = "u")
 
 summary(two)
 
 # Exact propagation identifies a transient-channel parameter. The inhibition
 # strength kinh affects only the inhibitor-relaxed state at the stimulus onset.
-# Applied at equilibrium (t0 = -30) and propagated across the gap, kinh becomes
-# identifiable; collapsed onto t0 = 0 (no gap) it stays confounded.
+# The inhibitor is applied at t = -30 (the earliest event) and the state is
+# propagated across the gap to the stimulus at t = 0, so kinh becomes identifiable
+# through that transient channel (gapOrderUsed >= 1).
 f2 <- eqnvec(x = "kpr/(1 + kinh*inh) - kdeg*x + kstim*stim", inh = "0", stim = "0")
 g2 <- eqnvec(y = "s*x")
 ev3 <- eventlist() |>
   addEvent(var = "inh",  time = -30, value = "1", method = "replace") |>
   addEvent(var = "stim", time = 0,   value = "1", method = "replace")
-
-# no gap (t0 = 0): kinh confounded
-res <- symmetryDetection(f2, g2, method = "observability", equilibrate = TRUE, 
-                         events = ev3, forcings = c("inh", "stim"), t0 = 0)   # TRUE
-
-# exact propagation (t0 = -30): kinh identifiable, gapOrderUsed >= 1
 rmes30 <- symmetryDetection(f2, g2, method = "observability", equilibrate = TRUE,
-                         events = ev3, forcings = c("inh", "stim"), t0 = -30)
+                            events = ev3, forcings = c("inh", "stim"))
 
 summary(rmes30)
 
@@ -254,14 +244,16 @@ summary(rmes30)
 # with SMAD4, and three feedback genes, measured through scaled phospho- and
 # total-SMAD, the SMAD4 co-IP and the receptor mRNAs. The perturbations toggle
 # transcription (ActD), translation (CHX) and the proteasome (MG132), or knock a
-# receptor down, set per condition by events and the condition grid. The model
-# has 26 dynamic states and three conserved SMAD moieties, far beyond a symbolic
-# determining system. With equilibrate = TRUE the pre-stimulus resting state is
-# imposed exactly: forcings held at 0, no events, the steady state solved per
-# prime and the TGFb dose then applied as the t0 event. The free Hill exponents
-# make the transcription rates non-rational; under equilibrate they are recast to
-# a rational coordinate (the log handled as a generic coordinate), so the exact
-# finite-field analysis still applies and runs in under a minute.
+# receptor down, set per condition by events and a per-condition trafo list. The
+# model has 26 dynamic states and three conserved SMAD moieties, far beyond a
+# symbolic determining system. The pre-stimulus resting state is imposed with
+# equilibrate = TRUE: the states stay coordinates and f = 0 enters as a tangency
+# constraint solved per prime, the TGFb dose applied on top. (The explicit route --
+# feeding a steadyStates() solution through the trafo -- needs a rational steady
+# state; SMAD's Hill feedback makes it non-rational, so equilibrate is the route
+# here.) The free Hill exponents make the transcription rates non-rational; they are
+# recast to a rational coordinate (the log handled as a generic coordinate), so the
+# finite-field analysis still applies and runs in a few minutes.
 
 addRC <- function(eq, from, to, rate, ...) addReaction(eq, from, to, rate, compartment = "Cell", ...)
 addRE <- function(eq, from, to, rate, ...) addReaction(eq, from, to, rate, compartment = "extraCell", ...)
@@ -271,9 +263,9 @@ reactions <- eqnlist() |>
   addRE("", "TGFb", "0") |>
   addRC("", "R1mRNA",  "k_pr_R1mRNA * (1 + k_inh_R1mRNA_FB3 * FB3^nhill_R1) * (1 - bool_ActD)") |>
   addRC("", "R2mRNA",  "k_pr_R2mRNA / (1 + k_inh_R2mRNA_FB4 * FB4^nhill_R2) * (1 - bool_ActD)") |>
-  addRC("", "FB2mRNA", "k_pr_FB2mRNA * C3 * (1 - bool_ActD)") |>
-  addRC("", "FB3mRNA", "k_pr_FB3mRNA * C3 * (1 - bool_ActD)") |>
-  addRC("", "FB4mRNA", "k_pr_FB4mRNA * C3 * (1 - bool_ActD)") |>
+  addRC("", "FB2mRNA", "k_pr_FB2mRNA * C3^nhill_FB2mRNA / (Km_FB2mRNA^nhill_FB2mRNA + C3^nhill_FB2mRNA) * (1 - bool_ActD)") |>
+  addRC("", "FB3mRNA", "k_pr_FB3mRNA * C3^nhill_FB3mRNA / (Km_FB3mRNA^nhill_FB3mRNA + C3^nhill_FB3mRNA) * (1 - bool_ActD)") |>
+  addRC("", "FB4mRNA", "k_pr_FB4mRNA * C3^nhill_FB4mRNA / (Km_FB4mRNA^nhill_FB4mRNA + C3^nhill_FB4mRNA) * (1 - bool_ActD)") |>
   addRC("R1mRNA", "", "k_dg_R1mRNA * R1mRNA") |> addRC("R2mRNA", "", "k_dg_R2mRNA * R2mRNA") |>
   addRC("FB2mRNA", "", "k_dg_FB2 * FB2mRNA") |> addRC("FB3mRNA", "", "k_dg_FB3 * FB3mRNA") |>
   addRC("FB4mRNA", "", "k_dg_FB4 * FB4mRNA") |>
@@ -317,13 +309,13 @@ reactions <- customTotals(reactions, list(totalSMAD2 = "Smad2 + pSmad2 + C3",
                                           totalSMAD3 = "Smad3 + pSmad3 + C3",
                                           totalSMAD4 = "Smad4 + C3"))
 
-# log10 readouts equal scale * h in identifiability content, supplied rationally
 observables <- eqnvec(
   R1_obs = "scale_R1 * R1", R2_obs = "scale_R2 * R2", 
   pSmad2_obs = "scale_pSmad2 * (pSmad2 + C3)", pSmad3_obs = "scale_pSmad3 * (pSmad3 + C3)",
   TSmad2_obs = "scale_TSmad2 * (Smad2 + pSmad2 + C3)", TSmad3_obs = "scale_TSmad3 * (Smad3 + pSmad3 + C3)",
   Smad4_CoIP_obs = "scale_CoIP * C3", TGFBR1_mRNA_obs = "scale_R1mRNA * R1mRNA",
-  TGFBR2_mRNA_obs = "scale_R2mRNA * R2mRNA")
+  TGFBR2_mRNA_obs = "scale_R2mRNA * R2mRNA",
+  TGFb_obs = "scale_TGFb * TGFb")
 
 # switches at t = -30 (pre-stimulus regime), TGFb dose at t = 0 (the stimulus)
 events <- eventlist() |>
@@ -332,7 +324,10 @@ events <- eventlist() |>
   addEvent(var = "bool_MG132", time = -30, value = "var_bool_MG132", method = "replace") |>
   addEvent(var = "bool_ActD",  time = -30, value = "var_bool_ActD",  method = "replace")
 
-# one condition per perturbation; receptor knockdowns reparametrise a synthesis rate
+# one condition per perturbation, as a per-condition covariate grid: each row bakes
+# the ActD/CHX/MG132 switch values and the TGFb dose (the event-value placeholders),
+# and the receptor knockdowns rename a synthesis rate. The perturbation name is the
+# condition (row) name, so it is dropped as a column before branching.
 cond.grid <- data.frame(Pertubation = c("Ctrl", "ActD", "CHX", "MG132", "R1Knd", "R2Knd"),
                         init_TGFb = 1, stringsAsFactors = FALSE)
 cond.grid$var_bool_ActD  <- ifelse(cond.grid$Pertubation == "ActD",  1, 0)
@@ -341,18 +336,39 @@ cond.grid$var_bool_MG132 <- ifelse(cond.grid$Pertubation == "MG132", 1, 0)
 cond.grid$k_pr_R1mRNA <- ifelse(cond.grid$Pertubation == "R1Knd", "k_pr_R1mRNA_R1Knd", "k_pr_R1mRNA")
 cond.grid$k_pr_R2mRNA <- ifelse(cond.grid$Pertubation == "R2Knd", "k_pr_R2mRNA_R2Knd", "k_pr_R2mRNA")
 rownames(cond.grid) <- cond.grid$Pertubation
+cond.grid$Pertubation <- NULL
 
-# switches and ligand are forcings; equilibrate solves the resting state with
-# them at 0 (the ligand-receptor complexes fall out as zero automatically) and
-# then applies the TGFb dose as the t0 event; cores parallelises the conditions
-smad <- symmetryDetection(
+# The conditions enter through a per-condition trafo list built with branch(): it
+# broadcasts a base trafo over the grid and define()s each row's columns into that
+# condition's copy (a numeric bake for the switches/dose, a rename for a knockdown)
+
+cond.trafo <- eqnvec() |> 
+  define("x~x", x = getParameters(reactions, events)) |> 
+  branch(table = cond.grid, apply = "insert")
+
+# switches and ligand are forcings. equilibrate imposes the resting state implicitly;
+# the TGFb dose is applied on top, and the perturbations enter through the trafo list.
+# In the equilibrate path each sample point's steady state is solved per condition, so
+# cores.GLp (per-point parallelism) is the knob that matters here, not cores.conditions;
+# raise it towards the number of physical cores to speed the run up.
+outsmad <- symmetryDetection(
   reactions, observables, method = "observability",
-  events = events, conditions = cond.grid,
-  forcings = c("bool_ActD", "bool_CHX", "bool_MG132", "TGFb"),
-  t0 = -30, equilibrate = TRUE, reduceCQ = TRUE, closedForm = TRUE, cores = 6)
+  events = events, trafo = cond.trafo,
+  forcings = c("bool_ActD","bool_CHX","bool_MG132","TGFb"),
+  equilibrate = TRUE, reduceCQ = TRUE, closedForm = TRUE,
+  cores.GLp = 8)
 
-summary(smad)                                         # the involved unknowns
-# rank 56 / 65: 9 structural non-identifiabilities, all confounded rate/scale
-# groups (feedback strengths with their target's production rate, receptor
-# synthesis with its readout scale, the SMAD totals with the observation scales);
-# both Hill exponents nhill_R1, nhill_R2 are identifiable
+# 9 of the 10 non-identifiabilities close in closed form (a few minutes):
+#   - the mRNA/protein synthesis scalings (each k_pr_X paired with its readout scale),
+#   - the pSmad-feedback inhibition group,
+#   - both receptor Hill feedbacks, each a parameter-weighted scaling recovered exactly
+#     over Q(nhill) by the toric peel: xi_kinh = -nhill * kinh (the inhibition strength
+#     against the feedback protein's synthesis rate; the Hill exponents are identifiable),
+#   - the ligand initial value init_TGFb.
+# The 10th direction stays open (reported by support only): the SMAD-pool confound
+# couples the conserved totals and observation scales with the complex-formation rate
+# AND the feedback-mRNA Hill exponents nhill_FB* -- a scaling of the pool that also
+# shifts those exponents is transcendental (exp-sensitivity ~ base^n * log base), so it
+# has no rational closed form. Its sample bank cannot fill (perturbing the coupled
+# parameters leaves the recast manifold), and the reconstruction bails to support-only.
+summary(outsmad)

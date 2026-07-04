@@ -46,6 +46,11 @@ u64 powmod(u64 a, u64 e, u64 p) {
 
 inline u64 invmod(u64 a, u64 p) { return powmod(a % p, p - 2, p); }
 
+// Reduce a (possibly negative) R integer to its residue in [0, p).
+inline u64 red(long long x, u64 p) {
+  i128 v = (i128)x % (i128)p; if (v < 0) v += p; return (u64)v;
+}
+
 inline std::vector<int> to_ivec(const IntegerVector& v) {
   return std::vector<int>(v.begin(), v.end());
 }
@@ -68,6 +73,11 @@ u64 parse_mod(const std::string& s, u64 p) {
     r = (r * 10 + (u64)(s[i] - '0')) % p;
   }
   return neg ? (p - r) % p : r;
+}
+
+// Residue of the rational constant num/den (decimal strings) modulo p.
+inline u64 reduce_rational(const std::string& num, const std::string& den, u64 p) {
+  return mulmod(parse_mod(num, p), invmod(parse_mod(den, p), p), p);
 }
 
 // Accumulate the dual product of duals X and Y into o (width w: value at 0,
@@ -451,17 +461,18 @@ bool build_obs_rows_poly(std::vector<std::vector<u64> >& val,
 // One experimental condition's tape in thread-safe plain C++: the instruction
 // stream and slot wiring as ints, the rational constants of the tape and the
 // initial-condition map kept as decimal strings so they can be reduced against
-// any prime, and an optional pre-reduced steady-state seed icSeed (constraint
-// mode, one prime per call). Holding the constants as strings lets a single
-// extraction serve many primes, which the batch path relies on.
+// any prime, and an optional steady-state seed icSeed (constraint mode). Every
+// numeric constant is held raw (strings, or unreduced ints for icSeed) and
+// reduced per prime in build_one_condition, so a single extraction serves every
+// prime -- which the batch path relies on.
 struct CondRaw {
   std::vector<int> op, a, b, stateSlots, fOut, gOut, icLeaf, icOp, icA, icB, icOut;
   std::vector<std::string> cnum, cden, icCnum, icCden, icNum, icDen;
   bool hasIcTape, hasIcSeed;
-  std::vector<std::vector<u64> > icSeed;
+  std::vector<std::vector<int> > icSeedRaw;
 };
 
-CondRaw extract_cond_raw(List tp, int nStates, int w, u64 p) {
+CondRaw extract_cond_raw(List tp, int nStates, int w) {
   CondRaw cd;
   cd.op = to_ivec(tp["op"]); cd.a = to_ivec(tp["a"]); cd.b = to_ivec(tp["b"]);
   cd.stateSlots = to_ivec(tp["stateSlots"]);
@@ -472,12 +483,9 @@ CondRaw extract_cond_raw(List tp, int nStates, int w, u64 p) {
   cd.hasIcSeed = tp.containsElementNamed("icSeed");
   if (cd.hasIcSeed) {
     IntegerMatrix icSeed = as<IntegerMatrix>(tp["icSeed"]);
-    cd.icSeed.assign(nStates, std::vector<u64>(w, 0));
+    cd.icSeedRaw.assign(nStates, std::vector<int>(w, 0));
     for (int i = 0; i < nStates; ++i)
-      for (int c = 0; c < w; ++c) {
-        i128 v = (i128)icSeed(i, c) % (i128)p; if (v < 0) v += p;
-        cd.icSeed[i][c] = (u64)v;
-      }
+      for (int c = 0; c < w; ++c) cd.icSeedRaw[i][c] = icSeed(i, c);
   } else if (cd.hasIcTape) {
     cd.icOp = to_ivec(tp["icOp"]); cd.icA = to_ivec(tp["icA"]);
     cd.icB = to_ivec(tp["icB"]); cd.icOut = to_ivec(tp["icOut"]);
@@ -503,7 +511,7 @@ bool build_one_condition(const CondRaw& cd,
   std::vector<u64> cval(nInstr, 0);
   for (int i = 0; i < nInstr; ++i)
     if (cd.op[i] == OP_CONST)
-      cval[i] = mulmod(parse_mod(cd.cnum[i], p), invmod(parse_mod(cd.cden[i], p), p), p);
+      cval[i] = reduce_rational(cd.cnum[i], cd.cden[i], p);
 
   std::vector<std::vector<u64> > icVal;
   if (cd.hasIcTape && !cd.hasIcSeed) {
@@ -511,8 +519,7 @@ bool build_one_condition(const CondRaw& cd,
     std::vector<u64> icCval(nIc, 0);
     for (int i = 0; i < nIc; ++i)
       if (cd.icOp[i] == OP_CONST)
-        icCval[i] = mulmod(parse_mod(cd.icCnum[i], p),
-                           invmod(parse_mod(cd.icCden[i], p), p), p);
+        icCval[i] = reduce_rational(cd.icCnum[i], cd.icCden[i], p);
     icVal.assign(nLeaves + nIc, std::vector<u64>(w, 0));
     for (int L = 0; L < nLeaves; ++L)
       for (int c = 0; c < w; ++c) icVal[L][c] = leafVal[L][c];
@@ -524,8 +531,7 @@ bool build_one_condition(const CondRaw& cd,
   if (!cd.hasIcTape && !cd.hasIcSeed) {
     icConst.assign(nStates, 0);
     for (int i = 0; i < nStates; ++i)
-      icConst[i] = mulmod(parse_mod(cd.icNum[i], p),
-                          invmod(parse_mod(cd.icDen[i], p), p), p);
+      icConst[i] = reduce_rational(cd.icNum[i], cd.icDen[i], p);
   }
 
   std::vector<std::vector<u64> > val(S, std::vector<u64>((size_t)(Nt + 1) * w, 0));
@@ -534,7 +540,7 @@ bool build_one_condition(const CondRaw& cd,
   for (int i = 0; i < (int)cd.stateSlots.size(); ++i) {
     int slot = cd.stateSlots[i];
     if (cd.hasIcSeed) {
-      for (int c = 0; c < w; ++c) val[slot][c] = cd.icSeed[i][c];
+      for (int c = 0; c < w; ++c) val[slot][c] = red(cd.icSeedRaw[i][c], p);
       continue;
     }
     int src = cd.hasIcTape ? cd.icOut[i] : (cd.icLeaf[i] >= 0 ? cd.icLeaf[i] : -1);
@@ -574,16 +580,13 @@ SegRaw extract_seg_raw(List seg, int nStates, int w, u64 p) {
   s.cval.assign(nInstr, 0);
   for (int i = 0; i < nInstr; ++i)
     if (s.op[i] == OP_CONST)
-      s.cval[i] = mulmod(parse_mod(cnum[i], p), invmod(parse_mod(cden[i], p), p), p);
+      s.cval[i] = reduce_rational(cnum[i], cden[i], p);
   s.hasIcSeed = seg.containsElementNamed("icSeed");
   if (s.hasIcSeed) {
     IntegerMatrix icSeed = as<IntegerMatrix>(seg["icSeed"]);
     s.icSeed.assign(nStates, std::vector<u64>(w, 0));
     for (int i = 0; i < nStates; ++i)
-      for (int c = 0; c < w; ++c) {
-        i128 v = (i128)icSeed(i, c) % (i128)p; if (v < 0) v += p;
-        s.icSeed[i][c] = (u64)v;
-      }
+      for (int c = 0; c < w; ++c) s.icSeed[i][c] = red(icSeed(i, c), p);
   }
   s.hasIcTape = seg.containsElementNamed("icOp");
   if (s.hasIcTape) {
@@ -594,7 +597,7 @@ SegRaw extract_seg_raw(List seg, int nStates, int w, u64 p) {
     s.icCval.assign(nIc, 0);
     for (int i = 0; i < nIc; ++i)
       if (s.icOp[i] == OP_CONST)
-        s.icCval[i] = mulmod(parse_mod(icCnum[i], p), invmod(parse_mod(icCden[i], p), p), p);
+        s.icCval[i] = reduce_rational(icCnum[i], icCden[i], p);
   }
   s.hasEv = seg.containsElementNamed("evVarIdx");
   if (s.hasEv) {
@@ -606,7 +609,7 @@ SegRaw extract_seg_raw(List seg, int nStates, int w, u64 p) {
     s.evCval.assign(nEv, 0);
     for (int i = 0; i < nEv; ++i)
       if (s.evOp[i] == OP_CONST)
-        s.evCval[i] = mulmod(parse_mod(ecn[i], p), invmod(parse_mod(ecd[i], p), p), p);
+        s.evCval[i] = reduce_rational(ecn[i], ecd[i], p);
   }
   return s;
 }
@@ -766,7 +769,7 @@ bool seed_tape_dual(const std::vector<int>& op, const std::vector<int>& a,
 }
 
 // Solve A X = B over GF(p), A n x n, B n x k. Returns false when A is singular.
-bool seed_solve_mod(std::vector<std::vector<u64> > A,
+bool seed_solve_mod(const std::vector<std::vector<u64> >& A,
                     const std::vector<std::vector<u64> >& B, u64 p,
                     std::vector<std::vector<u64> >& X) {
   int n = (int)A.size();
@@ -834,7 +837,7 @@ List symObsNullMulti(List tapes, int nLeaves, int nStates,
   // A condition seeded directly from a numeric interior steady state carries its
   // modular seed and IFT parameter-duals in icSeed (constraint mode).
   std::vector<CondRaw> td(T);
-  for (int t = 0; t < T; ++t) td[t] = extract_cond_raw(tapes[t], nStates, w, p);
+  for (int t = 0; t < T; ++t) td[t] = extract_cond_raw(tapes[t], nStates, w);
 
   // parallel per-condition build: each thread owns its row block; a vanishing
   // denominator in any condition marks failure (no early return inside OpenMP).
@@ -886,8 +889,8 @@ List symObsNullBatch(List tapes, int nLeaves, int nStates, IntegerVector zSlots,
   for (int c = 0; c < nz; ++c) dualCol[zSlots[c]] = c;
 
   // copy points and primes out of R into plain C++ so the parallel region below
-  // reads no R object; the rational constants are reduced per prime inside the
-  // build, so a single tape extraction (any prime) serves every pair.
+  // reads no R object; every constant (tape rationals and icSeed) is reduced per
+  // prime inside the build, so a single tape extraction serves every pair.
   std::vector<int> pts((size_t)nB * nLeaves);
   for (int bi = 0; bi < nB; ++bi)
     for (int L = 0; L < nLeaves; ++L) pts[(size_t)bi * nLeaves + L] = points(bi, L);
@@ -895,8 +898,7 @@ List symObsNullBatch(List tapes, int nLeaves, int nStates, IntegerVector zSlots,
   for (int bi = 0; bi < nB; ++bi) pr[bi] = (u64)primes[bi];
 
   std::vector<CondRaw> td(T);
-  for (int t = 0; t < T; ++t)
-    td[t] = extract_cond_raw(tapes[t], nStates, w, nB > 0 ? pr[0] : 2);
+  for (int t = 0; t < T; ++t) td[t] = extract_cond_raw(tapes[t], nStates, w);
 
   std::vector<char> okFlag(nB, 1);
   std::vector<std::vector<std::vector<u64> > > redRows(nB);
@@ -1012,12 +1014,8 @@ SEXP symSolveMod(IntegerMatrix A, IntegerVector b, double pIn) {
   int nr = A.nrow(), nc = A.ncol();
   std::vector<std::vector<u64> > aug(nr, std::vector<u64>(nc + 1));
   for (int i = 0; i < nr; ++i) {
-    for (int j = 0; j < nc; ++j) {
-      i128 v = (i128)A(i, j) % (i128)p; if (v < 0) v += p;
-      aug[i][j] = (u64)v;
-    }
-    i128 v = (i128)b[i] % (i128)p; if (v < 0) v += p;
-    aug[i][nc] = (u64)v;
+    for (int j = 0; j < nc; ++j) aug[i][j] = red(A(i, j), p);
+    aug[i][nc] = red(b[i], p);
   }
   std::vector<int> pivots = rref_mod(aug, p);
   for (size_t i = 0; i < pivots.size(); ++i)
@@ -1026,226 +1024,6 @@ SEXP symSolveMod(IntegerMatrix A, IntegerVector b, double pIn) {
   for (size_t i = 0; i < pivots.size(); ++i)
     if (pivots[i] < nc) x[pivots[i]] = (int)aug[i][nc];
   return x;
-}
-
-// Per-point steady-state seed from a compiled plan (compileSeedPlan): the state
-// values (linear solution), the IFT parameter sensitivities, the power/Hill recast
-// partner duals and the t0 event composition, all in integer arithmetic over
-// GF(p). Returns {ok, xstar, dx, recast} for the seed path. `paramVals` is in the
-// plan's paramNames order; `lVals` carries one log-base value per recast entry.
-// [[Rcpp::export]]
-List symSteadyStateSeed(List plan, IntegerVector paramVals, IntegerVector lVals,
-                        double pIn) {
-  u64 p = (u64)pIn;
-  std::vector<std::string> stateNames = to_svec(plan["stateNames"]);
-  std::vector<std::string> paramNames = to_svec(plan["paramNames"]);
-  std::vector<std::string> solveNames = to_svec(plan["solveStateNames"]);
-  int nStates = (int)stateNames.size();
-  int nP = (int)paramNames.size();
-  int nS = as<int>(plan["nSolve"]);
-
-  std::map<std::string, int> paramIdx, solveIdx;
-  for (int j = 0; j < nP; ++j) paramIdx[paramNames[j]] = j;
-  for (int k = 0; k < nS; ++k) solveIdx[solveNames[k]] = k;
-
-  std::vector<u64> paramvals(nP);
-  for (int j = 0; j < nP; ++j) {
-    i128 v = (i128)paramVals[j] % (i128)p; if (v < 0) v += p;
-    paramvals[j] = (u64)v;
-  }
-
-  auto tapeConst = [&](CharacterVector cn, CharacterVector cd,
-                       const std::vector<int>& op) {
-    int n = cn.size();
-    std::vector<u64> cv(n, 0);
-    for (int i = 0; i < n; ++i)
-      if (op[i] == OP_CONST)
-        cv[i] = mulmod(parse_mod(as<std::string>(cn[i]), p),
-                       invmod(parse_mod(as<std::string>(cd[i]), p), p), p);
-    return cv;
-  };
-
-  // state values from the linear-solution tape over the parameters
-  std::vector<int> lop = to_ivec(plan["linOp"]), la = to_ivec(plan["linA"]),
-                   lb = to_ivec(plan["linB"]), lout = to_ivec(plan["linOut"]);
-  std::vector<u64> lcv = tapeConst(plan["linCnum"], plan["linCden"], lop);
-  std::vector<u64> lv;
-  if (!seed_tape_value(lop, la, lb, lcv, paramvals, nP, p, lv))
-    return List::create(_["ok"] = false, _["why"] = "singular state tape mod p");
-  std::vector<u64> valBy(nS);
-  for (int k = 0; k < nS; ++k) valBy[k] = lv[lout[k]];
-
-  // Jacobians from the tape over the parameters and the solve-states
-  std::vector<u64> ptv(nP + nS);
-  for (int j = 0; j < nP; ++j) ptv[j] = paramvals[j];
-  for (int k = 0; k < nS; ++k) ptv[nP + k] = valBy[k];
-  std::vector<int> jop = to_ivec(plan["jacOp"]), ja = to_ivec(plan["jacA"]),
-                   jb = to_ivec(plan["jacB"]), jout = to_ivec(plan["jacOut"]);
-  std::vector<u64> jcv = tapeConst(plan["jacCnum"], plan["jacCden"], jop);
-  std::vector<u64> jv;
-  if (!seed_tape_value(jop, ja, jb, jcv, ptv, nP + nS, p, jv))
-    return List::create(_["ok"] = false, _["why"] = "singular jacobian tape mod p");
-  std::vector<std::vector<u64> > Jxeff(nS, std::vector<u64>(nS));
-  for (int i = 0; i < nS; ++i)
-    for (int j = 0; j < nS; ++j) Jxeff[i][j] = jv[jout[i * nS + j]];
-  std::vector<std::vector<u64> > JtBy(nP, std::vector<u64>(nS));
-  for (int t = 0; t < nP; ++t)
-    for (int i = 0; i < nS; ++i) JtBy[t][i] = jv[jout[nS * nS + t * nS + i]];
-
-  auto valOf = [&](const std::string& nm) -> u64 {
-    auto it = solveIdx.find(nm);
-    if (it != solveIdx.end()) return valBy[it->second];
-    auto jt = paramIdx.find(nm);
-    return jt != paramIdx.end() ? paramvals[jt->second] : 0;
-  };
-
-  // power/Hill recast fold into the Jacobian columns (normal entries only)
-  List recast = plan["recast"];
-  int nRc = recast.size();
-  std::vector<std::string> rcE(nRc), rcL(nRc), rcBase(nRc), rcExp(nRc);
-  std::vector<bool> rcInv(nRc);
-  std::vector<u64> rcE0(nRc), rcL0(nRc), rcBase0(nRc), rcExpv(nRc);
-  for (int r = 0; r < nRc; ++r) {
-    List rc = recast[r];
-    rcE[r] = as<std::string>(rc["E"]); rcL[r] = as<std::string>(rc["L"]);
-    rcBase[r] = as<std::string>(rc["base"]); rcExp[r] = as<std::string>(rc["exp"]);
-    rcInv[r] = as<bool>(rc["inverted"]);
-    rcE0[r] = valOf(rcE[r]); rcBase0[r] = valOf(rcBase[r]);
-    rcExpv[r] = paramIdx.count(rcExp[r]) ? paramvals[paramIdx[rcExp[r]]] : 0;
-    i128 lv0 = (i128)lVals[r] % (i128)p; if (lv0 < 0) lv0 += p;
-    rcL0[r] = (u64)lv0;
-    if (!rcInv[r]) {
-      u64 binv = rcBase0[r] % p ? invmod(rcBase0[r], p) : 0;
-      u64 dEbase = mulmod(mulmod(rcExpv[r], rcE0[r], p), binv, p);
-      u64 dEexp = mulmod(rcE0[r], rcL0[r], p);
-      const std::vector<u64>& jE = paramIdx.count(rcE[r]) ? JtBy[paramIdx[rcE[r]]]
-                                                          : std::vector<u64>(nS, 0);
-      if (solveIdx.count(rcBase[r])) {
-        int bc = solveIdx[rcBase[r]];
-        for (int i = 0; i < nS; ++i)
-          Jxeff[i][bc] = addmod(Jxeff[i][bc], mulmod(jE[i], dEbase, p), p);
-      } else if (paramIdx.count(rcBase[r])) {
-        int bj = paramIdx[rcBase[r]];
-        for (int i = 0; i < nS; ++i)
-          JtBy[bj][i] = addmod(JtBy[bj][i], mulmod(jE[i], dEbase, p), p);
-      }
-      if (paramIdx.count(rcExp[r])) {
-        int ej = paramIdx[rcExp[r]];
-        for (int i = 0; i < nS; ++i)
-          JtBy[ej][i] = addmod(JtBy[ej][i], mulmod(jE[i], dEexp, p), p);
-      }
-    }
-  }
-
-  // IFT: solve Jxeff dx = -Jt for every parameter column at once
-  std::vector<std::vector<u64> > B(nS, std::vector<u64>(nP));
-  for (int i = 0; i < nS; ++i)
-    for (int j = 0; j < nP; ++j) B[i][j] = submod(0, JtBy[j][i], p);
-  std::vector<std::vector<u64> > X;
-  if (!seed_solve_mod(Jxeff, B, p, X))
-    return List::create(_["ok"] = false, _["why"] = "singular jacobian mod p");
-
-  // assemble xstar and dx in the full state order; held states stay 0
-  std::vector<u64> xstar(nStates, 0);
-  for (int s = 0; s < nStates; ++s) {
-    auto it = solveIdx.find(stateNames[s]);
-    if (it != solveIdx.end()) xstar[s] = valBy[it->second];
-  }
-  std::vector<std::vector<u64> > dx(nP, std::vector<u64>(nStates, 0));
-  for (int j = 0; j < nP; ++j)
-    for (int s = 0; s < nStates; ++s) {
-      auto it = solveIdx.find(stateNames[s]);
-      if (it != solveIdx.end()) dx[j][s] = X[it->second][j];
-    }
-
-  // recast partner-row duals (gen and L), from dx of the base or E
-  List recastOut(nRc);
-  for (int r = 0; r < nRc; ++r) {
-    IntegerVector gD(nP), lD(nP);
-    gD.names() = paramNames; lD.names() = paramNames;
-    std::string genNm; u64 gen0;
-    if (!rcInv[r]) {
-      int bi = solveIdx.count(rcBase[r]) ? solveIdx[rcBase[r]] : -1;
-      u64 binv = rcBase0[r] % p ? invmod(rcBase0[r], p) : 0;
-      u64 dEbase = mulmod(mulmod(rcExpv[r], rcE0[r], p), binv, p);
-      u64 dEexp = mulmod(rcE0[r], rcL0[r], p);
-      for (int j = 0; j < nP; ++j) {
-        u64 dxb = bi >= 0 ? X[bi][j] : 0;
-        u64 g = mulmod(dEbase, dxb, p);
-        if (paramNames[j] == rcExp[r]) g = addmod(g, dEexp, p);
-        gD[j] = (int)g;
-        lD[j] = (int)mulmod(binv, dxb, p);
-      }
-      genNm = rcE[r]; gen0 = rcE0[r];
-    } else {
-      int ei = solveIdx.count(rcE[r]) ? solveIdx[rcE[r]] : -1;
-      u64 xe = rcExpv[r] % p ? invmod(rcExpv[r], p) : 0;
-      u64 einv = rcE0[r] % p ? invmod(rcE0[r], p) : 0;
-      for (int j = 0; j < nP; ++j) {
-        u64 dE = ei >= 0 ? X[ei][j] : 0;
-        u64 g = mulmod(mulmod(mulmod(rcBase0[r], xe, p), einv, p), dE, p);
-        if (paramNames[j] == rcExp[r])
-          g = submod(g, mulmod(mulmod(rcBase0[r], rcL0[r], p), xe, p), p);
-        gD[j] = (int)g;
-        u64 l = mulmod(mulmod(xe, einv, p), dE, p);
-        if (paramNames[j] == rcExp[r]) l = submod(l, mulmod(rcL0[r], xe, p), p);
-        lD[j] = (int)l;
-      }
-      genNm = rcBase[r]; gen0 = rcBase0[r];
-    }
-    recastOut[r] = List::create(
-      _["gen"] = genNm, _["gen0"] = (int)gen0, _["L"] = rcL[r],
-      _["L0"] = (int)rcL0[r], _["inverted"] = (bool)rcInv[r],
-      _["genDual"] = gD, _["lDual"] = lD);
-  }
-
-  // t0 event composition (value and parameter duals from a forward-mode tape)
-  if (plan.containsElementNamed("evOp")) {
-    std::vector<int> eop = to_ivec(plan["evOp"]), ea = to_ivec(plan["evA"]),
-                     eb = to_ivec(plan["evB"]), eout = to_ivec(plan["evOut"]);
-    std::vector<u64> ecv = tapeConst(plan["evCnum"], plan["evCden"], eop);
-    std::vector<std::vector<u64> > ev;
-    if (!seed_tape_dual(eop, ea, eb, ecv, paramvals, nP, p, ev))
-      return List::create(_["ok"] = false, _["why"] = "singular event tape mod p");
-    std::vector<std::string> evVar = to_svec(plan["evVar"]);
-    std::vector<std::string> evMethod = to_svec(plan["evMethod"]);
-    std::map<std::string, int> stateIdx;
-    for (int s = 0; s < nStates; ++s) stateIdx[stateNames[s]] = s;
-    for (int e = 0; e < (int)evVar.size(); ++e) {
-      auto it = stateIdx.find(evVar[e]);
-      if (it == stateIdx.end()) continue;
-      int i = it->second;
-      const std::vector<u64>& row = ev[eout[e]];
-      u64 v0 = row[0];
-      const std::string& meth = evMethod[e];
-      if (meth == "replace") {
-        xstar[i] = v0;
-        for (int j = 0; j < nP; ++j) dx[j][i] = row[1 + j];
-      } else if (meth == "add") {
-        xstar[i] = addmod(xstar[i], v0, p);
-        for (int j = 0; j < nP; ++j) dx[j][i] = addmod(dx[j][i], row[1 + j], p);
-      } else if (meth == "multiply") {
-        u64 old = xstar[i];
-        std::vector<u64> oldd(nP);
-        for (int j = 0; j < nP; ++j) oldd[j] = dx[j][i];
-        xstar[i] = mulmod(old, v0, p);
-        for (int j = 0; j < nP; ++j)
-          dx[j][i] = addmod(mulmod(old, row[1 + j], p), mulmod(v0, oldd[j], p), p);
-      }
-    }
-  }
-
-  IntegerVector xs(nStates);
-  for (int s = 0; s < nStates; ++s) xs[s] = (int)xstar[s];
-  List dxOut(nP);
-  for (int j = 0; j < nP; ++j) {
-    IntegerVector col(nStates);
-    for (int s = 0; s < nStates; ++s) col[s] = (int)dx[j][s];
-    dxOut[j] = col;
-  }
-  dxOut.names() = paramNames;
-  return List::create(_["ok"] = true, _["xstar"] = xs, _["dx"] = dxOut,
-                      _["recast"] = recastOut);
 }
 
 // Fit a rational function num/den to samples of one nullspace entry over GF(p).
@@ -1303,6 +1081,17 @@ List symFitRational(IntegerMatrix sampleU, IntegerMatrix mons,
 // [[Rcpp::export]]
 List symRatRecon(IntegerMatrix residues, IntegerVector primes) {
   int k = residues.nrow(), nprime = residues.ncol();
+  // the CRT accumulator holds the running prime product in u128; r + M*t stays
+  // below 2*product, so the product must fit under 2^127 to avoid silent
+  // overflow. Primes near 2^31 allow up to 4; guard exactly by summed bit length.
+  int prodBits = 0;
+  for (int j = 0; j < nprime; ++j) {
+    u64 pj = (u64)primes[j];
+    prodBits += pj ? (64 - __builtin_clzll(pj)) : 0;
+  }
+  if (prodBits >= 127)
+    stop("symRatRecon: prime product exceeds the u128 CRT capacity (2^127); "
+         "reduce the number or size of primes in .symPrimes");
   CharacterVector num(k), den(k);
   for (int row = 0; row < k; ++row) {
     u128 r = 0, M = 1;
@@ -1372,7 +1161,7 @@ List symSparsePoly(IntegerVector seq, IntegerMatrix monoTab, IntegerVector monoR
   int len = seq.size();
   int nvar = monoTab.ncol();
   std::vector<u64> s(len);
-  for (int i = 0; i < len; ++i) s[i] = (u64)(((i128)seq[i] % (i128)p + p) % p);
+  for (int i = 0; i < len; ++i) s[i] = red(seq[i], p);
 
   std::vector<u64> C = berlekamp_massey(s, p);
   int L = (int)C.size() - 1;
@@ -1386,7 +1175,7 @@ List symSparsePoly(IntegerVector seq, IntegerMatrix monoTab, IntegerVector monoR
   int ncand = monoRes.size();
   std::vector<int> rootIdx;
   for (int c = 0; c < ncand; ++c) {
-    u64 m = (u64)(((i128)monoRes[c] % (i128)p + p) % p);
+    u64 m = red(monoRes[c], p);
     u64 r = 0;
     for (int i = 0; i <= L; ++i) r = addmod(mulmod(r, m, p), C[i] % p, p);
     if (r == 0) rootIdx.push_back(c);
@@ -1397,7 +1186,7 @@ List symSparsePoly(IntegerVector seq, IntegerMatrix monoTab, IntegerVector monoR
   int t = L;
   std::vector<u64> nodes(t);
   for (int j = 0; j < t; ++j)
-    nodes[j] = (u64)(((i128)monoRes[rootIdx[j]] % (i128)p + p) % p);
+    nodes[j] = red(monoRes[rootIdx[j]], p);
   std::vector<std::vector<u64> > A(t, std::vector<u64>(t + 1, 0));
   for (int k = 0; k < t; ++k) {
     for (int j = 0; j < t; ++j) A[k][j] = powmod(nodes[j], (u64)k, p);
@@ -1429,7 +1218,7 @@ IntegerVector symMonoResidues(IntegerMatrix expts, IntegerVector bases, double p
     u64 v = 1;
     for (int j = 0; j < nc; ++j) {
       int e = expts(i, j);
-      u64 b = (u64)(((i128)bases[j] % (i128)p + p) % p);
+      u64 b = red(bases[j], p);
       if (e >= 0) v = mulmod(v, powmod(b, (u64)e, p), p);
       else v = mulmod(v, invmod(powmod(b, (u64)(-e), p), p), p);
     }
@@ -1446,7 +1235,7 @@ int symBMorder(IntegerVector seq, double pIn) {
   u64 p = (u64) pIn;
   int len = seq.size();
   std::vector<u64> s(len);
-  for (int i = 0; i < len; ++i) s[i] = (u64)(((i128)seq[i] % (i128)p + p) % p);
+  for (int i = 0; i < len; ++i) s[i] = red(seq[i], p);
   return (int)berlekamp_massey(s, p).size() - 1;
 }
 
@@ -1464,8 +1253,8 @@ List symCauchyEval(IntegerVector tnodes, IntegerVector rvals, int dN, int dD,
   int ns = tnodes.size(), nc = dN + dD + 2;
   std::vector<std::vector<u64> > M(ns, std::vector<u64>(nc, 0));
   for (int s = 0; s < ns; ++s) {
-    u64 t = (u64)(((i128)tnodes[s] % (i128)p + p) % p);
-    u64 r = (u64)(((i128)rvals[s] % (i128)p + p) % p);
+    u64 t = red(tnodes[s], p);
+    u64 r = red(rvals[s], p);
     u64 tp = 1;
     for (int d = 0; d <= dN; ++d) { M[s][d] = tp; tp = mulmod(tp, t, p); }
     tp = 1;

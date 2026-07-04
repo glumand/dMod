@@ -13,10 +13,12 @@ steadyStates(
   neglect = NULL,
   sparsifyLevel = NULL,
   outputFormat = "R",
-  testSteady = "T",
+  testSteady = c("fast", "exact", "skip"),
   walltime = 0L,
   simplify = TRUE,
   solveQuadratic = FALSE,
+  positive = TRUE,
+  branches = FALSE,
   version = "1.2"
 )
 }
@@ -44,9 +46,12 @@ and \code{"1.1"}; ignored by \code{"1.2"}.}
 compatible output. To obtain an output appropriate for d2d [3] "M" must be
 selected.}
 
-\item{testSteady}{Character, if "T" the correctness of the obtained steady
-states is numerically checked (this can be very time intensive). If "F" this
-is skipped. Ignored for version "1.0" (always tests).}
+\item{testSteady}{Character, how to verify the obtained steady states. One
+of \code{"fast"} (default; probabilistic check over a finite field GF(p) via
+Schwartz-Zippel, fast with negligible error probability), \code{"exact"}
+(symbolic substitution; correct but slow on large \code{sqrt} solutions), or
+\code{"skip"}. \code{"fast"} requires version "1.2" (falls back to \code{"exact"} on
+"1.1"); version "1.0" always tests.}
 
 \item{walltime}{Integer, wall-clock budget in seconds for the solver
 (default \code{0} = unlimited). Version "1.2" only.}
@@ -64,6 +69,18 @@ pivoted flux parameter (and the chain of substituted upstream rate
 constants) out of \code{mysteadies}, at the cost of emitting \code{sqrt(...)}
 expressions. Default \code{FALSE}; some workflows cannot consume \code{sqrt(...)}
 in their parameter trafos. Version "1.2" only.}
+
+\item{positive}{Positivity assumption for the sign-based solvers, used to
+select roots. \code{TRUE} (default) treats all parameters, initial values and
+totals as positive; \code{FALSE} assumes nothing (ambiguous states are pivoted);
+a character vector names the symbols to treat as positive. Version "1.2"
+only.}
+
+\item{branches}{Logical. When \code{TRUE} (with \code{solveQuadratic = TRUE}), a
+quadratic admitting two positive roots (bistability) is emitted with a
+selector symbol \verb{branch_<state>} taking \code{-1} or \code{+1} to recover the two
+steady states. \code{FALSE} (default) emits only the provably-unique positive
+root and pivots ambiguous cases. Version "1.2" only.}
 
 \item{version}{Character, AlyssaPetit backend version. One of
 \code{"1.0"} (original), \code{"1.1"} (adds \code{testSteady}), or

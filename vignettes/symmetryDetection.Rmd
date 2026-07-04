@@ -1011,10 +1011,36 @@ Filter(function(d) "n" %in% names(d$vector), res$nonIdentifiable)[[1]]$vector
 The exponent direction is $\xi_n = 1$ with
 $\xi_{d_{\mathrm{FB}}} = \big(d_{\mathrm{FB}}\log\mathrm{FB} -
 d_{\mathrm{FB}}\log K\big)/n$: the $\log(\mathrm{base})$ factor predicted above,
-made explicit by the back-substitution. (In a large network the same direction can
-instead couple too many species to reconstruct within the degree caps and is then
-returned by its support; the SMAD model of Section \ref{sec-examples} is such a
-case, where the feedback directions come back as exact scalings.)
+made explicit by the back-substitution. A companion case is a feedback whose free
+exponent is itself identifiable while its inhibition strength confounds with the
+regulator's synthesis rate. That direction is a scaling weighted by the exponent,
+$\xi_{k_{fb}} = -n\,k_{fb}$ traded against $\xi_{k_{pf}} = k_{pf}$ (the invariant is
+$k_{fb}\,k_{pf}^{\,n}$), recovered in closed form from its minimal support in log
+coordinates rather than by sampling the recast exponent. Entered linearly instead,
+as in the SMAD model of Section \ref{sec-examples}, the same confounder is an
+ordinary integer scaling.
+
+A feedback produced from the observed species makes this concrete. Only `x` is
+measured; a dose renders the exponent `n` identifiable, and the inhibition strength
+`k_fb` then confounds with the feedback synthesis `k_pf`:
+
+```{r hill-weighted, eval = haveSympy}
+loop <- eqnvec(x  = "k_pr/(1 + k_fb*FB^n) - d_x*x + k_stim*u",
+               FB = "k_pf*x - d_FB*FB", u = "0")
+res <- symmetryDetection(loop, eqnvec(xobs = "s*x"), method = "observability",
+  equilibrate = TRUE, forcings = "u",
+  events = addEvent(eventlist(), var = "u", time = 0, value = "dose",
+                    method = "replace"),
+  conditions = data.frame(dose = 1, row.names = "c1"),
+  closedForm = TRUE, reduceCQ = FALSE)
+Filter(function(d) setequal(d$support, c("k_fb", "k_pf")),
+       res$nonIdentifiable)[[1]]$vector
+```
+
+The confounder comes back as $\xi_{k_{pf}} = -k_{pf}/n$ against
+$\xi_{k_{fb}} = k_{fb}$ (the same direction as above up to scale, normalised on
+`k_fb` here), the weighted scaling with the free exponent `n` carried in the weight
+and no $\log$ term, since here the exponent is identified rather than freed.
 
 ### Bases without a turnover term
 
@@ -1119,7 +1145,7 @@ by fixing the redundant factor to one in a `trafo`, letting `k = k1 * k2` absorb
 the product:
 
 ```{r reparam, eval = haveSympy}
-f <- eqnvec(x = "k1*k2 - d*x")                       # only k1*k2 is identifiable
+f <- eqnvec(x = "k1*k2 - d*x")            # only the product k1*k2 is identifiable
 symmetryDetection(f, eqnvec(y = "x"), method = "observability")$identifiable
 
 symmetryDetection(f, eqnvec(y = "x"), method = "observability",
@@ -1253,11 +1279,13 @@ dose <- addEvent(eventlist(), var = "x", time = 0, value = "dose",
 
 # a known dose: the relaxation identifies the rate, the scale and the production
 symmetryDetection(f, g, method = "observability", events = dose,
-                  conditions = data.frame(dose = 2, row.names = "stim"))$identifiable
+                  conditions = data.frame(dose = 2,
+                                          row.names = "stim"))$identifiable
 
 # an unknown dose magnitude: the readout scale confounds with the amounts
 res <- symmetryDetection(f, g, method = "observability", closedForm = TRUE,
-                         events = dose, conditions = data.frame(row.names = "stim"))
+                         events = dose,
+                         conditions = data.frame(row.names = "stim"))
 res$nonIdentifiable[[1]]$vector
 ```
 
@@ -1304,7 +1332,8 @@ with the inhibitor and stimulus collapsed onto a single $t_0$ (no gap), it stays
 confounded.
 
 ```{r segments, eval = haveSympy}
-f <- eqnvec(x = "kpr/(1 + kinh*inh) - kdeg*x + kstim*stim", inh = "0", stim = "0")
+f <- eqnvec(x = "kpr/(1 + kinh*inh) - kdeg*x + kstim*stim",
+            inh = "0", stim = "0")
 g <- eqnvec(y = "s*x")
 ev <- eventlist() |>
   addEvent(var = "inh",  time = -30, value = "1", method = "replace") |>
@@ -1455,8 +1484,7 @@ to form an active complex that phosphorylates MEK, and phospho-MEK in turn
 phosphorylates ERK; each kinase is returned by a constitutive phosphatase. Only
 the two phospho-forms are measured, each on an unknown gain, so the ligand, the
 receptor and the unphosphorylated kinase pools are hidden: the model is partially
-observed. Every rate is mass-action, so unlike the SMAD model of the next section
-(whose feedback carries a free Hill exponent) every direction is rational and is
+observed. Every rate is mass-action, so every direction is rational and is
 returned in closed form.
 
 ```{r egf-model, eval = haveSympy}

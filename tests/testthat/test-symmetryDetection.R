@@ -329,7 +329,7 @@ test_that("a pre-equilibrated model with a known dose is identifiable", {
   ident <- function(m) {
     ev <- addEvent(eventlist(), var = "x", time = 0, value = "dose", method = m)
     symmetryDetection(eqnvec(x = "b - a*x"), eqnvec(y = "s*x"),
-                      trafo = eqnvec(x = "b/a"), events = ev, t0 = 0,
+                      trafo = eqnvec(x = "b/a"), events = ev,
                       conditions = data.frame(dose = 2, row.names = "stim"),
                       method = "observability", reduceCQ = FALSE)$identifiable
   }
@@ -510,7 +510,7 @@ test_that("the analytic-segment kernel agrees across thread counts", {
                      row.names = c("c1", "c2", "c3", "c4"))
   run <- function(cores)
     symmetryDetection(f, g, method = "observability", events = ev,
-                      conditions = grid, t0 = -1, forcings = "u",
+                      conditions = grid, forcings = "u",
                       closedForm = TRUE, reduceCQ = FALSE, cores = cores)
   serial <- run(1L)
   parallel <- run(4L)
@@ -669,7 +669,8 @@ test_that("equilibrate supports a free Hill/power exponent", {
   expect_equal(r$dim, 6L)
   # a base without a linear turnover term has a steady state that is a fractional
   # root; the inverted recast solves E = x^q and keeps x, log(x) generic. The
-  # symmetry is the rational scaling s -> lambda*s, so the closed form has no log.
+  # symmetry is a parameter-weighted scaling recovered exactly over Q(q) by the
+  # toric peel (no rational fit): weight 1 - q on dp, integers elsewhere.
   r2 <- symmetryDetection(
     eqnvec(x = "kpr - dp*x^q + kin*u", u = "0"), eqnvec(y = "s*x"),
     method = "observability", equilibrate = TRUE, forcings = "u", events = ev,
@@ -677,9 +678,13 @@ test_that("equilibrate supports a free Hill/power exponent", {
   expect_length(r2$nonIdentifiable, 1L)
   d2 <- r2$nonIdentifiable[[1]]
   expect_true(isTRUE(d2$closedForm))
+  expect_equal(d2$type, "scaling")                   # a q-weighted toric scaling
   expect_false("q" %in% d2$support)                  # the exponent is identifiable
-  expect_true(.sym_expr_equal(d2$vector[["dp"]], "dp*(q - 1)/s"))
-  expect_true(.sym_expr_equal(d2$vector[["kpr"]], "-kpr/s"))
+  # the free-exponent recast makes dp's scaling weight 1 - q; the readout scale s and
+  # the synthesis rates carry integer weights, and the input rate kin scales along
+  expect_true(.sym_expr_equal(d2$vector[["dp"]], "1 - q"))
+  expect_true(.sym_expr_equal(d2$vector[["kpr"]], "1"))
+  expect_true(.sym_expr_equal(d2$vector[["s"]], "-1"))
   exprs2 <- as.character(unlist(d2$vector))
   expect_false(any(grepl("log\\(", exprs2)))         # the direction is rational
   expect_false(any(grepl("_E_|_L_", exprs2)))         # no internal recast symbol leaks
@@ -900,7 +905,7 @@ test_that("log-coordinate gauge reconstructs a parameter-weighted scaling", {
 
   pool <- dMod:::.sym_pool()
   dir <- dMod:::.sym_interpolate_direction(
-    lg$anchors[1], ref, ref$pivots, znames, nz, zSlots, leafNames, 3L,
+    lg$anchors[1], ref, ref$pivots, znames, zSlots, leafNames, 3L,
     as.numeric(point0), pool, 100L, 1L, fakeKcall, spy, NULL,
     lg$residueFns[[1]], reconstControl())
   e <- dir$entry
@@ -1011,7 +1016,7 @@ test_that("a post-t0 event opens a second segment, propagated exactly", {
   cg <- data.frame(d0 = 1, d1 = 1, row.names = "c1")
 
   r <- symmetryDetection(f, g, method = "observability", events = ev,
-                         conditions = cg, t0 = 0, closedForm = TRUE)
+                         conditions = cg, closedForm = TRUE)
   expect_equal(r$conditions, 1L)
   expect_equal(r$segments, 2L)
   expect_equal(r$dim, 3L)             # A(0), s, k -- no free carry coordinates
@@ -1030,7 +1035,7 @@ test_that("with no post-t0 events the analysis collapses to a single segment", {
   cg <- data.frame(d0 = 1, row.names = "c1")
 
   r <- symmetryDetection(f, g, method = "observability", events = ev,
-                         conditions = cg, t0 = 0)
+                         conditions = cg)
   expect_equal(r$segments, 1L)
   expect_equal(r$dim, 3L)             # A(0), s, k
   expect_false(r$identifiable)
@@ -1040,11 +1045,11 @@ test_that("with no post-t0 events the analysis collapses to a single segment", {
 test_that("exact propagation identifies a transient-channel parameter", {
   if (!.sympy_works()) skip("reticulate/sympy not available")
 
-  # An inhibitor pre-incubation [t0, 0) feeds the stimulus phase. The inhibition
+  # An inhibitor pre-incubation [-30, 0) feeds the stimulus phase. The inhibition
   # strength kinh affects only the inhibitor-relaxed boundary state at t = 0, not
-  # any directly observed quantity. Applied at equilibrium and propagated exactly
-  # across the gap (t0 = -30), kinh becomes identifiable; with the inhibitor and
-  # stimulus collapsed onto t0 = 0 (no gap, no propagation) it does not.
+  # any directly observed quantity. The expansion starts at the earliest event
+  # (-30) and the state is propagated exactly across the gap to the stimulus, so
+  # kinh becomes identifiable through that transient channel.
   f <- eqnvec(x = "kpr/(1 + kinh*inh) - kdeg*x + kstim*stim", inh = "0", stim = "0")
   g <- eqnvec(y = "s*x")
   ev <- eventlist() |>
@@ -1052,21 +1057,13 @@ test_that("exact propagation identifies a transient-channel parameter", {
     addEvent(var = "stim", time = 0,   value = "1", method = "replace")
   cg <- data.frame(row.names = "c1")
 
-  r0 <- symmetryDetection(f, g, method = "observability", equilibrate = TRUE,
-                          events = ev, conditions = cg,
-                          forcings = c("inh", "stim"), t0 = 0)
   r30 <- symmetryDetection(f, g, method = "observability", equilibrate = TRUE,
                            events = ev, conditions = cg,
-                           forcings = c("inh", "stim"), t0 = -30)
-  supp0  <- unlist(lapply(r0$nonIdentifiable,  function(d) d$support))
+                           forcings = c("inh", "stim"))
   supp30 <- unlist(lapply(r30$nonIdentifiable, function(d) d$support))
-  expect_equal(r0$segments, 1L)
   expect_equal(r30$segments, 2L)
   expect_true(r30$gapOrderUsed >= 1L)       # the gap series carries kinh
-  expect_true("kinh" %in% supp0)            # collapsed: kinh not identifiable
   expect_false("kinh" %in% supp30)          # propagated: kinh identifiable
-  expect_true(r30$rank > r0$rank)           # the transient channel adds rank
-  expect_equal(r30$dim, r0$dim)             # same coordinate space (no carries)
 })
 
 
@@ -1084,8 +1081,158 @@ test_that("equilibrate seeds the first segment and propagates to a later one", {
   cg <- data.frame(dose = 2, d1 = 1, row.names = "stim")
 
   r <- symmetryDetection(f, g, method = "observability", equilibrate = TRUE,
-                         events = ev, conditions = cg, t0 = 0)
+                         events = ev, conditions = cg)
   expect_equal(r$conditions, 1L)
   expect_equal(r$segments, 2L)
   expect_true(r$identifiable)         # known dose pins s, then b; a from relaxation
+})
+
+
+test_that("a free-Hill-exponent feedback closes as a weighted scaling", {
+  if (!.sympy_works()) skip("reticulate/sympy not available")
+
+  # An unobserved feedback species FB inhibits the observed node R through a Hill
+  # term with a FREE exponent nh, and is itself produced from R (a loop). Rescaling
+  # FB's synthesis k_pf is compensated by k_fb with weight -nh (the invariant is
+  # k_fb * k_pf^nh), a scaling whose weight is a parameter. It is not an integer
+  # scaling and, under equilibrate, its free-column representative couples the whole
+  # loop; it is recovered from its minimal support in log coordinates as the exact
+  # monomial entry k_fb = -k_fb * nh / k_pf.
+  f <- eqnvec(R  = "k_pr/(1 + k_fb*FB^nh) - k_dg*R + k_stim*u",
+              FB = "k_pf*R - k_df*FB", u = "0")
+  g <- eqnvec(R_obs = "s*R")
+  r <- symmetryDetection(f, g, method = "observability", equilibrate = TRUE,
+                         forcings = "u",
+                         events = addEvent(eventlist(), var = "u", time = 0,
+                                           value = "dose", method = "replace"),
+                         conditions = data.frame(dose = 1, row.names = "c1"),
+                         closedForm = TRUE, reduceCQ = FALSE)
+  # every non-identifiable direction is in closed form
+  expect_true(all(vapply(r$nonIdentifiable,
+                         function(d) isTRUE(d$closedForm), logical(1))))
+  # the weighted-scaling direction couples exactly the inhibition strength and the
+  # feedback synthesis rate, with the Hill exponent as the weight
+  hill <- Filter(function(d) setequal(d$support, c("k_fb", "k_pf")),
+                 r$nonIdentifiable)
+  expect_length(hill, 1L)
+  expect_true(isTRUE(hill[[1]]$closedForm))
+  # the Hill exponent is the weight, so it appears in the direction (in whichever
+  # entry is not the normalised anchor)
+  expect_match(paste(unlist(hill[[1]]$vector), collapse = " "), "nh")
+})
+
+test_that("implicit steady state finds non-scaling multi-condition directions", {
+  if (!.sympy_works()) skip("reticulate/sympy not available")
+
+  # two states with a non-monomial resting state x_i* = v_i*K/(k - v_i), observed
+  # only through the SUM s*(x1+x2) so neither is individually pinned; two conditions
+  # differ in k (enters as a DIFFERENCE), so a valid direction can move the resting
+  # states non-proportionally across conditions. A single shared state column would
+  # miss these and over-report identifiability; the per-condition joint coordinates
+  # of the implicit determining system report the full rank-2/6 verdict (four
+  # non-identifiable directions, two of them non-scaling).
+  f <- eqnvec(x1 = "v1 - k*x1/(K + x1)", x2 = "v2 - k*x2/(K + x2)")
+  g <- eqnvec(y = "s*(x1 + x2)")
+  grid <- data.frame(k = c("k1", "k2"), row.names = c("c1", "c2"),
+                     stringsAsFactors = FALSE)
+  r <- symmetryDetection(f, g, method = "observability", equilibrate = TRUE,
+                         conditions = grid, reduceCQ = FALSE, closedForm = FALSE)
+  expect_false(r$identifiable)
+  expect_equal(r$dim, 6L)
+  expect_equal(r$rank, 2L)
+  expect_length(r$nonIdentifiable, 4L)
+})
+
+test_that("a per-condition trafo list matches the equivalent condition grid", {
+  if (!.sympy_works()) skip("reticulate/sympy not available")
+
+  f <- eqnvec(A = "-p*A"); g <- eqnvec(y = "s*A")
+  # a symbol-rename per condition, once as a grid and once as a trafo list
+  r_grid <- symmetryDetection(f, g, method = "observability",
+    conditions = data.frame(p = c("pa", "pb"), row.names = c("c1", "c2")),
+    reduceCQ = FALSE)
+  r_traf <- symmetryDetection(f, g, method = "observability",
+    trafo = list(c1 = eqnvec(p = "pa"), c2 = eqnvec(p = "pb")), reduceCQ = FALSE)
+  expect_equal(r_traf$conditions, 2L)          # the list alone sets the conditions
+  expect_equal(r_traf$rank, r_grid$rank)
+  expect_equal(r_traf$dim, r_grid$dim)
+
+  # a numeric bake per condition matches a numeric grid cell
+  r_bake  <- symmetryDetection(f, g, method = "observability",
+    trafo = list(eqnvec(p = "1/2"), eqnvec(p = "3/2")), reduceCQ = FALSE)
+  r_bgrid <- symmetryDetection(f, g, method = "observability",
+    conditions = data.frame(p = c(0.5, 1.5), row.names = c("c1", "c2")),
+    reduceCQ = FALSE)
+  expect_equal(r_bake$rank, r_bgrid$rank)
+  expect_equal(r_bake$dim, r_bgrid$dim)
+})
+
+test_that("trafo = steadyStates() matches equilibrate (explicit vs implicit route)", {
+  if (!.sympy_works()) skip("reticulate/sympy not available")
+  withr::local_dir(withr::local_tempdir())
+
+  # x' = b - a*x has the rational resting state x* = b/a. The explicit route
+  # (steadyStates() fed as a trafo initial condition) and the implicit route
+  # (equilibrate = TRUE, the f = 0 tangency constraint) must agree exactly.
+  eq <- eqnlist() |> addReaction("", "x", "b") |> addReaction("x", "", "a*x")
+  g  <- eqnvec(y = "s*x")
+  ss <- steadyStates(eq, testSteady = "fast")
+  skip_if_not(is.character(ss) && identical(unname(ss[["x"]]), "b/a"))
+
+  r_trafo <- symmetryDetection(eq, g, method = "observability", trafo = ss,
+                               closedForm = TRUE, reduceCQ = FALSE)
+  r_equil <- symmetryDetection(eq, g, method = "observability", equilibrate = TRUE,
+                               closedForm = TRUE, reduceCQ = FALSE)
+  expect_equal(r_trafo$rank, r_equil$rank)
+  expect_equal(r_trafo$dim, r_equil$dim)
+  expect_equal(r_trafo$identifiable, r_equil$identifiable)
+  # same support set on both routes
+  supp <- function(r) sort(unique(unlist(lapply(r$nonIdentifiable, function(d) d$support))))
+  expect_equal(supp(r_trafo), supp(r_equil))
+})
+
+test_that("scaling uses events (fixed weight) and conditions (lattice intersection)", {
+  if (!.sympy_works()) skip("reticulate/sympy not available")
+  eq <- .canonical(); g <- eqnvec(Aobs = "alpha * A")
+
+  # baseline: the calibration scaling A, B, alpha
+  base <- symmetryDetection(eq, g, method = "scaling", reduceCQ = FALSE)
+  expect_equal(base$count, 1L)
+
+  # a known dose pins A's absolute value, so it can no longer scale (weight 0)
+  dose <- addEvent(eventlist(), var = "A", time = 0, value = "2", method = "replace")
+  pinned <- symmetryDetection(eq, g, method = "scaling", events = dose, reduceCQ = FALSE)
+  expect_equal(pinned$count, 0L)
+
+  # multi-condition via a trafo list: a second condition that fixes alpha drops the
+  # shared scaling (the intersection of the per-condition lattices)
+  drop <- symmetryDetection(eq, g, method = "scaling", reduceCQ = FALSE,
+                            trafo = list(c1 = eqnvec(k1 = "k1"), c2 = eqnvec(alpha = "1")))
+  expect_equal(drop$count, 0L)
+
+  # multi-condition where both conditions keep it: the scaling survives
+  keep <- symmetryDetection(eq, g, method = "scaling", reduceCQ = FALSE,
+                            conditions = data.frame(k1 = c("ka", "kb"),
+                                                    row.names = c("c1", "c2")))
+  expect_equal(keep$count, 1L)
+})
+
+test_that("the toric peel recovers a parameter-weighted (Hill) scaling over Q(nhill)", {
+  if (!.sympy_works()) skip("reticulate/sympy not available")
+
+  # a free Hill exponent makes the inhibition k_inh * p^nhill invariant under
+  # p -> lam*p, k_inh -> lam^(-nhill)*k_inh: a scaling whose WEIGHT is the exponent.
+  # The toric peel imposes c_E = nhill*c_base and recovers it exactly over Q(nhill),
+  # as a scaling with weight -nhill on k_inh -- no rational fit, no sampling.
+  ev <- addEvent(eventlist(), var = "u", time = -1, value = "var_u", method = "replace")
+  cond <- data.frame(var_u = c(0, 1), row.names = c("ctrl", "stim"))
+  r <- symmetryDetection(
+    eqnvec(p = "kpr/(1 + kinh*p^nhill) - dp*p + kin*u", u = "0"), eqnvec(y = "s*p"),
+    method = "observability", equilibrate = TRUE, events = ev, conditions = cond,
+    closedForm = TRUE, reduceCQ = FALSE)
+  hill <- Filter(function(d) isTRUE(d$type == "scaling") &&
+                   "kinh" %in% names(d$vector), r$nonIdentifiable)
+  expect_length(hill, 1L)
+  expect_true(isTRUE(hill[[1]]$closedForm))
+  expect_true(.sym_expr_equal(hill[[1]]$vector[["kinh"]], "-nhill"))  # the exponent weight
 })

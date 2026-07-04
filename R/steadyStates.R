@@ -20,9 +20,12 @@
 #' @param outputFormat Define the output format. By default "R" generating dMod
 #'   compatible output. To obtain an output appropriate for d2d \[3\] "M" must be
 #'   selected.
-#' @param testSteady Character, if "T" the correctness of the obtained steady
-#'   states is numerically checked (this can be very time intensive). If "F" this
-#'   is skipped. Ignored for version "1.0" (always tests).
+#' @param testSteady Character, how to verify the obtained steady states. One
+#'   of `"fast"` (default; probabilistic check over a finite field GF(p) via
+#'   Schwartz-Zippel, fast with negligible error probability), `"exact"`
+#'   (symbolic substitution; correct but slow on large `sqrt` solutions), or
+#'   `"skip"`. `"fast"` requires version "1.2" (falls back to `"exact"` on
+#'   "1.1"); version "1.0" always tests.
 #' @param walltime Integer, wall-clock budget in seconds for the solver
 #'   (default `0` = unlimited). Version "1.2" only.
 #' @param simplify Final-simplification mode. One of `TRUE` (default,
@@ -37,6 +40,16 @@
 #'   constants) out of `mysteadies`, at the cost of emitting `sqrt(...)`
 #'   expressions. Default `FALSE`; some workflows cannot consume `sqrt(...)`
 #'   in their parameter trafos. Version "1.2" only.
+#' @param positive Positivity assumption for the sign-based solvers, used to
+#'   select roots. `TRUE` (default) treats all parameters, initial values and
+#'   totals as positive; `FALSE` assumes nothing (ambiguous states are pivoted);
+#'   a character vector names the symbols to treat as positive. Version "1.2"
+#'   only.
+#' @param branches Logical. When `TRUE` (with `solveQuadratic = TRUE`), a
+#'   quadratic admitting two positive roots (bistability) is emitted with a
+#'   selector symbol `branch_<state>` taking `-1` or `+1` to recover the two
+#'   steady states. `FALSE` (default) emits only the provably-unique positive
+#'   root and pivots ambiguous cases. Version "1.2" only.
 #' @param version Character, AlyssaPetit backend version. One of
 #'   \code{"1.0"} (original), \code{"1.1"} (adds \code{testSteady}), or
 #'   \code{"1.2"} (default; sink-cluster detection, \code{walltime},
@@ -60,12 +73,22 @@
 #' @example inst/examples/steadystates.R
 steadyStates <- function(model, file = NULL, rates = NULL, forcings = NULL,
                          givenCQs = NULL, neglect = NULL, sparsifyLevel = NULL,
-                         outputFormat = "R", testSteady = "T",
+                         outputFormat = "R", testSteady = c("fast", "exact", "skip"),
                          walltime = 0L, simplify = TRUE, solveQuadratic = FALSE,
+                         positive = TRUE, branches = FALSE,
                          version = "1.2") {
 
-  # Validate version
+  # Validate version and verification mode
   version <- match.arg(version, choices = c("1.0", "1.1", "1.2"))
+  testSteady <- match.arg(testSteady)
+
+  # Forward customTotals() as givenCQs (the CSV drops totals metadata, so the
+  # backend would otherwise re-derive an arbitrary conserved-quantity basis).
+  if (is.null(givenCQs) && inherits(model, "eqnlist") &&
+      !is.null(model$totals) && isTRUE(attr(model$totals, "custom"))) {
+    givenCQs <- unname(paste(unlist(model$totals), names(model$totals),
+                             sep = " = "))
+  }
 
   # Default sparsifyLevel depends on version: v1.0/v1.1 still use sparsify
   # (default 2), v1.2 ignores it (default 0, avoids the info print).
@@ -102,8 +125,8 @@ steadyStates <- function(model, file = NULL, rates = NULL, forcings = NULL,
   #          and (when `solveQuadratic=TRUE`) attempts a closed-form quadratic
   #          state-side solve before resorting to flux-parameter pivots.
   if (version == "1.0") {
-    if (testSteady == "F")
-      message("Note: version 1.0 does not support testSteady='F', test will always run.")
+    if (testSteady == "skip")
+      message("Note: version 1.0 does not support testSteady='skip', test will always run.")
     if (isTRUE(solveQuadratic))
       message("Note: version 1.0 does not support solveQuadratic=TRUE, ignored.")
     m_ss <- ap$Alyssa(model, as.list(forcings), as.list(givenCQs),
@@ -112,9 +135,12 @@ steadyStates <- function(model, file = NULL, rates = NULL, forcings = NULL,
   } else if (version == "1.1") {
     if (isTRUE(solveQuadratic))
       message("Note: version 1.1 does not support solveQuadratic=TRUE, ignored.")
+    if (testSteady == "fast")
+      message("Note: version 1.1 has no 'fast' test, using 'exact' instead.")
+    # v1.1 backend takes the legacy "T"/"F" tokens.
     m_ss <- ap$Alyssa(model, as.list(forcings), as.list(givenCQs),
                       as.list(neglect), sparsifyLevel, outputFormat,
-                      testSteady)
+                      if (testSteady == "skip") "F" else "T")
 
   } else {
     # v1.2
@@ -126,6 +152,8 @@ steadyStates <- function(model, file = NULL, rates = NULL, forcings = NULL,
     } else {
       simplify_arg <- as.logical(simplify)
     }
+    # bool -> Python bool, character vector -> Python list of symbol names.
+    positive_arg <- if (is.character(positive)) as.list(positive) else as.logical(positive)
     m_ss <- ap$Alyssa(model,
                       injections     = as.list(forcings),
                       givenCQs       = as.list(givenCQs),
@@ -135,7 +163,9 @@ steadyStates <- function(model, file = NULL, rates = NULL, forcings = NULL,
                       testSteady     = testSteady,
                       walltime       = as.integer(walltime),
                       simplify       = simplify_arg,
-                      solveQuadratic = as.logical(solveQuadratic))
+                      solveQuadratic = as.logical(solveQuadratic),
+                      positive       = positive_arg,
+                      branches       = as.logical(branches))
   }
 
   if (is.null(m_ss) || identical(m_ss, 0L)) return(0)
