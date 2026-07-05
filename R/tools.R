@@ -555,7 +555,12 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
   ## final g++ invocation comes out without any BLAS libs. We sidestep that
   ## by building an absolute -L path here and skipping `R CMD config`.
   if (.Platform$OS.type == "windows") {
-    r_bin   <- file.path(R.home("bin"), .Platform$r_arch)
+    ## R.home("bin") already resolves to the arch-specific bin dir (…/bin/x64)
+    ## on R >= 4.2, which is where Rblas.dll / Rlapack.dll live. Appending
+    ## .Platform$r_arch again produced a bogus …/bin/x64/x64 -L path (it only
+    ## ever linked by accident, via the default -L…/bin/x64 that -lR adds).
+    ## dMod requires R >= 4.5.0, so R.home("bin") is always the correct dir.
+    r_bin   <- R.home("bin")
     blaslapack <- paste0("-L", shQuote(r_bin), " -lRlapack -lRblas")
   } else {
     blaslapack <- paste(cfg("LAPACK_LIBS"), cfg("BLAS_LIBS"))
@@ -735,15 +740,22 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
     out <- file.path(dirname(files[1]), paste0(output, so))
     try(dyn.unload(out), silent = TRUE)
     if (file.exists(out)) unlink(out)
-    cmd <- paste(Rbin, "CMD SHLIB", paste(shQuote(files), collapse = " "), "-o", shQuote(out))
-    if (verbose) cat(cmd, "\n")
-    ## Capture SHLIB output and strip its compiler banner: on this path the
-    ## .o files are already fresh from compile_one_obj, so make only runs
-    ## the link recipe and the "using C/C++ compiler:" line would be
-    ## misleading. Stderr is folded into stdout via shell redirection so
-    ## error messages still surface when verbose = TRUE.
+    ## Link, capturing stdout+stderr via system2() pipes. Strip the compiler
+    ## banner afterwards: the .o files are already fresh from compile_one_obj,
+    ## so make only runs the link recipe and "using C/C++ compiler:" would be
+    ## misleading. We pass the streams through system2(stdout/stderr = TRUE)
+    ## rather than appending a `2>&1` token to a command string: on Windows
+    ## that trailing token is not consumed by a shell but swallowed by
+    ## R CMD SHLIB as the make override `PKG_LIBS=2>&1`, which beats every
+    ## Makevars/R_MAKEVARS_USER assignment and strips the BLAS/LAPACK libs
+    ## (breaking the symbolic-mode chain_jac link with "undefined reference to
+    ## dgemm_"). system2() keeps the argument vector clean and is identical on
+    ## Linux/macOS, where the shell would have consumed the redirection anyway.
+    Rexe <- file.path(R.home("bin"), "R")
+    shlib_args <- c("CMD", "SHLIB", shQuote(files), "-o", shQuote(out))
+    if (verbose) cat(shQuote(Rexe), paste(shlib_args, collapse = " "), "\n")
     out_lines <- suppressWarnings(
-      system(paste(cmd, "2>&1"), intern = TRUE)
+      system2(Rexe, shlib_args, stdout = TRUE, stderr = TRUE)
     )
     status <- attr(out_lines, "status")
     if (verbose) {
