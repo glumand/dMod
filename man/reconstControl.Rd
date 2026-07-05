@@ -19,6 +19,8 @@ reconstControl(
   generalDegDen = 3L,
   gapOrderCap = 8L,
   minsupportCandCap = 20000L,
+  perprimeCap = 120L,
+  perprimeMinPrimes = 3L,
   timeout = Inf
 )
 }
@@ -59,6 +61,25 @@ direction has no small-support cocircuit, so an exhaustive scan would test
 \code{choose(support, s)} subsets fruitlessly; the peel stops at this cap and lets
 any wide direction fall through to the free-column fit. Raise it only to peel
 cocircuits of unusually large support.}
+
+\item{perprimeCap}{Max sample points per prime for the per-prime reconstruction
+used by the equilibrate/joint (coupled steady-state) path. There a random
+multi-parameter perturbation admits an interior modular steady state at only
+some primes, so a point that solves at every prime at once is vanishingly rare
+and the shared all-prime bank cannot fill; instead each prime collects its own
+solvable, pivot-consistent points and the per-prime entry fits are lifted by
+Chinese remaindering. It doubles as the width gate: a direction whose widest
+entry needs more than \code{perprimeCap} points already at degree 2 is too wide for
+the dense per-prime fit and is returned support-only immediately (no sampling),
+so an intrinsically wide/transcendental joint confound is reported by support
+quickly rather than grinding. The default keeps the coupled reconstruction
+bounded; raise it (with \code{timeout}) to attempt a genuinely wide joint direction.}
+
+\item{perprimeMinPrimes}{Minimum number of primes that must fill for the
+per-prime path to lift a coefficient by CRT. A prime whose coupled solve never
+succeeds under the direction's perturbations is dropped; the rational
+reconstruction then runs over the remaining primes (their product still bounds
+the coefficient height). Below this many live primes the entry is support-only.}
 
 \item{timeout}{Wall-clock budget in seconds for the closed-form reconstruction
 (\code{closedForm = TRUE}). When it is exceeded, the directions still being

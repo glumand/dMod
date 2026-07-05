@@ -350,25 +350,34 @@ cond.trafo <- eqnvec() |>
 # the TGFb dose is applied on top, and the perturbations enter through the trafo list.
 # In the equilibrate path each sample point's steady state is solved per condition, so
 # cores.GLp (per-point parallelism) is the knob that matters here, not cores.conditions;
-# raise it towards the number of physical cores to speed the run up.
+# raise it towards the number of physical cores. It parallelises on every platform: on
+# unix by forking, elsewhere (Windows) through a PSOCK pool of Python interpreters that
+# fill the coupled steady-state solves -- the dominant cost -- in parallel.
 outsmad <- symmetryDetection(
   reactions, observables, method = "observability",
   events = events, trafo = cond.trafo,
   forcings = c("bool_ActD","bool_CHX","bool_MG132","TGFb"),
   equilibrate = TRUE, reduceCQ = TRUE, closedForm = TRUE,
-  cores.GLp = 8)
+  cores.GLp = 4)
 
-# 9 of the 10 non-identifiabilities close in closed form (a few minutes):
+# rank 62 / 71: 8 of the 9 non-identifiabilities close in closed form (a few minutes).
+# The known TGFb dose (init_TGFb, pinned to 1 by the trafo grid) is baked in and is not
+# a symmetry. The eight closed directions are:
 #   - the mRNA/protein synthesis scalings (each k_pr_X paired with its readout scale),
 #   - the pSmad-feedback inhibition group,
 #   - both receptor Hill feedbacks, each a parameter-weighted scaling recovered exactly
 #     over Q(nhill) by the toric peel: xi_kinh = -nhill * kinh (the inhibition strength
-#     against the feedback protein's synthesis rate; the Hill exponents are identifiable),
-#   - the ligand initial value init_TGFb.
-# The 10th direction stays open (reported by support only): the SMAD-pool confound
-# couples the conserved totals and observation scales with the complex-formation rate
-# AND the feedback-mRNA Hill exponents nhill_FB* -- a scaling of the pool that also
-# shifts those exponents is transcendental (exp-sensitivity ~ base^n * log base), so it
-# has no rational closed form. Its sample bank cannot fill (perturbing the coupled
-# parameters leaves the recast manifold), and the reconstruction bails to support-only.
+#     against the feedback protein's synthesis rate; the Hill exponents are identifiable).
+# The 9th direction stays open (reported by support only): the SMAD-pool/exponent
+# confound couples the conserved totals and observation scales with the complex-
+# formation rate AND the feedback-mRNA production rates and Hill exponents nhill_FB*.
+# It is a single wide direction that entangles a pool scaling with the feedbacks' Hill
+# terms. A random multi-parameter perturbation almost never admits an interior modular
+# steady state at every reconstruction prime, so it is reconstructed per prime (each
+# prime fills its own solvable points, coefficients lifted by CRT); but the coupled
+# steady state's solvable points are too degenerate to recover a form that reproduces
+# the direction at a fresh prime (raising perprimeCap/degreeCap/timeout does not help --
+# it still fails verification), consistent with a transcendental pool/exponent confound
+# (exp-sensitivity ~ base^n * log base). It is therefore honestly returned by support,
+# never a wrong closed form (the fresh-prime verifier rejects the degenerate fit).
 summary(outsmad)

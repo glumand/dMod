@@ -671,6 +671,23 @@ symmetryDetection <- function(f = NULL, g = NULL, trafo = NULL,
 #'   `choose(support, s)` subsets fruitlessly; the peel stops at this cap and lets
 #'   any wide direction fall through to the free-column fit. Raise it only to peel
 #'   cocircuits of unusually large support.
+#' @param perprimeCap Max sample points per prime for the per-prime reconstruction
+#'   used by the equilibrate/joint (coupled steady-state) path. There a random
+#'   multi-parameter perturbation admits an interior modular steady state at only
+#'   some primes, so a point that solves at every prime at once is vanishingly rare
+#'   and the shared all-prime bank cannot fill; instead each prime collects its own
+#'   solvable, pivot-consistent points and the per-prime entry fits are lifted by
+#'   Chinese remaindering. It doubles as the width gate: a direction whose widest
+#'   entry needs more than `perprimeCap` points already at degree 2 is too wide for
+#'   the dense per-prime fit and is returned support-only immediately (no sampling),
+#'   so an intrinsically wide/transcendental joint confound is reported by support
+#'   quickly rather than grinding. The default keeps the coupled reconstruction
+#'   bounded; raise it (with `timeout`) to attempt a genuinely wide joint direction.
+#' @param perprimeMinPrimes Minimum number of primes that must fill for the
+#'   per-prime path to lift a coefficient by CRT. A prime whose coupled solve never
+#'   succeeds under the direction's perturbations is dropped; the rational
+#'   reconstruction then runs over the remaining primes (their product still bounds
+#'   the coefficient height). Below this many live primes the entry is support-only.
 #' @param timeout Wall-clock budget in seconds for the closed-form reconstruction
 #'   (`closedForm = TRUE`). When it is exceeded, the directions still being
 #'   reconstructed are returned support-only (`closedForm = FALSE`) with a
@@ -694,13 +711,16 @@ reconstControl <- function(relevanceCap       = 6L,
                            generalDegDen      = 3L,
                            gapOrderCap        = 8L,
                            minsupportCandCap  = 20000L,
+                           perprimeCap        = 120L,
+                           perprimeMinPrimes  = 3L,
                            timeout            = Inf) {
   stopifnot(relevanceCap >= 0L, relevanceCapDir >= 1L,
             relevanceCapSparse >= relevanceCap, degreeCap >= 0L,
             sampleSlack >= 0L, probeRetries >= 1L, termCap >= 1L,
             laurentDegNum >= 1L, laurentDegDen >= 0L, laurentCandCap >= 1L,
             generalDegNum >= 1L, generalDegDen >= 1L, gapOrderCap >= 0L,
-            minsupportCandCap >= 1L, is.numeric(timeout), timeout > 0)
+            minsupportCandCap >= 1L, perprimeCap >= 1L, perprimeMinPrimes >= 2L,
+            is.numeric(timeout), timeout > 0)
   structure(list(relevanceCap       = as.integer(relevanceCap),
                  relevanceCapDir    = as.integer(relevanceCapDir),
                  relevanceCapSparse = as.integer(relevanceCapSparse),
@@ -715,6 +735,8 @@ reconstControl <- function(relevanceCap       = 6L,
                  generalDegDen      = as.integer(generalDegDen),
                  gapOrderCap        = as.integer(gapOrderCap),
                  minsupportCandCap  = as.integer(minsupportCandCap),
+                 perprimeCap        = as.integer(perprimeCap),
+                 perprimeMinPrimes  = as.integer(perprimeMinPrimes),
                  timeout            = timeout),
             class = c("reconstControl", "list"))
 }
@@ -1005,10 +1027,11 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
 # reported by the peel) are filtered out. Mirrors .sym_canon_gauge: returns one
 # (anchor, residue function) pair per residual direction, or the raw gauge.
 .sym_minsupport_gauge <- function(residualFree, scalRows, P, nz, sc, freeCols,
-                                  supportCap = 6L, candCap = 20000L) {
+                                  supportCap = 6L, candCap = 20000L, maxSecs = 20) {
   k <- length(residualFree)
   raw <- list(anchors = residualFree, residueFns = vector("list", k))
   if (k == 0L) return(raw)
+  deadline <- Sys.time() + maxSecs
 
   basisRows <- function(rp, p)
     t(vapply(freeCols, function(fc) .sym_null_residues(rp, fc, p), integer(nz)))
@@ -1059,12 +1082,17 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
     while (j <= s) { idx[j] <- idx[j - 1L] + 1L; j <- j + 1L }
     idx
   }
-  found <- list(); sel <- matrix(0L, nz, 0L)
+  found <- list(); sel <- matrix(0L, nz, 0L); iter <- 0L
   for (s in 2:min(nCols, supportCap)) {
     if (length(found) >= k || budget <= 0L) break
     idx <- seq_len(s)
     repeat {
       if (length(found) >= k || budget <= 0L) break
+      # a wide direction has no small cocircuit, so the scan is fruitless; cap it by
+      # wall clock too (the candidate budget alone can still be minutes on a wide
+      # residual support). A genuine narrow cocircuit is found in the first sizes.
+      iter <- iter + 1L
+      if (iter %% 256L == 0L && Sys.time() > deadline) { budget <- 0L; break }
       S <- cols[idx]
       idx <- nextCombo(idx, nCols, s)
       budget <- budget - 1L
@@ -1207,6 +1235,444 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
 }
 
 
+# Gauge-robust per-prime reconstruction for a coupled/joint residual direction the
+# pivot-pinned free-column gauge cannot sample. Perturbing a recast leaf (the log L or
+# the Hill exponent nhill) shifts the pivot set, so the standard per-prime path rejects
+# every such point and fits the direction as a prime-inconsistent constant -- which the
+# strict verifier (correctly) rejects, leaving the direction support-only even though it
+# is a bounded rational in the extended log ring. Here the direction is extracted
+# GAUGE-ROBUSTLY: the nullspace over the sample's OWN free columns, reduced modulo the
+# scaling span recomputed at the point (state/E/L columns carry the scaling WEIGHT
+# directly -- they are log-normalised and L is additive, so their z-value is 1 in this
+# gauge), normalised on a physical anchor. That needs no pivot match, so a log/exponent
+# leaf becomes a legitimate fit variable. GENERIC per-prime sampling (fresh points, not a
+# grid) keeps the fit matrices full rank (a grid makes symFitRational report "ambiguous");
+# each entry fits per prime and is lifted by CRT, the direction is verified at a fresh
+# prime, and the recast atoms (L -> log base, E -> base^exp) are back-substituted by the
+# caller. Physical-parameter entries only (per-condition state / recast columns are
+# auxiliary and projected out). Returns a closed-form entry, or a support-only fallback
+# with a reason. Solves go through `kbatch` so the parallel pool (cores.GLp) fills them.
+.sym_perprime_robust <- function(f, sc, kcall, kbatch, znames, zSlots, leafNames, nz,
+                                 scaling, stateColNames, paramNames, recast, sd, spy,
+                                 ctrl, physCols) {
+  # The log-carrying entries have large-height rational coefficients, so lift over several
+  # primes. The C++ symRatRecon's CRT is u128-capped (4 primes); the robust path instead uses
+  # the Python bignum CRT (sd$symRatReconBig), so it can use the full local pool. A local
+  # extended pool keeps the tested paths (global .symPrimes) untouched; a fresh prime is kept
+  # for verification.
+  robustPrimes <- unique(as.integer(c(.symPrimes, 2147483563, 2147483549, 2147483543, 2147483497)))
+  nPr <- min(6L, length(robustPrimes) - 1L)
+  primes <- robustPrimes[seq_len(nPr)]; qv <- robustPrimes[nPr + 1L]
+  P1 <- primes[1]
+  fb <- function(reason) { v <- .sym_null_residues(sc$ref, f, P1)
+    list(support = sort(znames[v != 0]), type = "general", closedForm = FALSE, reason = reason) }
+  if (is.null(sd) || .sym_expired(ctrl)) return(fb("robust path unavailable / timed out"))
+  npt <- length(sc$point0); poolN <- sc$poolNext
+  draw <- function(n) { u <- sc$pool(poolN + seq_len(n) - 1L); poolN <<- poolN + n; u }
+  freeColsOf <- function(rp) setdiff(0:(nz - 1L), as.integer(rp$pivots))
+  isStateCol <- logical(nz); isStateCol[which(znames %in% stateColNames)] <- TRUE
+  nS <- length(scaling)
+  Wn <- lapply(scaling, function(s) names(s$vector))
+  Wv <- lapply(scaling, function(s) as.character(unlist(s$vector)))
+  tangentsAt <- function(zvals, p) {
+    env <- as.list(setNames(as.numeric(zvals), znames)); M <- matrix(0L, nS, nz); drp <- logical(nS)
+    for (j in seq_len(nS)) { cols <- match(Wn[[j]], znames)
+      for (t in seq_along(cols)) { cc <- cols[t]; if (is.na(cc)) next
+        w <- suppressWarnings(as.numeric(Wv[[j]][t]))
+        if (is.na(w)) { wv <- .sym_eval_modq(Wv[[j]][t], env, p, sd)
+          if (is.null(wv) || is.na(wv)) { drp[j] <- TRUE; break }; w <- as.numeric(wv) }
+        zc <- if (isStateCol[cc]) 1 else (as.numeric(zvals[cc]) %% p)
+        M[j, cc] <- as.integer((w %% p * zc) %% p) } }
+    M[!drp, , drop = FALSE] }
+  reduceRows <- function(B, S, p) { if (nrow(S) == 0L) return(B %% p)
+    Sr <- .sym_rref_modp(S, p)
+    for (j in seq_along(Sr$piv)) { fac <- B[, Sr$piv[j] + 1L] %% p
+      for (i in seq_len(nrow(B))) if (fac[i] != 0) B[i, ] <- (B[i, ] - .sym_mulmod(Sr$R[j, ], fac[i], p)) %% p }
+    B }
+  extract <- function(rp, zvals, p, ac) {
+    B <- t(vapply(freeColsOf(rp), function(fc) .sym_null_residues(rp, fc, p), integer(nz)))
+    Bred <- reduceRows(B, tangentsAt(zvals, p), p)
+    for (r in which(apply(Bred, 1L, function(x) any(x %% p != 0)))) { a <- Bred[r, ac + 1L] %% p
+      if (a != 0) return(as.integer(.sym_mulmod(Bred[r, ], .sym_invmod(a, p), p))) }
+    NULL }
+  kx1 <- function(pt, p, ac) { rp <- kcall(pt, p, sc$NtUsed)
+    if (!isTRUE(rp$ok) || rp$rank != sc$rank) return(NULL); extract(rp, pt[zSlots + 1L], p, ac) }
+  baseAt <- function(p) { for (att in seq_len(400L)) { if (.sym_expired(ctrl)) return(NULL)
+      cand <- draw(npt); r <- kcall(cand, p, sc$NtUsed)
+      if (isTRUE(r$ok) && r$rank == sc$rank) return(cand) }; NULL }
+
+  # anchor + support at the first prime
+  ptbase <- baseAt(P1); if (is.null(ptbase)) return(fb("robust: no valid base at P1"))
+  rp0 <- kcall(ptbase, P1, sc$NtUsed)
+  B0 <- t(vapply(freeColsOf(rp0), function(fc) .sym_null_residues(rp0, fc, P1), integer(nz)))
+  Bred0 <- reduceRows(B0, tangentsAt(ptbase[zSlots + 1L], P1), P1)
+  nzr <- which(apply(Bred0, 1L, function(x) any(x %% P1 != 0)))
+  if (!length(nzr)) return(fb("robust: empty residual after scaling reduction"))
+  v9 <- Bred0[nzr[1], ]
+  physSet <- if (is.null(physCols)) (seq_len(nz) - 1L) else as.integer(physCols)
+  ac <- intersect(which(v9 %% P1 != 0) - 1L, physSet)
+  if (!length(ac)) return(fb("robust: no physical anchor in the residual"))
+  ac <- ac[1]
+  v0 <- as.integer(.sym_mulmod(v9, .sym_invmod(v9[ac + 1L] %% P1, P1), P1))
+  physSupp <- setdiff(intersect(which(v0 %% P1 != 0) - 1L, physSet), ac)
+
+  # gauge-robust per-entry relevance over the parameters and the log leaves
+  cand <- match(unique(c(as.character(paramNames), grep("^_L_", leafNames, value = TRUE))), leafNames)
+  cand <- cand[!is.na(cand)]
+  relBy <- replicate(length(physSupp), integer(0), simplify = FALSE)
+  for (li in cand) { if (.sym_expired(ctrl)) return(fb("robust: timed out in relevance scan"))
+    ch <- rep(FALSE, length(physSupp))
+    for (dv in c(3L, 7L, 11L)) { pt <- as.numeric(ptbase); pt[li] <- pt[li] + dv
+      v <- kx1(pt, P1, ac); if (is.null(v)) next
+      ch <- ch | ((v[physSupp + 1L] - v0[physSupp + 1L]) %% P1 != 0) }
+    for (i in which(ch)) relBy[[i]] <- c(relBy[[i]], li) }
+  unionRel <- sort(unique(unlist(relBy)))
+  if (!length(unionRel)) return(fb("robust: residual is constant in every leaf"))
+  maxRel <- max(vapply(relBy, length, integer(1)))
+  if (length(unionRel) > ctrl$relevanceCapDir || maxRel > ctrl$relevanceCapSparse)
+    return(fb(sprintf("robust: direction couples %d leaves (an entry up to %d)",
+                      length(unionRel), maxRel)))
+
+  dCap <- min(3L, max(1L, as.integer(ctrl$degreeCap)))
+  # size the bank generously past the widest entry's minimal need, and fit each entry over
+  # ALL available bank rows: a marginally rank-deficient minimal sample makes symFitRational
+  # report "ambiguous" for one entry while its structural twins fit, so over-determine well.
+  needOf <- function(k, d) 2L * nrow(.sym_mono_table(k, d)) + 40L
+  maxNeed <- max(vapply(relBy, function(r) if (length(r)) needOf(length(r), dCap) else 4L, integer(1)))
+
+  # A fully random point solves at a given prime only ~10% of the time (the interior
+  # steady-state variety is sparse over GF(p)), so generic full-point sampling wastes ~90%
+  # of the (expensive Groebner) solves. Instead HARVEST: the log / exponent / observation-
+  # scale leaves do NOT enter the steady-state solve (log, recast exponent, obs-only), so
+  # find a pool of valid HARD-leaf configs (rates, totals -- the ones that move the solve)
+  # once, then vary the safe leaves freely off each (always valid). Many configs (each a
+  # distinct random hard tuple) keep the multivariate fit full rank. Solves batch through
+  # the parallel pool; only the nullspace extraction runs on the master.
+  safeMask <- grepl("^_L_|^nhill_|^scale_", leafNames[unionRel])
+  hardIdx <- unionRel[!safeMask]; safeIdx <- unionRel[safeMask]
+  Mcfg <- 40L
+  # Perturb the relevant leaves off the SHARED base point (sc$point0), NOT a per-prime base:
+  # the entry is reconstructed as a function of its relevant leaves with every OTHER leaf held
+  # at point0, so all primes sample the same slice and the per-prime coefficient CRT is
+  # consistent. (A per-prime base gives each prime a different non-relevant slice -> the CRT
+  # of the fitted coefficients is inconsistent and fails, or reconstructs a spurious value.)
+  # point0's PARAMETERS are certified on-variety at every prime (from saturation) so it is the
+  # right shared base -- but its state / E / L leaves are pinned to 1 (line ~1985) which makes
+  # its own kernel degenerate. Restore those to generic values (the states are re-solved from
+  # the parameters anyway, and E / L do not enter the steady-state solve), giving a base that
+  # is kcall-valid AND on-variety at every prime AND shared across primes.
+  base0 <- as.numeric(sc$point0)
+  stSlots <- unique(zSlots[which(znames %in% stateColNames)] + 1L)
+  if (length(stSlots)) base0[stSlots] <- draw(length(stSlots))
+  if (nzchar(Sys.getenv("DMOD_SYM_ROBUSTDIAG")))
+    message(sprintf("[robust] base0 valid at primes: %s", paste(vapply(primes, function(p) {
+      r <- kcall(base0, p, sc$NtUsed); as.character(isTRUE(r$ok) && r$rank == sc$rank) }, ""), collapse = ",")))
+  fillBank <- function(p) {
+    base_p <- base0
+    cfgs <- list(); att <- 0L
+    while (length(cfgs) < Mcfg && att < 24L * Mcfg) {
+      if (.sym_expired(ctrl)) break
+      nb <- as.integer(min(64L, 24L * Mcfg - att)); att <- att + nb
+      cc <- lapply(seq_len(nb), function(.) { pt <- as.numeric(base_p)
+        pt[hardIdx] <- draw(length(hardIdx)); pt[safeIdx] <- draw(length(safeIdx)); pt })
+      res <- kbatch(cc, rep(p, nb), sc$NtUsed)
+      for (i in seq_len(nb)) { rp <- res[[i]]
+        if (!is.null(rp) && isTRUE(rp$ok) && rp$rank == sc$rank) cfgs[[length(cfgs) + 1L]] <- cc[[i]] } }
+    if (!length(cfgs)) return(NULL)
+    U <- matrix(0L, 0L, length(unionRel)); V <- matrix(0L, 0L, nz); rep <- 0L
+    while (nrow(U) < maxNeed && rep < 60L) {
+      if (.sym_expired(ctrl)) break
+      rep <- rep + 1L
+      pts <- lapply(cfgs, function(cf) { cf[safeIdx] <- draw(length(safeIdx)); cf })
+      res <- kbatch(pts, rep(p, length(pts)), sc$NtUsed)
+      for (i in seq_along(pts)) { if (nrow(U) >= maxNeed) break
+        rp <- res[[i]]; if (is.null(rp) || !isTRUE(rp$ok) || rp$rank != sc$rank) next
+        vv <- extract(rp, pts[[i]][zSlots + 1L], p, ac); if (is.null(vv)) next
+        U <- rbind(U, pts[[i]][unionRel]); V <- rbind(V, vv) } }
+    if (nrow(U) < maxNeed) NULL else list(U = U, V = V) }
+  rdiag <- nzchar(Sys.getenv("DMOD_SYM_ROBUSTDIAG"))
+  if (rdiag) message(sprintf("[robust] f=%d anchor=%s physSupp=%d unionRel=%d maxRel=%d dCap=%d maxNeed=%d",
+                             f, znames[ac + 1L], length(physSupp), length(unionRel), maxRel, dCap, maxNeed))
+  banks <- vector("list", length(primes))
+  for (jp in seq_along(primes)) { banks[[jp]] <- fillBank(primes[jp])
+    if (rdiag) message(sprintf("[robust] prime %d bank=%s", jp,
+                               if (is.null(banks[[jp]])) "FAILED" else as.character(nrow(banks[[jp]]$U))))
+    if (is.null(banks[[jp]])) return(fb("robust: could not fill a per-prime sample bank")) }
+
+  # per-entry fit: fit num/den per prime over that prime's points, renormalise to the
+  # first fit's free monomial, CRT the coefficients (mirrors .sym_interpolate_perprime)
+  allRows <- min(vapply(banks, function(b) nrow(b$U), integer(1)))
+  recEntry <- function(reli, c9, dbg = FALSE) {
+    reliCols <- match(reli, unionRel); vars <- leafNames[reli]
+    for (d in 0:dCap) {
+      mons <- .sym_mono_table(length(reli), d); nMon <- nrow(mons)
+      if (allRows < 2L * nMon) { if (dbg) message(sprintf("[robust]     deg%d: bank %d < 2*nMon %d", d, allRows, 2L * nMon)); break }
+      refFree <- NULL; coefRes <- matrix(0L, 2L * nMon, length(primes)); ok <- TRUE; st <- "ok"
+      fcs <- integer(0)
+      for (jp in seq_along(primes)) { p <- primes[jp]
+        sU <- matrix(as.integer(banks[[jp]]$U[seq_len(allRows), reliCols, drop = FALSE]), allRows)
+        rv <- as.integer(banks[[jp]]$V[seq_len(allRows), c9 + 1L])
+        fit <- symFitRational(sU, matrix(as.integer(mons), nMon), rv, p)
+        if (!identical(fit$status, "ok")) { ok <- FALSE; st <- fit$status; break }
+        fcs <- c(fcs, fit$freeCol)
+        raw <- as.numeric(fit$coeffs); if (is.null(refFree)) refFree <- fit$freeCol
+        dn <- raw[refFree + 1L] %% p; if (dn == 0) { ok <- FALSE; st <- "freecol0"; break }
+        coefRes[, jp] <- as.integer(.sym_mulmod(raw, .sym_invmod(dn, p), p)) }
+      if (dbg) message(sprintf("[robust]     deg%d (rows %d): %s freeCols={%s}", d, allRows, st,
+                               paste(fcs, collapse = ",")))
+      if (!ok) next
+      rec <- tryCatch(sd$symRatReconBig(coefRes, as.integer(primes)), error = function(e) NULL)
+      if (is.null(rec)) { if (dbg) message(sprintf("[robust]     deg%d: symRatReconBig error", d)); next }
+      if (any(rec$den == "0")) { if (dbg) message(sprintf("[robust]     deg%d: CRT den=0 (%d/%d coeffs failed)",
+                                 d, sum(rec$den == "0"), length(rec$den))); next }
+      numI <- seq_len(nMon); denI <- nMon + seq_len(nMon)
+      numStr <- .sym_poly_string(rec$num[numI], rec$den[numI], mons, vars)
+      denStr <- .sym_poly_string(rec$num[denI], rec$den[denI], mons, vars)
+      return(list(expr = if (denStr == "1") numStr else paste0("(", numStr, ")/(", denStr, ")"),
+                  reli = vars)) }
+    NULL }
+
+  entries <- list(); entryReli <- list()
+  entries[[znames[ac + 1L]]] <- "1"; entryReli[[znames[ac + 1L]]] <- character(0)
+  for (i in seq_along(physSupp)) { if (.sym_expired(ctrl)) return(fb("robust: timed out during fitting"))
+    c9 <- physSupp[i]; nm <- znames[c9 + 1L]; reli <- relBy[[i]]
+    if (!length(reli)) {
+      resc <- vapply(seq_along(primes), function(jp) banks[[jp]]$V[1, c9 + 1L], integer(1))
+      rc <- tryCatch(sd$symRatReconBig(matrix(as.integer(resc), 1L), as.integer(primes)), error = function(e) NULL)
+      if (is.null(rc) || rc$den[1] == "0") return(fb("robust: a constant entry could not be lifted"))
+      entries[[nm]] <- if (rc$den[1] == "1") rc$num[1] else paste0(rc$num[1], "/", rc$den[1])
+      entryReli[[nm]] <- character(0); next }
+    rr <- recEntry(reli, c9, dbg = rdiag)
+    if (rdiag) message(sprintf("[robust]   entry %-24s nvar=%d -> %s", nm, length(reli),
+                               if (is.null(rr)) sprintf("NO FIT (deg>%d)", dCap) else "ok"))
+    if (is.null(rr)) return(fb(sprintf("robust: entry %s is not a bounded rational (deg>%d)", nm, dCap)))
+    entries[[nm]] <- if (is.null(spy)) rr$expr else .sym_simplify(rr$expr, spy)
+    entryReli[[nm]] <- rr$reli }
+
+  # verify at a FRESH prime and a fresh relevant-leaf perturbation off the SAME shared base
+  # (point0): the reconstruction is the direction restricted to that slice, so the check must
+  # be on the same slice (only the relevant leaves and the prime are fresh).
+  ptv <- NULL
+  for (t in seq_len(200L)) { pt <- base0; pt[unionRel] <- draw(length(unionRel))
+    if (!is.null(kx1(pt, qv, ac))) { ptv <- pt; break } }
+  if (is.null(ptv)) return(fb("robust: no fresh verification point"))
+  vver <- kx1(ptv, qv, ac)
+  for (nm in names(entries)) { col <- match(nm, znames); rl <- entryReli[[nm]]
+    pred <- tryCatch(sd$evalRationalMod(entries[[nm]], as.list(rl),
+              as.list(as.integer(ptv[match(rl, leafNames)])), qv), error = function(e) NULL)
+    okv <- !is.null(pred) && ((as.integer(pred) - vver[col]) %% qv == 0)
+    if (rdiag) message(sprintf("[robust]   verify %-24s -> %s", nm,
+                               if (okv) "ok" else "FAIL"))
+    if (!okv) return(fb("robust: reconstructed direction failed fresh-prime verification")) }
+  if (rdiag) message("[robust] VERIFIED -- closing direction")
+
+  list(support = sort(names(entries)), vector = entries, type = "general", closedForm = TRUE)
+}
+
+
+# FORWARD-sampling reconstruction of a joint residual direction whose entries depend on the
+# resting state x*(theta) (the SMAD pool/exponent direction [9]). The backward per-prime path
+# fails there because each prime's steady-state slice differs (no single base solves at every
+# prime) so the coefficient CRT is inconsistent. Here f = 0 is solved by the LINEAR forward
+# solve (choose the resting states + free params, solve a turnover-rate subset), which is valid
+# at EVERY prime -- so the resting states become FREE, SHARED sample coordinates and the same
+# points fill one bank across all primes (consistent CRT). The direction is reconstructed as a
+# rational in (theta, resting states, log base, exponent); the resting states stay SYMBOLS in
+# the report (substitute x* = g(theta) via the trafo downstream). Coefficients lift with the
+# bignum CRT (no 4-prime cap). Returns a verified closed-form entry or a support-only fallback.
+.sym_perprime_forward <- function(f, sc, kcall, kcallFwd, znames, zSlots, leafNames, nz,
+                                  scaling, stateColNames, paramNames, recast, sd, spy, ctrl,
+                                  physCols, models, realStateNames, solveParamNames, solveHeld) {
+  # three 31-bit primes give a ~2^93 CRT modulus -- ample for the (clean, small) coefficients of a
+  # physical symmetry, while each extra prime is another full per-point kernel pass, so keep it low.
+  rp8 <- unique(as.integer(c(.symPrimes, 2147483563, 2147483549, 2147483543, 2147483497)))
+  nPrimeFwd <- max(2L, min(3L, length(rp8) - 1L))
+  primes <- rp8[seq_len(nPrimeFwd)]; qv <- rp8[length(primes) + 1L]; P1 <- primes[1]
+  fb <- function(reason) { v <- .sym_null_residues(sc$ref, f, P1)
+    list(support = sort(znames[v != 0]), type = "general", closedForm = FALSE, reason = reason) }
+  if (is.null(sd) || is.null(kcallFwd) || .sym_expired(ctrl)) return(fb("forward path unavailable"))
+  rdiag <- nzchar(Sys.getenv("DMOD_SYM_ROBUSTDIAG"))
+  stripName <- function(nm) sub("\\|c[0-9]+$", "", nm)
+  npt <- length(sc$point0); poolN <- sc$poolNext
+  draw <- function(n) { u <- sc$pool(poolN + seq_len(n) - 1L); poolN <<- poolN + n; u }
+  freeColsOf <- function(rp) setdiff(0:(nz - 1L), as.integer(rp$pivots))
+  isStateCol <- logical(nz); isStateCol[which(znames %in% stateColNames)] <- TRUE
+  nS <- length(scaling)
+  Wn <- lapply(scaling, function(s) names(s$vector)); Wv <- lapply(scaling, function(s) as.character(unlist(s$vector)))
+  tangentsAt <- function(zvals, p) {
+    env <- as.list(setNames(as.numeric(zvals), znames)); M <- matrix(0L, nS, nz); drp <- logical(nS)
+    for (j in seq_len(nS)) { cols <- match(Wn[[j]], znames)
+      for (t in seq_along(cols)) { cc <- cols[t]; if (is.na(cc)) next
+        w <- suppressWarnings(as.numeric(Wv[[j]][t]))
+        if (is.na(w)) { wv <- .sym_eval_modq(Wv[[j]][t], env, p, sd)
+          if (is.null(wv) || is.na(wv)) { drp[j] <- TRUE; break }; w <- as.numeric(wv) }
+        zc <- if (isStateCol[cc]) 1 else (as.numeric(zvals[cc]) %% p)
+        M[j, cc] <- as.integer((w %% p * zc) %% p) } }
+    M[!drp, , drop = FALSE] }
+  reduceRows <- function(B, S, p) { if (nrow(S) == 0L) return(B %% p)
+    Sr <- .sym_rref_modp(S, p)
+    for (j in seq_along(Sr$piv)) { fac <- B[, Sr$piv[j] + 1L] %% p
+      for (i in seq_len(nrow(B))) if (fac[i] != 0) B[i, ] <- (B[i, ] - .sym_mulmod(Sr$R[j, ], fac[i], p)) %% p }
+    B }
+  extract <- function(rp, zvals, p, ac) {
+    B <- t(vapply(freeColsOf(rp), function(fc) .sym_null_residues(rp, fc, p), integer(nz)))
+    Bred <- reduceRows(B, tangentsAt(zvals, p), p)
+    for (r in which(apply(Bred, 1L, function(x) any(x %% p != 0)))) { a <- Bred[r, ac + 1L] %% p
+      if (a != 0) return(as.integer(.sym_mulmod(Bred[r, ], .sym_invmod(a, p), p))) }
+    NULL }
+  kxB <- function(pt, p, ac) { rp <- kcall(pt, p, sc$NtUsed)
+    if (!isTRUE(rp$ok) || rp$rank != sc$rank) return(NULL); extract(rp, pt[zSlots + 1L], p, ac) }
+  kxF <- function(pt, p, ac, sr) { rp <- kcallFwd(pt, p, sc$NtUsed, sr)
+    if (!isTRUE(rp$ok) || rp$rank != sc$rank) return(NULL); extract(rp, pt[zSlots + 1L], p, ac) }
+
+  # 1. anchor + support from a backward-valid P1 point (structural; forward or backward agree)
+  ptbB <- NULL
+  for (att in seq_len(200L)) { cand <- draw(npt)
+    r <- kcall(cand, P1, sc$NtUsed); if (isTRUE(r$ok) && r$rank == sc$rank) { ptbB <- cand; break } }
+  if (is.null(ptbB)) return(fb("forward: no backward base for support"))
+  rp0 <- kcall(ptbB, P1, sc$NtUsed)
+  B0 <- t(vapply(freeColsOf(rp0), function(fc) .sym_null_residues(rp0, fc, P1), integer(nz)))
+  Bred0 <- reduceRows(B0, tangentsAt(ptbB[zSlots + 1L], P1), P1)
+  nzr <- which(apply(Bred0, 1L, function(x) any(x %% P1 != 0)))
+  if (!length(nzr)) return(fb("forward: empty residual"))
+  v9 <- Bred0[nzr[1], ]
+  physSet <- if (is.null(physCols)) (seq_len(nz) - 1L) else as.integer(physCols)
+  acC <- intersect(which(v9 %% P1 != 0) - 1L, physSet); if (!length(acC)) return(fb("forward: no anchor"))
+  ac <- acC[1]
+  v0 <- as.integer(.sym_mulmod(v9, .sym_invmod(v9[ac + 1L] %% P1, P1), P1))
+  suppNames <- unique(stripName(znames[c(ac, setdiff(which(v0 %% P1 != 0) - 1L, ac)) + 1L]))
+
+  # 2. turnover transversal (avoids the direction's support + the recast coords)
+  keepFree <- unique(c(suppNames, grep("^_E_|^_L_", leafNames, value = TRUE)))
+  tsv <- setNames(as.list(((seq_along(realStateNames) * 7919L + 11L) %% (P1 - 1L)) + 1L), realStateNames)
+  tpv <- setNames(as.list(((seq_along(solveParamNames) * 104729L + 3L) %% (P1 - 1L)) + 1L), solveParamNames)
+  ts <- tryCatch(sd$solveForwardModular(models[[1]], realStateNames, solveParamNames, tsv, tpv, P1,
+                   forcings = if (length(solveHeld)) solveHeld else NULL,
+                   keepFree = as.list(keepFree)), error = function(e) NULL)
+  if (is.null(ts) || !isTRUE(ts$ok)) return(fb(paste("forward: no turnover transversal;",
+                                                     if (is.null(ts)) "solve error" else ts$why)))
+  solveRates <- as.character(ts$solveRates)
+  if (rdiag) message(sprintf("[fwd] anchor=%s support=%d transversal(%d)={%s}",
+                             znames[ac + 1L], length(suppNames), length(solveRates),
+                             paste(solveRates, collapse = ",")))
+
+  # 3. forward base valid at every prime (the linear solve is generically non-singular mod p)
+  base0 <- NULL
+  for (att in seq_len(80L)) { cand <- draw(npt)
+    if (all(vapply(primes, function(pp) !is.null(kxF(cand, pp, ac, solveRates)), logical(1)))) { base0 <- cand; break } }
+  if (is.null(base0)) return(fb("forward: no base valid at all primes"))
+
+  # 4. forward relevance over EVERY free leaf (all but the solved turnover rates): params, log
+  # leaves _L_, the recast E = base^exp coordinates _E_ (the Hill terms depend on these), and the
+  # states. A missed relevant leaf makes an entry base0-specific -- caught by the fresh-POINT
+  # verify in step 6, but scanning everything up front is what makes the reported form universal.
+  cand <- setdiff(seq_along(leafNames), match(solveRates, leafNames))
+  cand <- cand[!is.na(cand)]
+  v0f <- kxF(base0, P1, ac, solveRates)
+  physSupp <- setdiff(intersect(which(v0f %% P1 != 0) - 1L, physSet), ac)
+  relBy <- replicate(length(physSupp), integer(0), simplify = FALSE)
+  for (li in cand) { if (.sym_expired(ctrl)) return(fb("forward: timeout in relevance"))
+    ch <- rep(FALSE, length(physSupp))
+    for (dv in c(3L, 7L, 11L)) { pt <- as.numeric(base0); pt[li] <- pt[li] + dv
+      v <- kxF(pt, P1, ac, solveRates); if (is.null(v)) next
+      ch <- ch | ((v[physSupp + 1L] - v0f[physSupp + 1L]) %% P1 != 0) }
+    for (i in which(ch)) relBy[[i]] <- c(relBy[[i]], li) }
+  unionRel <- sort(unique(unlist(relBy)))
+  if (!length(unionRel)) return(fb("forward: residual constant in every leaf"))
+  maxRel <- max(vapply(relBy, length, integer(1)))
+  if (rdiag) message(sprintf("[fwd] physSupp=%d unionRel=%d maxRel=%d", length(physSupp), length(unionRel), maxRel))
+  if (nzchar(Sys.getenv("DMOD_SYM_FWDREL"))) {
+    for (i in seq_along(physSupp))
+      message(sprintf("[fwdrel] %-26s : %s", stripName(znames[physSupp[i] + 1L]),
+                      paste(leafNames[relBy[[i]]], collapse = ", ")))
+    return(fb("fwdrel diagnostic"))
+  }
+  # the forward direction legitimately couples more leaves than the eliminated path (it frees the
+  # states plus BOTH recast partners E = base^exp and L = log base), so the whole-direction cap is
+  # relaxed here; the fit size is still bounded by the per-entry cap relevanceCapSparse (maxRel).
+  fwdCapDir <- max(as.integer(ctrl$relevanceCapDir), 48L)
+  if (length(unionRel) > fwdCapDir || maxRel > ctrl$relevanceCapSparse)
+    return(fb(sprintf("forward: couples %d leaves (entry up to %d)", length(unionRel), maxRel)))
+
+  # 5. SHARED bank, filled LAZILY: forward points are valid at ALL primes (the linear solve has no
+  # per-prime degeneracy), so the same points serve every prime. Each per-point kernel pass is the
+  # dominant (serial) cost, so we top the bank up per fit-degree on demand instead of pre-filling
+  # for the worst-case degree -- a low-degree direction then needs far fewer passes.
+  dCap <- max(1L, min(3L, as.integer(ctrl$degreeCap)))
+  needOf <- function(k, d) 2L * nrow(.sym_mono_table(k, d)) + 20L
+  bankU <- matrix(0L, 0L, length(unionRel)); bankV <- lapply(primes, function(.) matrix(0L, 0L, nz))
+  fillBankTo <- function(n) {
+    tries <- 0L
+    while (nrow(bankU) < n && tries < 12L * n) { if (.sym_expired(ctrl)) break
+      tries <- tries + 1L; pt <- as.numeric(base0); pt[unionRel] <- draw(length(unionRel))
+      vs <- lapply(primes, function(pp) kxF(pt, pp, ac, solveRates))
+      if (any(vapply(vs, is.null, logical(1)))) next
+      bankU <<- rbind(bankU, pt[unionRel])
+      for (jp in seq_along(primes)) bankV[[jp]] <<- rbind(bankV[[jp]], vs[[jp]]) }
+    if (rdiag && nrow(bankU) >= n) message(sprintf("[fwd] bank at %d points (all %d primes)", nrow(bankU), length(primes)))
+    nrow(bankU) >= n }
+
+  recEntry <- function(reli, c9) {
+    reliCols <- match(reli, unionRel); vars <- leafNames[reli]
+    for (d in 0:dCap) {
+      mons <- .sym_mono_table(length(reli), d); nMon <- nrow(mons)
+      if (!fillBankTo(needOf(length(reli), d))) next
+      need <- nrow(bankU)
+      refFree <- NULL; coefRes <- matrix(0L, 2L * nMon, length(primes)); ok <- TRUE
+      for (jp in seq_along(primes)) { pp <- primes[jp]
+        sU <- matrix(as.integer(bankU[seq_len(need), reliCols, drop = FALSE]), need)
+        rv <- as.integer(bankV[[jp]][seq_len(need), c9 + 1L])
+        fit <- symFitRational(sU, matrix(as.integer(mons), nMon), rv, pp)
+        if (!identical(fit$status, "ok")) { ok <- FALSE; break }
+        raw <- as.numeric(fit$coeffs); if (is.null(refFree)) refFree <- fit$freeCol
+        dn <- raw[refFree + 1L] %% pp; if (dn == 0) { ok <- FALSE; break }
+        coefRes[, jp] <- as.integer(.sym_mulmod(raw, .sym_invmod(dn, pp), pp)) }
+      if (!ok) next
+      rec <- tryCatch(sd$symRatReconBig(coefRes, as.integer(primes)), error = function(e) NULL)
+      if (is.null(rec) || any(rec$den == "0")) next
+      numI <- seq_len(nMon); denI <- nMon + seq_len(nMon)
+      numStr <- .sym_poly_string(rec$num[numI], rec$den[numI], mons, vars)
+      denStr <- .sym_poly_string(rec$num[denI], rec$den[denI], mons, vars)
+      return(list(expr = if (denStr == "1") numStr else paste0("(", numStr, ")/(", denStr, ")"), reli = vars)) }
+    NULL }
+
+  entries <- list(); entryReli <- list()
+  entries[[znames[ac + 1L]]] <- "1"; entryReli[[znames[ac + 1L]]] <- character(0)
+  for (i in seq_along(physSupp)) { if (.sym_expired(ctrl)) return(fb("forward: timeout in fitting"))
+    c9 <- physSupp[i]; nm <- znames[c9 + 1L]; reli <- relBy[[i]]
+    if (!length(reli)) {
+      if (!fillBankTo(1L)) return(fb("forward: empty bank"))
+      resc <- vapply(seq_along(primes), function(jp) bankV[[jp]][1, c9 + 1L], integer(1))
+      rc <- tryCatch(sd$symRatReconBig(matrix(as.integer(resc), 1L), as.integer(primes)), error = function(e) NULL)
+      if (is.null(rc) || rc$den[1] == "0") return(fb("forward: a constant entry could not be lifted"))
+      entries[[nm]] <- if (rc$den[1] == "1") rc$num[1] else paste0(rc$num[1], "/", rc$den[1])
+      entryReli[[nm]] <- character(0); next }
+    rr <- recEntry(reli, c9)
+    if (rdiag) message(sprintf("[fwd]   entry %-24s nvar=%d -> %s", stripName(nm), length(reli),
+                               if (is.null(rr)) sprintf("NO FIT (deg>%d)", dCap) else "ok"))
+    if (is.null(rr)) return(fb(sprintf("forward: entry %s not a bounded rational (deg>%d)", nm, dCap)))
+    entries[[nm]] <- if (is.null(spy)) rr$expr else .sym_simplify(rr$expr, spy); entryReli[[nm]] <- rr$reli }
+
+  # 6. verify at a fresh prime AND a fully FRESH point (every leaf redrawn, not just the
+  # relevant ones): evaluating each entry from its relevant leaves alone must still reproduce the
+  # kernel residue when the NON-relevant leaves also differ. This certifies the reported form is
+  # base-independent (the excluded leaves really are irrelevant), not an artifact of base0's slice.
+  ptv <- NULL
+  for (t in seq_len(400L)) { pt <- draw(npt)
+    if (!is.null(kxF(pt, qv, ac, solveRates))) { ptv <- pt; break } }
+  if (is.null(ptv)) return(fb("forward: no fresh verification point"))
+  vver <- kxF(ptv, qv, ac, solveRates)
+  for (nm in names(entries)) { col <- match(nm, znames); rl <- entryReli[[nm]]
+    pred <- tryCatch(sd$evalRationalMod(entries[[nm]], as.list(rl),
+              as.list(as.integer(ptv[match(rl, leafNames)])), qv), error = function(e) NULL)
+    okv <- !is.null(pred) && ((as.integer(pred) - vver[col]) %% qv == 0)
+    if (rdiag) message(sprintf("[fwd]   verify %-24s -> %s", stripName(nm), if (okv) "ok" else "FAIL"))
+    if (!okv) return(fb("forward: reconstructed direction failed fresh-point verification")) }
+  if (rdiag) message("[fwd] VERIFIED (base-independent) -- closing direction (states are resting-level symbols)")
+  list(support = sort(names(entries)), vector = entries, type = "general", closedForm = TRUE)
+}
+
+
 # Exact value of a rational expression at integer coordinates `env`, reduced
 # modulo q (computed in Python to keep the big-integer arithmetic exact). Returns
 # NA when the denominator vanishes mod q (verification then inconclusive).
@@ -1276,6 +1742,56 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
     if (vf != 0) recon <- (recon + .sym_mulmod(.sym_null_residues(rq, fcol, q), vf, q)) %% q
   }
   all((recon - v) %% q == 0)
+}
+
+
+# STRICT verification for the per-prime (coupled steady-state) reconstruction. There
+# a random point rarely admits a modular steady state, so the lenient verifiers
+# above accept INCONCLUSIVELY (they cannot reject when the fresh-point solve fails) --
+# which would let a spurious low-degree fit through (e.g. a false "constant" that the
+# few solvable points happened to agree on). Here retry fresh points until one solves
+# pivot-consistently at the verify prime, then REQUIRE the closed form to reproduce
+# the nullspace there (a garbage fit does not evaluate to the true residues at a fresh
+# point and is rejected). No valid point found within the budget also fails, so the
+# per-prime path never reports an unverified closed form. Returns TRUE only on a
+# decisive pass at a genuine steady-state point.
+.sym_verify_perprime <- function(entry, f, znames, leafNames, point0, NtUsed,
+                                 kcall, pivots, pool, poolNext, nz, sd,
+                                 relLeaves = NULL, tries = 80L) {
+  if (is.null(sd) || is.null(entry$vector)) return(FALSE)
+  q <- .symVerifyPrime
+  pn <- poolNext
+  # perturb only the direction's relevant leaves (as the reconstruction did): a
+  # full random point almost never admits an interior modular steady state, so it
+  # would never yield a verification point; perturbing the relevant leaves off the
+  # base matches the sampling and solves at a workable rate.
+  pertIdx <- if (is.null(relLeaves)) seq_along(point0) else relLeaves
+  for (t in seq_len(tries)) {
+    pt <- as.numeric(point0)
+    if (length(pertIdx)) pt[pertIdx] <- pool(pn + seq_along(pertIdx) - 1L)
+    pn <- pn + length(pertIdx) + 1L
+    rq <- kcall(pt, q, as.integer(NtUsed))
+    # an all-constant direction (no relevant leaf) is checked once at the base point
+    if (!length(pertIdx) && !isTRUE(rq$ok)) return(FALSE)
+    if (!isTRUE(rq$ok) || !identical(as.integer(rq$pivots), as.integer(pivots))) next
+    env <- setNames(as.list(pt[seq_along(leafNames)]), leafNames)
+    v <- integer(nz); v[f + 1L] <- 1L; bad <- FALSE
+    for (nm in names(entry$vector)) {
+      col <- match(nm, znames); if (is.na(col)) next
+      got <- .sym_eval_modq(entry$vector[[nm]], env, q, sd)
+      if (is.na(got)) { bad <- TRUE; break }
+      v[col] <- as.integer(got %% q)
+    }
+    if (bad) next
+    freeCols <- setdiff(seq_len(nz) - 1L, as.integer(rq$pivots))
+    recon <- numeric(nz)
+    for (fcol in freeCols) {
+      vf <- v[fcol + 1L] %% q
+      if (vf != 0) recon <- (recon + .sym_mulmod(.sym_null_residues(rq, fcol, q), vf, q)) %% q
+    }
+    return(all((recon - v) %% q == 0))
+  }
+  FALSE
 }
 
 
@@ -1414,6 +1930,76 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
 }
 
 
+# Worker-side steady-state solve for the parallel warm pool. Runs in a fresh
+# PSOCK process that has imported the Python engine into `.sym_worker_sd` (a
+# worker global set at cluster creation); every argument is plain serialisable
+# data, so no R closure or Python handle crosses the process boundary. Returns the
+# solve list (valBy, dfJx/dfJt for the joint constraint) or NULL on any failure.
+.sym_solve_worker <- function(job, cargs) {
+  sd <- tryCatch(get(".sym_worker_sd", envir = globalenv()), error = function(e) NULL)
+  if (is.null(sd)) return(NULL)
+  tryCatch(sd$solveSteadyStateModular(
+    model = job$model, stateNames = cargs$stateNames,
+    paramNames = cargs$paramNames, paramVals = job$paramVals, prime = job$p,
+    forcings = cargs$forcings, t0events = job$t0events,
+    recast = cargs$recast, lVals = job$lVals, jointMode = TRUE),
+    error = function(e) NULL)
+}
+
+
+# A PSOCK worker pool that each imports the Python symmetryDetection engine, used
+# to fill the per-point steady-state solve bank in parallel on every platform
+# (mclapply forks only on unix; the closed-form reconstruction of an equilibrated
+# model at scale is dominated by these independent coupled solves). The workers run
+# Python only -- they never touch the dMod C++ kernel or R closures -- so the pool
+# is cheap to stand up and robust. Returns the cluster, or NULL when parallelism is
+# off or a worker cannot bring up its interpreter (the caller then stays serial).
+.sym_make_solve_cluster <- function(n) {
+  n <- as.integer(n)
+  if (is.na(n) || n <= 1L) return(NULL)
+  if (!requireNamespace("parallel", quietly = TRUE)) return(NULL)
+  cl <- tryCatch(parallel::makeCluster(n), error = function(e) NULL)
+  if (is.null(cl)) return(NULL)
+  # bring up each worker's Python interpreter and import the engine into a worker
+  # global. clusterCall (not clusterEvalq, which some R builds do not export) runs
+  # the initialiser on every node; it is reparented to the global env so it
+  # serialises without dragging this frame's cluster handle. Returns TRUE or an
+  # error string per worker, so a Python that will not come up degrades to serial.
+  codeDir <- system.file("code", package = "dMod")
+  pyPath  <- Sys.getenv("RETICULATE_PYTHON")
+  initFun <- function(codeDir, pyPath) {
+    tryCatch({
+      if (!requireNamespace("reticulate", quietly = TRUE)) stop("no reticulate")
+      if (nzchar(pyPath)) {
+        Sys.setenv(RETICULATE_PYTHON = pyPath)
+        suppressWarnings(suppressMessages(
+          tryCatch(reticulate::use_python(pyPath, required = FALSE),
+                   error = function(e) NULL)))
+      }
+      sysmod <- reticulate::import("sys", convert = TRUE)
+      if (!(codeDir %in% sysmod$path)) sysmod$path <- c(codeDir, sysmod$path)
+      assign(".sym_worker_sd",
+             reticulate::import("symmetryDetectionVersion2", convert = TRUE),
+             envir = globalenv())
+      TRUE
+    }, error = function(e) conditionMessage(e))
+  }
+  environment(initFun) <- globalenv()
+  res <- tryCatch(parallel::clusterCall(cl, initFun, codeDir, pyPath),
+                  error = function(e) list(conditionMessage(e)))
+  ok <- all(vapply(res, isTRUE, logical(1)))
+  if (!isTRUE(ok)) {
+    if (nzchar(Sys.getenv("DMOD_SYM_TIMING")))
+      message("[sym] solve pool init failed: ",
+              paste(unique(vapply(res, function(r)
+                if (isTRUE(r)) "" else as.character(r)[1], character(1))), collapse = "; "))
+    tryCatch(parallel::stopCluster(cl), error = function(e) NULL)
+    return(NULL)
+  }
+  cl
+}
+
+
 # Multi-condition analytic observability. `multi` is the list returned by
 # compileObservabilityTapeMulti: per-condition tapes over a shared coordinate
 # space. The observability rows of all conditions are stacked and reduced once,
@@ -1443,6 +2029,14 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
       parallel::mclapply(xs, f, mc.cores = coresGLp, mc.preschedule = TRUE),
       function(o) if (inherits(o, "try-error")) NULL else o)
     else function(xs, f) lapply(xs, f)
+  # On unix parMap forks the whole per-point kcall (mclapply). Fork is unavailable
+  # elsewhere (Windows), so there the dominant per-point cost -- the coupled
+  # steady-state solve -- is filled in parallel through a PSOCK pool of Python
+  # interpreters instead (warmSolves below populates the solve cache; the kernel and
+  # reduce then run on the master over cached solves). The cache dedups either way.
+  useSolveCluster <- coresGLp > 1L && .Platform$OS.type != "unix" && isTRUE(closedForm)
+  cl <- NULL
+  warmSolves <- function(pts, primes) invisible()   # replaced in the jointSS block
   nLeaves <- as.integer(multi$nLeaves)
   nStates <- as.integer(multi$nStates)
   zSlots <- as.integer(multi$zSlots)
@@ -1638,20 +2232,76 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
         }
         if (!length(rows)) matrix(0, 0, nzL) else do.call(rbind, rows)
       }
-      # solve one equilibrate condition and return its solution plus the point with
-      # this condition's on-manifold x* written into the state leaves
-      jointSolveCond <- function(point, p, ci) {
-        pv <- jointPV(point, p)
+      # The coupled steady-state solve of one condition depends on the point ONLY
+      # through that condition's steady-state parameter values (paramVals) and log
+      # coordinates (lVals) at the prime -- not the observation scales, the free
+      # initial values or any leaf outside f. So the solve is memoised on that
+      # subvector: a relevance probe that perturbs a non-solve leaf, or two sample
+      # points that agree on the solve parameters, reuse one (expensive, often
+      # Groebner) solve. Negatives are cached too so a doomed perturbation is not
+      # re-solved. The cache is the shared sink the parallel warm pool fills.
+      jointSolveCache <- new.env(parent = emptyenv())
+      solveKey <- function(p, pv, ci)
+        paste(ci, p, paste0(unlist(pv$paramVals), collapse = ","),
+              paste0(unlist(pv$lVals), collapse = ","), sep = "|")
+      # constant (point-independent) arguments of every solve, shipped once to the pool
+      solveConst <- list(stateNames = realStateNames, paramNames = solveParamNames,
+                         forcings = if (length(solveHeld)) solveHeld else NULL,
+                         recast = if (length(recast)) recast else NULL)
+      solveRaw <- function(p, pv, ci) {
         evC <- if (ci <= length(t0events) && length(t0events[[ci]]))
           t0events[[ci]] else NULL
-        sol <- tryCatch(sd$solveSteadyStateModular(
+        tryCatch(sd$solveSteadyStateModular(
           model = models[[ci]], stateNames = realStateNames,
           paramNames = solveParamNames, paramVals = pv$paramVals, prime = p,
           forcings = if (length(solveHeld)) solveHeld else NULL, t0events = evC,
           recast = if (length(recast)) recast else NULL, lVals = pv$lVals,
-          jointMode = TRUE),
-          error = function(e) NULL)
-        if (is.null(sol) || !isTRUE(sol$ok)) return(NULL)
+          jointMode = TRUE), error = function(e) NULL)
+      }
+      # Fill the solve cache for a batch of points in parallel over the PSOCK pool
+      # (Windows path). Enumerate the distinct uncached (condition, subvector) jobs,
+      # solve them across the Python workers, and store each result (or a negative)
+      # under its key. A no-op without a pool: jointSolveCond then solves on demand.
+      warmSolves <- function(pts, primes) {
+        if (is.null(cl)) return(invisible())
+        jobs <- list(); seen <- new.env(parent = emptyenv())
+        for (idx in seq_along(pts)) {
+          p <- primes[[idx]]; pt <- pts[[idx]]
+          for (ci in equilConds) {
+            pv <- jointPV(pt, p); key <- solveKey(p, pv, ci)
+            if (!is.null(jointSolveCache[[key]]) || !is.null(seen[[key]])) next
+            seen[[key]] <- TRUE
+            evC <- if (ci <= length(t0events) && length(t0events[[ci]]))
+              t0events[[ci]] else NULL
+            jobs[[length(jobs) + 1L]] <- list(key = key, ci = ci, p = p,
+              model = models[[ci]], paramVals = pv$paramVals, lVals = pv$lVals,
+              t0events = evC)
+          }
+        }
+        if (!length(jobs)) return(invisible())
+        # reparent the worker to the global env so it serialises self-contained (the
+        # Python-only workers have no dMod namespace to resolve it against); its body
+        # uses only base ops and the worker-global .sym_worker_sd handle
+        worker <- .sym_solve_worker
+        environment(worker) <- globalenv()
+        res <- tryCatch(parallel::parLapply(cl, jobs, worker, cargs = solveConst),
+                        error = function(e) vector("list", length(jobs)))
+        for (i in seq_along(jobs))
+          jointSolveCache[[jobs[[i]]$key]] <-
+            if (is.null(res[[i]]) || !isTRUE(res[[i]]$ok)) list(ok = FALSE) else res[[i]]
+        invisible()
+      }
+      # solve one equilibrate condition and return its solution plus the point with
+      # this condition's on-manifold x* written into the state leaves (cache-backed)
+      jointSolveCond <- function(point, p, ci) {
+        pv <- jointPV(point, p)
+        key <- solveKey(p, pv, ci)
+        sol <- jointSolveCache[[key]]
+        if (is.null(sol)) {
+          sol <- solveRaw(p, pv, ci)
+          jointSolveCache[[key]] <- if (is.null(sol) || !isTRUE(sol$ok)) list(ok = FALSE) else sol
+          if (is.null(sol) || !isTRUE(sol$ok)) return(NULL)
+        } else if (!isTRUE(sol$ok)) return(NULL)
         ptc <- as.numeric(point[seq_len(nLeaves)])
         # seed the state leaves with the PRE-event resting value (valBy): the IC tape
         # applies the event map E(x_ss) itself, and the df constraint is linearised at
@@ -1663,14 +2313,36 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
         }
         list(sol = sol, ptc = ptc)
       }
+      # FORWARD solve variant: the states + free params are CHOSEN (read off the point's
+      # leaves) and f = 0 is solved LINEARLY for a turnover subset of rate constants. Unlike
+      # the backward Groebner solve this is valid at every prime, so a coordinate the direction
+      # depends on (a resting state x*, e.g. C3) is a FREE, SHARED sample coordinate instead of
+      # a per-prime-inconsistent x*(theta). `solveRates` is the fixed turnover transversal
+      # (chosen once to avoid the direction's support). Returns the same {sol, ptc} shape as the
+      # backward solve, with the SOLVED rates written into their leaves and the chosen states.
+      jointSolveCondFwd <- function(point, p, ci, solveRates) {
+        rd <- function(nm) { s <- slotOfName(nm); if (is.null(s)) 0 else as.numeric(point[s]) %% p }
+        sv <- as.list(setNames(vapply(realStateNames, rd, numeric(1)), realStateNames))
+        pv <- as.list(setNames(vapply(solveParamNames, rd, numeric(1)), solveParamNames))
+        sol <- tryCatch(sd$solveForwardModular(models[[ci]], realStateNames, solveParamNames,
+                          sv, pv, p, forcings = if (length(solveHeld)) solveHeld else NULL,
+                          solveRates = solveRates), error = function(e) NULL)
+        if (is.null(sol) || !isTRUE(sol$ok)) return(NULL)
+        ptc <- as.numeric(point[seq_len(nLeaves)])
+        for (r in names(sol$rates)) { s <- slotOfName(r)
+          if (!is.null(s)) ptc[s] <- as.numeric(sol$rates[[r]]) %% p }
+        for (nm in realStateNames) { s <- slotOfName(nm); v <- sol$valBy[[nm]]
+          if (!is.null(s) && !is.null(v)) ptc[s] <- as.numeric(v) %% p }
+        list(sol = sol, ptc = ptc)
+      }
       # each condition is solved and observed at its OWN resting state; the state
       # columns are then log-normalised (multiplied by x*_c) so a scaling weight is
       # condition-independent, and the per-condition [Obs ; df] blocks are stacked.
-      kcall4 <- function(point, p, Nt, Mtot = 0L) {
+      kcall4 <- function(point, p, Nt, Mtot = 0L, solveFn = jointSolveCond) {
         blocks <- list()
         for (mi in seq_len(Kc)) {
           ci <- equilConds[mi]
-          sc0 <- jointSolveCond(point, p, ci)
+          sc0 <- solveFn(point, p, ci)
           if (is.null(sc0)) { ssWhy <<- "joint solve failed"; return(list(ok = FALSE)) }
           # observe the whole condition at its own resting state: with post-t0 event
           # gaps this is a chain of segments (the resting first segment plus the
@@ -1692,7 +2364,11 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
           # genuinely-zero state) makes its log-normalised column degenerate - reject
           # the whole point so the saturator resamples at a fresh point/prime
           xvals <- as.numeric(sc0$ptc[jointStateSlot]) %% p
-          if (any(xvals == 0)) return(list(ok = FALSE))
+          if (any(xvals == 0)) {
+            if (nzchar(Sys.getenv("DMOD_SYM_FWDDIAG")))
+              message("[fwddiag] zero log-normal coord ci=", ci, " at slots ",
+                      paste(jointStateSlot[xvals == 0], collapse = ","))
+            return(list(ok = FALSE)) }
           for (m in seq_along(logCols)) {
             xv <- xvals[m]
             oR[, logCols[m]] <- .sym_mulmod(oR[, logCols[m]], xv, p)
@@ -1771,6 +2447,14 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
   # the reconstruction samples at the saturated gap order, baked into a 3-arg kcall
   MtotUsed <- if (is.null(sc$MtotUsed)) 0L else as.integer(sc$MtotUsed)
   kcall <- function(point, p, Nt) kcall4(point, p, Nt, MtotUsed)
+  # forward-sampling kernel (joint mode only): builds the same [Obs ; df] kernel but with the
+  # states/params CHOSEN off the point and a turnover-rate subset solved linearly (valid at
+  # every prime), so the gauge-robust reconstruction can sample a direction whose entries
+  # depend on the resting state on a SHARED slice across primes. `solveRates` is the fixed
+  # transversal the caller determines (once, avoiding the direction's support).
+  kcallFwd <- if (jointSS) function(point, p, Nt, solveRates)
+      kcall4(point, p, Nt, MtotUsed, function(pt, pp, cc) jointSolveCondFwd(pt, pp, cc, solveRates))
+    else NULL
   # batched solve over many (point, prime) pairs for the reconstruction's sample
   # bank. The single-segment, non-constraint path shares one tape set across all
   # points, so the whole batch runs in one OpenMP-over-points kernel call; the
@@ -1784,6 +2468,9 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
       symObsNullBatch(tapes, nLeaves, nStates, zSlots, M, as.numeric(primeVec),
                       as.integer(Nt), cores)
     } else {
+      # fill the coupled-solve cache for the whole batch in parallel (Windows pool),
+      # then run the per-point kernel/reduce on the master over the cached solves
+      warmSolves(pointList, primeVec)
       parMap(seq_along(pointList),
              function(i) kcall(pointList[[i]], primeVec[[i]], Nt))
     }
@@ -1868,6 +2555,17 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
       function(msg) message(sprintf("[sym %6.1fs] %s",
                                     as.numeric(Sys.time() - .t0, units = "secs"), msg))
       else function(msg) invisible()
+    # stand up the parallel solve pool (Windows: fork is unavailable, so the coupled
+    # per-point solves that dominate the probe and sample bank are filled across a
+    # PSOCK pool of Python interpreters). Only worth it when there are residual
+    # directions to reconstruct and jointSS solves them per point.
+    if (useSolveCluster && jointSS && length(residualFree)) {
+      cl <- .sym_make_solve_cluster(coresGLp)
+      if (!is.null(cl)) on.exit(tryCatch(parallel::stopCluster(cl),
+                                         error = function(e) NULL), add = TRUE)
+      .tlog(sprintf("solve pool: %s", if (is.null(cl)) "unavailable (serial)"
+                    else sprintf("%d workers", coresGLp)))
+    }
     .tlog(sprintf("start: %d residual direction(s)", length(residualFree)))
     # shared relevance probe: a single solve at a one-leaf perturbation yields the
     # residues of every direction, so the per-leaf scan is done once here rather
@@ -1890,7 +2588,9 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
         pert[li] <- sc$pool(probeNext + (li - 1L) * ctrl$probeRetries + (att - 1L))
         pert
       })
-      # the per-leaf solves are independent -> fork the whole round (cores.GLp)
+      # the per-leaf solves are independent -> fill them in parallel (Windows pool),
+      # then read the residues off the cached solves; on unix parMap forks instead
+      warmSolves(perts, rep(P, length(perts)))
       cands <- parMap(seq_along(pending),
                       function(j) kcall(perts[[j]], P, sc$NtUsed))
       resolved <- logical(length(pending))
@@ -1915,8 +2615,13 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
     # fresh point (gauge-independent), which rejects a self-consistent but
     # base-point-contaminated canonical representative.
     zvals0 <- if (length(zSlots)) sc$point0[zSlots + 1L] else NULL
+    # physical-parameter support columns (0-based) for the per-prime joint path: the
+    # per-condition state / recast columns are auxiliary and reconstructed only
+    # implicitly, so the per-prime fit skips them to keep each entry narrow.
+    physColsPP <- if (jointSS)
+      which(!(znames %in% as.character(multi$zStateNames))) - 1L else NULL
     reconstructOne <- function(fc, rfn, logCoords = FALSE, sharedBank = NULL,
-                               fastOnly = FALSE) {
+                               fastOnly = FALSE, perPrime = FALSE) {
       if (.sym_expired(ctrl)) {
         v <- if (!is.null(rfn)) rfn(sc$ref, P, zvals0) else .sym_null_residues(sc$ref, fc, P)
         if (is.null(v)) v <- .sym_null_residues(sc$ref, fc, P)
@@ -1924,19 +2629,40 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
                     closedForm = FALSE,
                     reason = "reconstruction time budget (reconstControl(timeout=)) exceeded"))
       }
-      dir <- .sym_interpolate_direction(fc, sc$ref, sc$pivots, znames, zSlots,
-                                        leafNamesAug, nAug, sc$point0, sc$pool,
-                                        poolNext, sc$NtUsed, kcall, spy, relProbe,
-                                        rfn, ctrl, kbatch, sharedBank, fastOnly,
-                                        auxLeaves = auxLeaves)
+      # the equilibrate/joint (coupled steady-state) path uses per-prime
+      # reconstruction: a random perturbation solves at only some primes, so points
+      # are collected per prime and the entry fits lifted by CRT (the free-column
+      # gauge only; the log/canon rescues keep the shared-bank interpolation)
+      dir <- if (isTRUE(perPrime))
+        .sym_interpolate_perprime(fc, sc$ref, sc$pivots, znames, zSlots,
+                                  leafNamesAug, nAug, sc$point0, sc$pool, poolNext,
+                                  sc$NtUsed, kcall, kbatch, spy, relProbe, ctrl,
+                                  auxLeaves = auxLeaves, physCols = physColsPP)
+        else
+        .sym_interpolate_direction(fc, sc$ref, sc$pivots, znames, zSlots,
+                                   leafNamesAug, nAug, sc$point0, sc$pool,
+                                   poolNext, sc$NtUsed, kcall, spy, relProbe,
+                                   rfn, ctrl, kbatch, sharedBank, fastOnly,
+                                   auxLeaves = auxLeaves)
       poolNext <<- dir$poolNext
       e <- dir$entry
+      # the per-prime reconstructor tags the direction's relevant leaves for the
+      # strict verifier (which perturbs only those to find a genuine steady-state
+      # point); strip the internal tag so it never leaks into the reported direction
+      ppRel <- e$relevantLeaves; e$relevantLeaves <- NULL
       # log-gauge entries are eta = xi / z; turn them back into the tangent xi
       # before verifying, then certify in original coordinates (gauge-independent)
       if (logCoords && isTRUE(e$closedForm))
         e$vector <- .sym_logcoord_backsub(e$vector, spy)
       ok <- isTRUE(e$closedForm) && (
-        if (logCoords)
+        if (isTRUE(perPrime))
+          # coupled path: strict verification at a genuine steady-state point (the
+          # lenient verifiers accept inconclusively when the fresh-point solve fails,
+          # which would pass a spurious per-prime fit)
+          .sym_verify_perprime(e, fc, znames, leafNamesAug, sc$point0, sc$NtUsed,
+                               kcall, sc$pivots, sc$pool, poolNext, nz, sd,
+                               relLeaves = ppRel)
+        else if (logCoords)
           .sym_verify_in_nullspace(e, fc, znames, leafNamesAug, sc$point0,
                                    sc$NtUsed, kcall, sc$pool, poolNext, nz, sd)
         else
@@ -2039,8 +2765,67 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
         .tlog(sprintf("shared bank built (%d leaves, ok=%s)",
                       length(unionLeaves), isTRUE(bk$ok)))
       }
+      # A coupled steady-state (equilibrate) model rarely fills the shared all-prime
+      # bank: a random perturbation admits an interior modular steady state at only
+      # some primes, so a point that solves at every prime at once is vanishingly rare
+      # (the fast-bail keeps this cheap). Those directions are reconstructed PER PRIME
+      # instead -- each prime fills its own solvable points and the entry fits are
+      # lifted by CRT. The shared bank still serves the easy equilibrate models, so
+      # per-prime is a strict fallback and never regresses them.
+      bankMissing <- ssConstraint && length(denseDir) > 0L && is.null(bank)
+      # EXPERIMENTAL gauge-robust fallback (OFF by default; opt in with DMOD_SYM_ROBUST).
+      # A coupled/joint direction whose entries depend on a recast leaf (log L, exponent nhill)
+      # cannot be sampled by the pivot-pinned gauge (perturbing that leaf shifts the pivots), so
+      # the standard path returns it support-only. This reconstructs it gauge-robustly (nullspace
+      # mod scalings, physical anchor, generic per-prime sampling) and, if it verifies, back-
+      # substitutes L -> log base. The FORWARD variant (.sym_perprime_forward, tried first in
+      # joint mode) frees the resting states via a linear f=0 solve valid at every prime, so it
+      # ALSO reaches a direction whose entries depend on the steady state x*(theta) (e.g. the SMAD
+      # pool/exponent direction): the shared slice makes the coefficient CRT consistent, and the
+      # reconstructed form carries the recast atoms C3^nhill and log(C3/Km). OPT-IN (DMOD_SYM_ROBUST,
+      # or DMOD_SYM_ROBUSTFIRST to skip the doomed standard grind and run it first) while the
+      # base-independent (universal) verification and the per-point-kernel cost are being validated;
+      # it never reports an unverified form (falls back to support-only). DMOD_SYM_ROBUSTDIAG traces
+      # it, DMOD_SYM_FWDREL prints per-entry relevance.
+      robustEnabled <- nzchar(Sys.getenv("DMOD_SYM_ROBUST")) || nzchar(Sys.getenv("DMOD_SYM_ROBUSTFIRST"))
+      robustFirst <- nzchar(Sys.getenv("DMOD_SYM_ROBUSTFIRST"))
+      tryRobust <- function(fc) {
+        # forward path first (joint mode): reconstructs a direction whose entries depend on the
+        # resting state x* by freeing the states via the linear forward solve (consistent across
+        # primes). Falls back to the backward per-prime path if unavailable / it does not close.
+        rr <- NULL
+        if (!is.null(kcallFwd))
+          rr <- .sym_perprime_forward(fc, sc, kcall, kcallFwd, znames, zSlots, leafNamesAug, nz,
+                                      scaling, as.character(multi$zStateNames),
+                                      as.character(multi$paramNames), recast, sd, spy, ctrl,
+                                      physColsPP, models, realStateNames, solveParamNames, solveHeld)
+        if (!isTRUE(rr$closedForm)) {
+          if (!is.null(rr)) .tlog(sprintf("forward did not close: %s",
+                                          if (is.null(rr$reason)) "-" else rr$reason))
+          rr <- .sym_perprime_robust(fc, sc, kcall, kbatch, znames, zSlots, leafNamesAug, nz,
+                                     scaling, as.character(multi$zStateNames),
+                                     as.character(multi$paramNames), recast, sd, spy, ctrl, physColsPP)
+        }
+        if (isTRUE(rr$closedForm)) {
+          if (length(recast)) rr$vector <- .sym_recast_backsub(rr$vector, recast, sd)
+          rr
+        } else { .tlog(sprintf("robust fallback did not close: %s",
+                               if (is.null(rr$reason)) "-" else rr$reason)); NULL }
+      }
       interp <- lapply(seq_along(residualFree), function(ii) {
-        r <- reconstructOne(residualFree[ii], NULL, sharedBank = bank)
+        fc <- residualFree[ii]
+        if (robustFirst && ssConstraint && !is.null(sd)) {
+          rr <- tryRobust(fc)
+          if (!is.null(rr)) { .tlog(sprintf("dense dir %d/%d done (closed=TRUE, robustFirst)",
+                                            ii, length(residualFree))); return(rr) }
+        }
+        r <- if (bankMissing) reconstructOne(fc, NULL, perPrime = TRUE)
+             else reconstructOne(fc, NULL, sharedBank = bank)
+        if (!isTRUE(r$closedForm) && ssConstraint && !bankMissing)
+          r <- reconstructOne(fc, NULL, perPrime = TRUE)
+        if (!isTRUE(r$closedForm) && ssConstraint && !is.null(sd) && robustEnabled) {
+          rr <- tryRobust(fc); if (!is.null(rr)) r <- rr
+        }
         .tlog(sprintf("dense dir %d/%d done (closed=%s)", ii, length(residualFree),
                       isTRUE(r$closedForm)))
         r
@@ -2062,17 +2847,22 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
         }
         invisible()
       }
-      if (!allClosed(interp))
-        rescueEach(.sym_canon_gauge(residualFree, scalRows, P, nz, sc))
-      if (!allClosed(interp))
-        rescueEach(.sym_logcoord_gauge(residualFree, scalRows, P, nz, sc, zvals0), TRUE)
-
-      # final rescue: the minimal-support gauge with kernel sampling, for a pinned
-      # entry that is a bounded-degree rational rather than a bare monomial.
-      if (!allClosed(interp)) {
-        .tlog("rescues exhausted, trying ms sampling")
-        msrec <- msTry(FALSE)
-        if (!is.null(msrec)) interp <- msrec
+      # the canon/log/ms sampling rescues interpolate through the ALL-PRIME shared
+      # bank, which cannot fill for a coupled steady-state model; skip them there (the
+      # per-prime path above is the coupled-case route) so they never grind, and run
+      # them only for the plain (bank-backed) free-column entanglement they are for.
+      if (!bankMissing) {
+        if (!allClosed(interp))
+          rescueEach(.sym_canon_gauge(residualFree, scalRows, P, nz, sc))
+        if (!allClosed(interp))
+          rescueEach(.sym_logcoord_gauge(residualFree, scalRows, P, nz, sc, zvals0), TRUE)
+        # final rescue: the minimal-support gauge with kernel sampling, for a pinned
+        # entry that is a bounded-degree rational rather than a bare monomial.
+        if (!allClosed(interp)) {
+          .tlog("rescues exhausted, trying ms sampling")
+          msrec <- msTry(FALSE)
+          if (!is.null(msrec)) interp <- msrec
+        }
       }
     }
     .tlog(sprintf("reconstruction done: %d/%d closed",
@@ -2424,15 +3214,28 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
   nu <- length(union)
   U <- matrix(0L, 0L, nu); points <- list(); rps <- list()
   tries <- 0L
+  .bd <- nzchar(Sys.getenv("DMOD_SYM_BANKDIAG"))
+  .nSolveFail <- 0L; .nPivMismatch <- 0L; .nGood <- 0L
   while (length(points) < needPts && tries < 30L * needPts) {
-    # early bail: a direction whose relevant leaves leave NO valid steady state under
-    # perturbation (e.g. a transcendental exponent confound, where the held recast E
-    # is inconsistent with the perturbed parameters) yields zero usable points. Give
-    # up after a small budget instead of grinding the full 30x, so it falls to
-    # support-only fast rather than dominating the runtime.
-    if (length(points) == 0L && tries >= 2L * needPts) break
-    if (!is.null(ctrl) && .sym_expired(ctrl)) return(list(ok = FALSE, poolNext = poolNext))
+    # early bail: a direction whose perturbations rarely admit a modular steady state
+    # that solves at EVERY prime at once (the coupled equilibrate case) yields no
+    # all-prime point. Detect that fast -- 48 candidates with none good means the
+    # all-prime rate is < ~2%, so the shared bank cannot fill and the caller should
+    # fall back to the per-prime path -- instead of grinding the full 30x budget.
+    if (length(points) == 0L && tries >= min(2L * needPts, 48L)) {
+      if (.bd) message(sprintf("[bankdiag/bail] union=%d needPts=%d tries=%d good=0 solveFail=%d pivMismatch=%d",
+                               nu, needPts, tries, .nSolveFail, .nPivMismatch))
+      break
+    }
+    if (!is.null(ctrl) && .sym_expired(ctrl)) {
+      if (.bd) message(sprintf("[bankdiag/expired] union=%d needPts=%d tries=%d good=%d solveFail=%d pivMismatch=%d",
+                               nu, needPts, tries, .nGood, .nSolveFail, .nPivMismatch))
+      return(list(ok = FALSE, poolNext = poolNext))
+    }
     chunk <- max(1L, min(needPts - length(points) + 5L, 30L * needPts - tries))
+    # keep the probing chunks small until the first point lands, so the fast-bail
+    # above triggers after ~2 small batches rather than one huge coupled-solve batch
+    if (length(points) == 0L) chunk <- min(chunk, 24L)
     # under an active deadline, bound the batch so a single pooled seed-solve cannot
     # overrun it: the loop-top expiry check then fires within one small batch
     if (!is.null(ctrl) && !is.null(ctrl$deadline)) chunk <- min(chunk, 96L)
@@ -2447,17 +3250,21 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
       good <- TRUE; rpc <- vector("list", nP)
       for (j in seq_len(nP)) {
         rp <- res[[(ci - 1L) * nP + j]]
-        if (!isTRUE(rp$ok) || !identical(as.integer(rp$pivots), as.integer(pivots))) {
-          good <- FALSE; break
+        if (!isTRUE(rp$ok)) { good <- FALSE; if (.bd) .nSolveFail <- .nSolveFail + 1L; break }
+        if (!identical(as.integer(rp$pivots), as.integer(pivots))) {
+          good <- FALSE; if (.bd) .nPivMismatch <- .nPivMismatch + 1L; break
         }
         rpc[[j]] <- rp
       }
       if (!good) next
+      if (.bd) .nGood <- .nGood + 1L
       U <- rbind(U, uv[[ci]])
       points[[length(points) + 1L]] <- cand[[ci]]
       rps[[length(rps) + 1L]] <- rpc
     }
   }
+  if (.bd) message(sprintf("[bankdiag] union=%d needPts=%d tries=%d good=%d solveFail=%d pivMismatch=%d",
+                           nu, needPts, tries, .nGood, .nSolveFail, .nPivMismatch))
   if (length(points) < needPts) return(list(ok = FALSE, poolNext = poolNext))
   list(ok = TRUE, U = U, points = points, rps = rps, union = union,
        poolNext = poolNext)
@@ -2555,6 +3362,191 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
   entries[[znames[f + 1L]]] <- "1"
   list(support = sort(names(entries)), vector = entries, type = "general",
        closedForm = TRUE)
+}
+
+
+# Per-prime reconstruction of one direction, for the equilibrate/joint (coupled
+# steady-state) path. A random multi-parameter perturbation admits an interior
+# modular steady state at only SOME of the reconstruction primes -- the coupled
+# variety is sparse over any single GF(p) -- so a point that solves at every prime
+# at once is vanishingly rare and the shared all-prime bank cannot fill (verified:
+# perturbing the direction's leaves solves at >= 1 of 4 primes ~70% of the time but
+# at all 4 ~0%). Here each prime fills its OWN solvable, pivot-consistent points,
+# every entry is fit as a rational function over that prime's points, and the
+# per-prime coefficients are lifted to the rationals by Chinese remaindering (the
+# fitted function is the same across primes; only the evaluation points differ, so
+# the CRT of its per-prime coefficients is exact). Degree is escalated per entry,
+# so a low-degree entry needs only a few points. A prime whose coupled solve never
+# succeeds is dropped and the CRT runs over the rest. Returns the same shape as
+# .sym_interpolate_direction. `f` is the free (anchor) column, fixed to 1.
+.sym_interpolate_perprime <- function(f, ref, pivots, znames, zSlots, leafNames,
+                                      nLeaves, point0, pool, poolNext, NtUsed,
+                                      kcall, kbatch, spy, relProbe, ctrl,
+                                      auxLeaves = integer(0), physCols = NULL) {
+  nP <- length(.symPrimes)
+  zvalsOf <- function(pt) if (is.null(zSlots)) NULL else pt[zSlots + 1L]
+  nv <- function(rp, p) .sym_null_residues(rp, f, p)
+  rel <- .sym_direction_relevance(f, ref, pivots, zSlots, nLeaves, point0,
+                                  relProbe, NULL)
+  base_nv <- rel$base_nv; supportCols <- rel$supportCols
+  relByEntry <- rel$relByEntry
+  # In joint mode reconstruct only the physical-parameter support columns; the wide
+  # per-condition state / recast columns are auxiliary (the direction is reported in
+  # parameter space and they are projected out downstream), and dropping them keeps
+  # every entry as narrow as its own parameters. The anchor stays column `f` (whose
+  # value is 1), so a parameter entry is xi_param normalised on that free column.
+  if (!is.null(physCols)) {
+    keep <- which(supportCols %in% physCols)
+    supportCols <- supportCols[keep]; relByEntry <- relByEntry[keep]
+  }
+  relevant <- sort(unique(unlist(relByEntry)))
+  fallback <- function(reason) list(poolNext = poolNext,
+    entry = list(support = sort(znames[base_nv != 0]), type = "general",
+                 closedForm = FALSE, reason = reason))
+  timedOut <- "reconstruction time budget (reconstControl(timeout=)) exceeded"
+  if (.sym_expired(ctrl)) return(fallback(timedOut))
+  ex <- function(v) if (length(auxLeaves)) setdiff(v, auxLeaves) else v
+  maxRelPhys <- max(0L, vapply(relByEntry, function(e) length(ex(e)), integer(1)))
+  if (nzchar(Sys.getenv("DMOD_SYM_SPARSEDIAG")))
+    message(sprintf("perprime f=%d: support=%d relevant=%d maxRelPhys=%d",
+                    f, length(supportCols), length(relevant), maxRelPhys))
+  if (length(ex(relevant)) > ctrl$relevanceCapDir || maxRelPhys > ctrl$relevanceCapSparse)
+    return(fallback(sprintf("direction couples %d parameters (an entry up to %d)",
+                            length(ex(relevant)), maxRelPhys)))
+
+  # a constant entry (no relevant leaf) lifts from the base point -- but the base
+  # point, like any point, solves at only SOME primes here, so lift from the primes
+  # where it does and CRT over those (a small integer weight needs one; more primes
+  # only widen the reconstructible height). Requires perprimeMinPrimes to guard a
+  # too-short CRT, unless a single prime already gives an exact small rational.
+  constEntry <- function(col) {
+    vals <- integer(0); prs <- numeric(0)
+    for (pj in .symPrimes) {
+      rp <- kcall(point0, pj, NtUsed)
+      if (!isTRUE(rp$ok) || !identical(as.integer(rp$pivots), as.integer(pivots))) next
+      v <- nv(rp, pj); if (is.null(v)) next
+      vals <- c(vals, v[col + 1L]); prs <- c(prs, pj)
+    }
+    if (!length(prs)) return(NULL)
+    rec <- symRatRecon(matrix(as.integer(vals), 1L), as.integer(prs))
+    if (rec$den[1] == "0") return(NULL)
+    if (rec$den[1] == "1") rec$num[1] else paste0(rec$num[1], "/", rec$den[1])
+  }
+  if (!length(relevant)) {
+    entries <- list()
+    for (i in seq_along(supportCols)) {
+      e <- constEntry(supportCols[i])
+      if (is.null(e)) return(fallback("a constant entry could not be lifted"))
+      entries[[znames[supportCols[i] + 1L]]] <- e
+    }
+    entries[[znames[f + 1L]]] <- "1"
+    return(list(poolNext = poolNext, entry = list(support = sort(names(entries)),
+      vector = entries, type = "general", closedForm = TRUE,
+      relevantLeaves = integer(0))))
+  }
+
+  # per-prime point banks over the relevant leaves, grown on demand
+  nrel <- length(relevant)
+  bankU <- lapply(seq_len(nP), function(.) matrix(0L, 0L, nrel))
+  bankR <- lapply(seq_len(nP), function(.) matrix(0L, 0L, length(supportCols)))
+  triesP <- integer(nP); deadP <- logical(nP)
+  ensurePrime <- function(j, need) {
+    p <- .symPrimes[j]
+    while (nrow(bankU[[j]]) < need && !deadP[j]) {
+      if (.sym_expired(ctrl)) break
+      have <- nrow(bankU[[j]])
+      chunk <- max(1L, min(need - have + 4L, 128L))
+      uv <- lapply(seq_len(chunk), function(.) {
+        u <- pool(poolNext + seq_len(nrel) - 1L); poolNext <<- poolNext + nrel; u })
+      cand <- lapply(uv, function(u) { pt <- point0; pt[relevant] <- u; pt })
+      res <- kbatch(cand, rep(p, chunk), NtUsed)
+      for (ci in seq_len(chunk)) {
+        rp <- res[[ci]]
+        if (!isTRUE(rp$ok) || !identical(as.integer(rp$pivots), as.integer(pivots))) next
+        vv <- nv(rp, p); if (is.null(vv)) next
+        bankU[[j]] <<- rbind(bankU[[j]], uv[[ci]])
+        bankR[[j]] <<- rbind(bankR[[j]], vv[supportCols + 1L])
+      }
+      triesP[j] <<- triesP[j] + chunk
+      # this prime never yields a solvable/pivot-consistent point: drop it
+      if (nrow(bankU[[j]]) == 0L && triesP[j] >= 8L * need + 32L) { deadP[j] <<- TRUE; break }
+      if (triesP[j] >= 80L * need + 256L) break
+    }
+    nrow(bankU[[j]]) >= need
+  }
+
+  entries <- list()
+  for (i in seq_along(supportCols)) {
+    reli <- relByEntry[[i]]
+    if (!length(reli)) {
+      e <- constEntry(supportCols[i])
+      if (is.null(e)) return(fallback("a constant entry could not be lifted"))
+      entries[[znames[supportCols[i] + 1L]]] <- e
+      next
+    }
+    cols_i <- match(reli, relevant)
+    fitted <- NULL
+    for (degree in 0:ctrl$degreeCap) {
+      if (.sym_expired(ctrl)) return(fallback(timedOut))
+      mons <- .sym_mono_table(length(reli), degree)
+      need <- 2L * nrow(mons) - 1L + ctrl$sampleSlack
+      if (need > ctrl$perprimeCap) break
+      live <- which(vapply(seq_len(nP), function(j) !deadP[j] && ensurePrime(j, need),
+                           logical(1)))
+      if (length(live) < ctrl$perprimeMinPrimes) next
+      # fit num/den over each prime's OWN points. symFitRational normalises to its
+      # own free coefficient, which the point set can pick differently per prime; the
+      # num/den are only defined up to a common scale, so before the CRT re-normalise
+      # every prime to ONE shared monomial (the first fit's free column, which lies in
+      # the true support and so is nonzero at every prime). Then the coefficient
+      # vectors are one consistent representative and the CRT is exact.
+      raw <- vector("list", length(live)); refFree <- NULL; okAll <- TRUE
+      for (jj in seq_along(live)) { j <- live[jj]
+        su <- matrix(as.integer(bankU[[j]][seq_len(need), cols_i, drop = FALSE]), need)
+        rv <- as.integer(bankR[[j]][seq_len(need), i])
+        fit <- symFitRational(su, matrix(as.integer(mons), nrow(mons)), rv, .symPrimes[j])
+        if (!identical(fit$status, "ok")) { okAll <- FALSE; break }
+        raw[[jj]] <- as.numeric(fit$coeffs)
+        if (is.null(refFree)) refFree <- fit$freeCol
+      }
+      if (!okAll) next
+      coefRes <- matrix(0L, 2L * nrow(mons), length(live))
+      for (jj in seq_along(live)) { j <- .symPrimes[live[jj]]
+        d <- raw[[jj]][refFree + 1L] %% j
+        if (d == 0) { okAll <- FALSE; break }              # refFree not in support here
+        coefRes[, jj] <- as.integer(.sym_mulmod(raw[[jj]], .sym_invmod(d, j), j))
+      }
+      if (!okAll) next
+      rec <- symRatRecon(coefRes, as.integer(.symPrimes[live]))
+      if (any(rec$den == "0")) next
+      nMon <- nrow(mons); numI <- seq_len(nMon); denI <- nMon + seq_len(nMon)
+      fitted <- list(numN = rec$num[numI], numD = rec$den[numI],
+                     denN = rec$num[denI], denD = rec$den[denI], mons = mons)
+      if (nzchar(Sys.getenv("DMOD_SYM_SPARSEDIAG")))
+        message(sprintf("  perprime entry %d/%d col=%s reli=%d: fit at degree %d (%d primes, %d pts/prime)",
+                        i, length(supportCols), znames[supportCols[i] + 1L],
+                        length(reli), degree, length(live), need))
+      break
+    }
+    if (is.null(fitted)) {
+      if (nzchar(Sys.getenv("DMOD_SYM_SPARSEDIAG")))
+        message(sprintf("  perprime entry %d/%d col=%s reli=%d: FAILED (degreeCap/perprimeCap)",
+                        i, length(supportCols), znames[supportCols[i] + 1L], length(reli)))
+      return(fallback(paste("a joint entry could not be fit per-prime within",
+                            "degreeCap/perprimeCap; raise them or the direction is",
+                            "not a bounded-degree rational")))
+    }
+    vars <- leafNames[reli]
+    numStr <- .sym_poly_string(fitted$numN, fitted$numD, fitted$mons, vars)
+    denStr <- .sym_poly_string(fitted$denN, fitted$denD, fitted$mons, vars)
+    expr <- if (denStr == "1") numStr else paste0("(", numStr, ")/(", denStr, ")")
+    if (!is.null(spy)) expr <- .sym_simplify(expr, spy)
+    entries[[znames[supportCols[i] + 1L]]] <- expr
+  }
+  entries[[znames[f + 1L]]] <- "1"
+  list(poolNext = poolNext, entry = list(support = sort(names(entries)),
+    vector = entries, type = "general", closedForm = TRUE,
+    relevantLeaves = relevant))
 }
 
 
@@ -2839,7 +3831,17 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
   cell <- function(ci, col) as.character(conditions[ci, col])
   resolve <- function(val, ci) {
     val <- as.character(val)
-    if (val %in% cols) cell(ci, val) else val
+    v <- if (val %in% cols) cell(ci, val) else val
+    # also apply this condition's trafo-list substitutions, so an event value the
+    # per-condition `trafo` bakes -- a known dose (init_TGFb -> 1), a switch level,
+    # a knockdown rename -- is resolved here rather than left as a free symbol. This
+    # is the event-value counterpart of the grid cell lookup; without it a dose the
+    # trafo pins to a constant would surface as a spurious non-identifiability.
+    if (length(condSubs) && ci <= length(condSubs) && length(condSubs[[ci]])) {
+      sub <- condSubs[[ci]]
+      v <- replaceSymbols(names(sub), unlist(sub), v)
+    }
+    v
   }
 
   # post-t0 segment boundaries: the distinct event times strictly after t0

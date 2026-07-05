@@ -485,6 +485,33 @@ def _rational_reconstruct(a, m):
     return spy.Rational(r1, s1)
 
 
+def symRatReconBig(residues, primes):
+    """Arbitrary-precision per-row CRT + rational reconstruction, without the u128
+    cap of the C++ symRatRecon (which limits the product of ~2**31 primes to 4). Each
+    row of `residues` is one coefficient's residues across `primes`; returns
+    {'num': [...], 'den': [...]} as decimal strings, with den '0' when a coefficient
+    does not rationally reconstruct at the given prime product. Used by the
+    gauge-robust reconstruction path, whose log-carrying coefficients can have a
+    height beyond the 4-prime (~4.6e18) bound."""
+    from sympy.ntheory.modular import crt
+    mods = [int(p) for p in primes]
+    M = 1
+    for m in mods:
+        M *= m
+    rows = [[int(x) for x in row] for row in np.asarray(residues, dtype=object)]
+    num, den = [], []
+    for row in rows:
+        res = [r % m for r, m in zip(row, mods)]
+        x, _ = crt(mods, res)
+        val = _rational_reconstruct(int(x), int(M))
+        if val is None:
+            num.append("0"); den.append("0")
+        else:
+            val = spy.Rational(val)
+            num.append(str(int(val.p))); den.append(str(int(val.q)))
+    return {'num': num, 'den': den}
+
+
 def _modular_nullspace(M):
     """Exact nullspace of sympy Matrix M via multi-prime GF(p) + CRT +
     rational reconstruction. Returns list of sympy column vectors, or None
@@ -1362,6 +1389,46 @@ def _compile_t0events(events, paramNames):
     return compiled
 
 
+def _ss_compile(model, stateNames, paramNames, forcings):
+    """Prime-independent compile of f = 0 for the modular steady-state solve,
+    memoised in _ssModularCache. Inputs are the already-normalised model/state/param
+    lists and the forcings set. Returns the cached tuple (paramSyms, solveStates,
+    polys, Jx, Jt, gens, JxTerms, JtTerms, polyBi, genericLinear, linTerms)."""
+    key = (tuple(model), tuple(stateNames), tuple(paramNames), tuple(sorted(forcings)))
+    cached = _ssModularCache.get(key)
+    if cached is not None:
+        return cached
+    local, parse = _make_local_parse(model + list(paramNames))
+    rhsByName = {}
+    for raw in model:
+        line = _clean(raw)
+        if '=' not in line:
+            continue
+        lhs, rhs = line.split('=', 1)
+        rhsByName[lhs.strip()] = parse(rhs)
+    stateSyms = [spy.Symbol(nm) for nm in stateNames]
+    paramSyms = [spy.Symbol(nm) for nm in paramNames]
+    solveStates = [s for s in stateSyms if str(s) not in forcings]
+    forcingSubs = {spy.Symbol(nm): spy.Integer(0) for nm in forcings}
+    fSym = [spy.sympify(rhsByName[str(s)]).subs(forcingSubs) for s in solveStates]
+    polys = [spy.expand(spy.fraction(spy.together(fi))[0]) for fi in fSym]
+    Jx = spy.Matrix([[spy.diff(fi, sj) for sj in solveStates] for fi in fSym])
+    Jt = {str(th): spy.Matrix([[spy.diff(fi, th)] for fi in fSym])
+          for th in paramSyms}
+    gens = list(paramSyms) + list(solveStates)
+    nSc = len(solveStates)
+    JxTerms = [[_poly_terms(Jx[i, j], gens) for j in range(nSc)]
+               for i in range(nSc)]
+    JtTerms = {str(th): [_poly_terms(Jt[str(th)][i], gens) for i in range(nSc)]
+               for th in paramSyms}
+    polyBi = [_bipoly(pl, list(solveStates), list(paramSyms)) for pl in polys]
+    genericLinear, linTerms = _compile_linear_plan(polys, solveStates, paramSyms)
+    cached = (paramSyms, solveStates, polys, Jx, Jt, gens, JxTerms, JtTerms,
+              polyBi, genericLinear, linTerms)
+    _ssModularCache[key] = cached
+    return cached
+
+
 def solveSteadyStateModular(model, stateNames, paramNames, paramVals, prime,
                             forcings=None, backend='sympy', t0events=None,
                             recast=None, lVals=None, jointMode=False):
@@ -1380,44 +1447,7 @@ def solveSteadyStateModular(model, stateNames, paramNames, paramVals, prime,
     paramNames = _as_list(paramNames)
     p = int(prime)
 
-    key = (tuple(model), tuple(stateNames), tuple(paramNames), tuple(sorted(forcings)))
-    cached = _ssModularCache.get(key)
-    if cached is None:
-        local, parse = _make_local_parse(model + list(paramNames))
-        rhsByName = {}
-        for raw in model:
-            line = _clean(raw)
-            if '=' not in line:
-                continue
-            lhs, rhs = line.split('=', 1)
-            rhsByName[lhs.strip()] = parse(rhs)
-        stateSyms = [spy.Symbol(nm) for nm in stateNames]
-        paramSyms = [spy.Symbol(nm) for nm in paramNames]
-        solveStates = [s for s in stateSyms if str(s) not in forcings]
-        forcingSubs = {spy.Symbol(nm): spy.Integer(0) for nm in forcings}
-        fSym = [spy.sympify(rhsByName[str(s)]).subs(forcingSubs) for s in solveStates]
-        # numerators of f = 0; the symbolic Jacobians for the IFT
-        polys = [spy.expand(spy.fraction(spy.together(fi))[0]) for fi in fSym]
-        Jx = spy.Matrix([[spy.diff(fi, sj) for sj in solveStates] for fi in fSym])
-        Jt = {str(th): spy.Matrix([[spy.diff(fi, th)] for fi in fSym])
-              for th in paramSyms}
-        # compile the Jacobian entries to prime-independent modular term lists so
-        # each point evaluates by integer arithmetic
-        gens = list(paramSyms) + list(solveStates)
-        nSc = len(solveStates)
-        JxTerms = [[_poly_terms(Jx[i, j], gens) for j in range(nSc)]
-                   for i in range(nSc)]
-        JtTerms = {str(th): [_poly_terms(Jt[str(th)][i], gens) for i in range(nSc)]
-                   for th in paramSyms}
-        # state-polynomials of f = 0 as bipolys, so the per-point parameter
-        # substitution is an integer evaluation
-        polyBi = [_bipoly(pl, list(solveStates), list(paramSyms)) for pl in polys]
-        # generic linear-elimination plan: when every state eliminates linearly,
-        # the per-point solve is integer evaluation of compiled rationals
-        genericLinear, linTerms = _compile_linear_plan(polys, solveStates, paramSyms)
-        cached = (paramSyms, solveStates, polys, Jx, Jt, gens, JxTerms, JtTerms,
-                  polyBi, genericLinear, linTerms)
-        _ssModularCache[key] = cached
+    cached = _ss_compile(model, stateNames, paramNames, forcings)
     (paramSyms, solveStates, polys, Jx, Jt, gens, JxTerms, JtTerms, polyBi,
      genericLinear, linTerms) = cached
 
@@ -1590,6 +1620,148 @@ def solveSteadyStateModular(model, stateNames, paramNames, paramVals, prime,
             'recast': recastOut,
             'dfJx': dfJx, 'dfJt': dfJt, 'dfStateCols': dfStateCols,
             'dfParamCols': dfParamCols, 'valBy': dict(valBy)}
+
+
+# ---- forward steady-state solve (choose the resting states, solve for rates) ----------
+# The backward solve above finds x*(theta); the FORWARD solve inverts it: CHOOSE the resting
+# state values and the free parameters, and solve f = 0 for a turnover subset of the rate
+# constants. Because every mass-action rate enters f linearly (and no two rates multiply),
+# f = 0 is a LINEAR system in the chosen rates -- so it is solvable at EVERY prime (no
+# per-prime Groebner degeneracy), which lets the gauge-robust reconstruction sample a
+# direction on a SHARED slice across primes (the states become independent coordinates, so a
+# direction whose entries depend on x* -- e.g. via a Hill term C3^n -- reconstructs as a
+# rational in (theta, states) instead of an inconsistent per-prime constant).
+
+def _forward_rate_pick(rhsByName, solveStates, paramNames, forcings, keepFree=None):
+    """Match each state to one rate constant to solve for: a parameter that enters that state's
+    balance LINEARLY (f = 0 stays linear in it), preferring a turnover term (the rate multiplies
+    a monomial containing the state, with a negative sign) that is DEDICATED (appears in few
+    balances). Parameters in `keepFree` are never solved for -- pass the direction's support so
+    the reconstruction can vary them. Assigns the most-constrained states first. Returns the
+    rate-name list (one per solve state) or None if no complete matching exists."""
+    keepFree = set(keepFree or [])
+    # never solve for a recast coordinate (E = base^exp, L = log base): they are independent
+    # generic coordinates the reconstruction varies, and choosing one makes f bilinear in the
+    # rates (E multiplies a real turnover rate in the recast balance).
+    paramset = {spy.Symbol(pn) for pn in paramNames
+                if pn not in keepFree and not pn.startswith('_E_') and not pn.startswith('_L_')}
+    forc = {spy.Symbol(nm) for nm in forcings}
+    cand, appear = {}, {}
+    for s in solveStates:
+        f = spy.sympify(rhsByName[s]); sSym = spy.Symbol(s); lst = []
+        for r in sorted(f.free_symbols & paramset, key=str):
+            if r in forc:
+                continue
+            try:
+                pv = spy.Poly(f, r)
+            except spy.PolynomialError:
+                continue
+            if pv.degree() != 1 or r in pv.nth(1).free_symbols:
+                continue
+            coef = pv.nth(1)
+            turnover = sSym in coef.free_symbols
+            neg = coef.could_extract_minus_sign()
+            lst.append((0 if (turnover and neg) else 1 if turnover else 2, str(r)))
+            appear[str(r)] = appear.get(str(r), 0) + 1
+        cand[s] = lst
+    order = sorted(solveStates, key=lambda s: len(cand[s]))
+    used, assign = set(), {}
+    for s in order:
+        opts = sorted((sc, appear.get(r, 99), r) for sc, r in cand[s] if r not in used)
+        if not opts:
+            return None
+        assign[s] = opts[0][2]; used.add(opts[0][2])
+    return [assign[s] for s in solveStates]
+
+
+_forwardCache = {}
+
+
+def _forward_compile(model, stateNames, paramNames, forcings, solveRates):
+    """Prime-independent compile of the forward solve, cached: the coefficient of each solve
+    rate in each state balance and the rate-free constant, as (num, den) term lists over the
+    free coords rgens = (non-solve params) + solve states, PLUS the reused steady-state Jacobian
+    term lists (JxTerms/JtTerms). So a forward solve is per-point integer arithmetic, not
+    symbolic. Returns {'bad': reason} if the rate set is not linear (two rates multiply, a
+    concentration chosen, etc.)."""
+    key = (tuple(model), tuple(stateNames), tuple(paramNames), tuple(sorted(forcings)),
+           tuple(solveRates))
+    c = _forwardCache.get(key)
+    if c is not None:
+        return c
+    (paramSyms, solveStates, polys, Jx, Jt, gens0, JxTerms, JtTerms,
+     polyBi, genLin, linTerms) = _ss_compile(model, stateNames, paramNames, forcings)
+    solveSet = set(solveRates); rSyms = [spy.Symbol(r) for r in solveRates]
+    rgens = [th for th in paramSyms if str(th) not in solveSet] + list(solveStates)
+    rgenset = set(rgens)
+    coefT, constT = [], []
+    for i in range(len(solveStates)):
+        fexp = spy.sympify(polys[i]); row = []
+        for r in rSyms:
+            dexp = spy.diff(fexp, r)
+            if dexp.free_symbols - rgenset:
+                return {'bad': 'not linear in the chosen rates at %s' % str(solveStates[i])}
+            row.append(_poly_terms(dexp, rgens))
+        cexp = fexp.subs({r: spy.Integer(0) for r in rSyms})
+        if cexp.free_symbols - rgenset:
+            return {'bad': 'unsubstituted symbol in balance %s' % str(solveStates[i])}
+        coefT.append(row); constT.append(_poly_terms(cexp, rgens))
+    c = {'paramNames': [str(s) for s in paramSyms], 'solveStates': [str(s) for s in solveStates],
+         'rgens': [str(g) for g in rgens], 'coefT': coefT, 'constT': constT,
+         'JxTerms': JxTerms, 'JtTerms': JtTerms, 'gens': [str(g) for g in gens0]}
+    _forwardCache[key] = c
+    return c
+
+
+def solveForwardModular(model, stateNames, paramNames, stateVals, paramVals, prime,
+                        forcings=None, solveRates=None, keepFree=None, backend='sympy'):
+    """Solve f = 0 over GF(prime) for a turnover subset of rate constants, given CHOSEN resting
+    `stateVals` and `paramVals` (residues mod prime; forcings held at 0). `solveRates` names the
+    rates to solve (one per non-forcing state) -- auto-picked (avoiding `keepFree`) if None.
+    Uses the cached `_forward_compile`, so it is per-point integer arithmetic. Returns the SAME
+    joint-mode payload as the backward solve -- {'valBy','dfJx','dfJt','dfStateCols',
+    'dfParamCols'} at the forward point -- plus {'rates','solveRates'}, or {'ok': False,'why'}.
+    Linear in the rates, so it solves at every prime unless a pivot vanishes there."""
+    _select_backend(backend)
+    p = int(prime)
+    model = _as_list(model); forcings = set(_as_list(forcings))
+    stateNames = _as_list(stateNames); paramNames = _as_list(paramNames)
+    svd = {str(k): int(v) % p for k, v in dict(stateVals).items()}
+    pvd = {str(k): int(v) % p for k, v in dict(paramVals).items()}
+    if solveRates is None:
+        (_ps, _ss, _polys, *_r) = _ss_compile(model, stateNames, paramNames, forcings)
+        rhsByName = {str(_ss[i]): _polys[i] for i in range(len(_ss))}
+        solveRates = _forward_rate_pick(rhsByName, [str(s) for s in _ss], paramNames, forcings, keepFree=keepFree)
+        if solveRates is None:
+            return {'ok': False, 'why': 'no complete forward rate matching'}
+    solveRates = _as_list(solveRates)
+    c = _forward_compile(model, stateNames, paramNames, forcings, solveRates)
+    if 'bad' in c:
+        return {'ok': False, 'why': c['bad']}
+    solveStates = c['solveStates']; nS = len(solveStates)
+    if len(solveRates) != nS:
+        return {'ok': False, 'why': 'rate/state count mismatch (%d rates, %d states)'
+                % (len(solveRates), nS)}
+    def cvfree(nm):
+        return svd[nm] if nm in svd else (pvd[nm] if nm in pvd else 0)
+    rgv = [cvfree(nm) for nm in c['rgens']]
+    A = [[_eval_terms(c['coefT'][i][j], rgv, p) for j in range(len(solveRates))] for i in range(nS)]
+    b = [[(-_eval_terms(c['constT'][i], rgv, p)) % p] for i in range(nS)]
+    X = _solve_mod(A, b, p)
+    if X is None:
+        return {'ok': False, 'why': 'singular forward system mod p'}
+    ratesDict = {solveRates[j]: int(X[j][0]) % p for j in range(len(solveRates))}
+    def cvfull(nm):
+        if nm in ratesDict: return ratesDict[nm]
+        return svd[nm] if nm in svd else (pvd[nm] if nm in pvd else 0)
+    ptvals = [cvfull(nm) for nm in c['gens']]
+    dfJx = [[_eval_terms(c['JxTerms'][i][j], ptvals, p) for j in range(nS)] for i in range(nS)]
+    dfJt = {th: [_eval_terms(c['JtTerms'][th][i], ptvals, p) for i in range(nS)]
+            for th in c['paramNames']}
+    return {'ok': True, 'rates': ratesDict, 'solveRates': list(solveRates),
+            'solveStates': list(solveStates), 'valBy': {s: cvfull(s) for s in solveStates},
+            'dfJx': dfJx, 'dfJt': dfJt, 'dfStateCols': list(solveStates),
+            'dfParamCols': list(c['paramNames'])}
 
 
 def _detect_power_atoms(perCond):
