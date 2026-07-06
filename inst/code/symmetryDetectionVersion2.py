@@ -2028,6 +2028,18 @@ def compileObservabilityTapeMulti(model, observation, conditionSubs, conditionIC
             paramset |= set(e.free_symbols)
     paramset -= set(S)
     params = sorted(paramset, key=spy.default_sort_key)
+    # A free-exponent base that appears ONLY under the exponent (a Michaelis constant
+    # Km in C^n/(Km^n+C^n)) was replaced by its recast atom E=Km^n and so dropped from
+    # the coordinates. Re-add it as a parameter coordinate so the recast relation
+    # E=base^exp ties it and the pool/Michaelis co-scaling is reported and closes as an
+    # exact scaling (rather than a doomed finite-field fit that under-reports Km). A state
+    # base (e.g. C3) is already a coordinate; forcings never scale.
+    if powerRecast:
+        known = set(str(s) for s in S) | set(str(s) for s in params) | set(forcings)
+        for rc in powerRecast:
+            if rc['base'] not in known:
+                params.append(spy.Symbol(rc['base'])); known.add(rc['base'])
+        params = sorted(params, key=spy.default_sort_key)
 
     freeStates = [X for X in S if freeState[str(X)]]
     leafNames = [str(X) for X in freeStates] + [str(s) for s in params]
@@ -2439,6 +2451,16 @@ def scalingSymmetriesMulti(perCondModel, perCondObs, inputs=None, fixed=None,
     paramset -= set(stateSyms)
     paramset -= {local.get(nm, spy.Symbol(nm)) for nm in inputset}
     params = sorted(paramset, key=spy.default_sort_key)
+    # re-add eliminated free-exponent bases (see compileObservabilityTapeMulti): a
+    # Michaelis constant Km in C^n/(Km^n+C^n) is dropped from the model by the recast
+    # but must stay a coordinate so _scaling_gens_recast can impose c_E = exp*c_base and
+    # recover the pool/Michaelis co-scaling exactly over Q(exp).
+    for rc in _as_list(recast):
+        b = local.get(str(rc['base']), spy.Symbol(str(rc['base'])))
+        if (b not in set(stateSyms) and b not in params
+                and str(b) not in inputset and str(b) not in fixedset):
+            params.append(b)
+    params = sorted(params, key=spy.default_sort_key)
     zvars = stateSyms + params
     nz = len(zvars)
     znames = [str(s) for s in zvars]
@@ -2472,6 +2494,112 @@ def scalingSymmetriesMulti(perCondModel, perCondObs, inputs=None, fixed=None,
     else:
         nonId = _scaling_nonid(gens, znames, nz)
     return {'method': 'scaling', 'count': len(nonId), 'nonIdentifiable': nonId}
+
+
+###########################################################################
+#####################  pure-symbolic observability  ######################
+###########################################################################
+
+def _lie_deriv(h, states, rhs):
+    """Lie derivative L_f h = sum_i (dh/dx_i) f_i along the flow (parameters are
+    constants of motion, so they do not contribute)."""
+    return sum(spy.diff(h, states[i]) * rhs[i] for i in range(len(states)))
+
+
+def observabilitySympy(model, observation, fixed=None, parameters=None,
+                       inputs=None, equilibrate=False, backend='sympy'):
+    """Pure-symbolic observability-identifiability, an INDEPENDENT cross-check of the
+    prime-kernel engine for SMALL models. The observability-identifiability matrix
+    O = d/dz [g, L_f g, L_f^2 g, ...] over z = (states, unknown parameters) is built
+    and rank/nullspace-reduced with sympy over the exact rational-function field --
+    NO finite fields and NO power/Hill recast (base^exp stays a symbolic atom, e.g.
+    C**nhill is differentiated as nhill*C**(nhill-1)). Because it is exact and
+    symbolic the Lie order is carried to the guaranteed saturation bound (# states),
+    so there is no premature-truncation risk and no separate saturation guard is
+    needed. With equilibrate=True the resting-manifold tangency rows Jf = df/dz are
+    appended (the implicit determining system: states stay coordinates, f = 0 enters
+    as df.xi = 0). Single condition; events/gaps are not handled here. Returns rank,
+    dim, the Lie order used and the non-identifiable directions (a nullspace basis)
+    with their support and exact symbolic entries."""
+    _select_backend(backend)
+    asL = lambda v: list(v) if isinstance(v, (list, tuple)) else ([] if v is None else [v])
+    model = [str(l) for l in asL(model)]           # reticulate passes a length-1 vector
+    observation = [str(l) for l in asL(observation)]  # as a scalar string; keep it a list
+    lines = list(model) + list(observation)
+    local, parse = _make_local_parse(lines)
+    stateNames = [_clean(l).split('=', 1)[0].strip() for l in model]
+    states = [local.get(nm, spy.Symbol(nm)) for nm in stateNames]
+    rhs = [spy.sympify(parse(_clean(l).split('=', 1)[1])) for l in model]
+    obs = [spy.sympify(parse(_clean(l).split('=', 1)[1])) for l in observation]
+    known = {local.get(nm, spy.Symbol(nm)) for nm in (asL(inputs) + asL(fixed))}
+    pset = set()
+    for e in rhs + obs:
+        pset |= spy.sympify(e).free_symbols
+    pset -= set(states)
+    pset -= known
+    params = sorted(pset, key=spy.default_sort_key)
+    order = 0
+    if equilibrate:
+        # resting steady state: solve f = 0 for the states (needs a rational solution;
+        # reduceCQ upstream removes conserved moieties so the system is determined) and
+        # substitute x*(theta) into the observables. At rest the Lie jet vanishes, so
+        # identifiability is over the PARAMETERS through the resting observation g(x*).
+        # A non-rational steady state (e.g. a free Hill exponent) is not solvable this
+        # way -- that case needs the modular kernel's implicit (tangency) construction.
+        try:
+            sols = spy.solve([spy.together(fi) for fi in rhs], states, dict=True)
+        except Exception:
+            sols = []
+        if not sols:
+            return {'ok': False, 'rank': 0, 'dim': 0, 'lieOrder': 0,
+                    'nonIdentifiable': [], 'identifiable': False,
+                    'why': 'equilibrate: the steady state is not symbolically solvable '
+                           '(e.g. a free Hill exponent); use symEngine="modular"'}
+        Gobs = [spy.together(h.subs(sols[0])) for h in obs]
+        z = list(params)
+        nz = len(z)
+        znames = [str(s) for s in z]
+        if nz == 0:
+            return {'ok': True, 'rank': 0, 'dim': 0, 'lieOrder': 0,
+                    'nonIdentifiable': [], 'identifiable': True}
+        rows = [[spy.diff(h, zj) for zj in z] for h in Gobs]
+    else:
+        z = states + params
+        nz = len(z)
+        znames = [str(s) for s in z]
+        if nz == 0:
+            return {'ok': True, 'rank': 0, 'dim': 0, 'lieOrder': 0,
+                    'nonIdentifiable': [], 'identifiable': True}
+        rows = []
+        jet = list(obs)
+        prev = -1
+        flat = 0
+        # the extended (states + constant parameters) system has dimension nz, so its
+        # observability codistribution is spanned by the Lie derivatives up to order
+        # nz - 1; carry the jet to that guaranteed bound (early exit once the rank holds
+        # for two consecutive orders) -- exact, so no premature-truncation risk.
+        while True:
+            for h in jet:
+                rows.append([spy.diff(h, zj) for zj in z])
+            rank = spy.Matrix(rows).rank()
+            flat = flat + 1 if rank == prev else 0
+            if rank >= nz or (flat >= 2 and order >= 1) or order >= nz:
+                break
+            prev = rank
+            order += 1
+            jet = [spy.expand(_lie_deriv(h, states, rhs)) for h in jet]
+    M = spy.Matrix(rows)
+    rank = M.rank()
+    nonId = []
+    if rank < nz:
+        for vec in M.nullspace():
+            v = [spy.cancel(vec[i]) for i in range(nz)]
+            nz_i = [i for i in range(nz) if v[i] != 0]
+            nonId.append({'support': sorted(znames[i] for i in nz_i),
+                          'vector': {znames[i]: str(v[i]) for i in nz_i},
+                          'type': 'general', 'closedForm': True})
+    return {'ok': True, 'rank': int(rank), 'dim': int(nz), 'lieOrder': int(order),
+            'nonIdentifiable': nonId, 'identifiable': bool(rank >= nz)}
 
 
 ###########################################################################

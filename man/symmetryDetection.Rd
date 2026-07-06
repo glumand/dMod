@@ -17,12 +17,14 @@ symmetryDetection(
   equilibrate = FALSE,
   reduceCQ = TRUE,
   closedForm = FALSE,
+  verify = TRUE,
   cores = 1,
   cores.conditions = cores,
   cores.GLp = cores,
   control = reconstControl(),
   liesym = liesymControl(),
-  scaling = scalingControl()
+  scaling = scalingControl(),
+  symEngine = c("modular", "symbolic")
 )
 }
 \arguments{
@@ -107,6 +109,21 @@ densely; an entry coupling many variables is recovered by sparse
 against the nullspace at a fresh prime; one that cannot be reconstructed or
 certified is returned with its support and \code{closedForm = FALSE} instead.}
 
+\item{verify}{Logical (default \code{TRUE}). For \code{"observability"}, run a fast
+Schwartz-Zippel saturation guard and attach the verdict as \verb{$verification}. It
+re-uses the kernel already built for the analysis and its base point -- whose
+modular steady state is cached -- and extends the Lie order past the point where
+the plateau heuristic stopped. Only the Lie jet grows (the cached solve is reused,
+no new steady-state solve), so it costs a handful of matrix ranks at one point, not
+a second analysis. The plateau rule is the one step that can fail silently -- a rank
+can plateau then grow again (a Hill exponent observable only through a high-order
+derivative), and a premature stop over-reports non-identifiability. If the rank
+climbs past the reported value the guard FAILS and warns; the modular rank equals
+the generic rank almost surely (Schwartz-Zippel). Reconstructed directions are
+already certified at a fresh prime and scalings are exact, so the guard closes
+exactly the residual Lie-stop risk. Set \code{FALSE} to skip; the number of extra orders
+is tunable via \code{DMOD_SYM_VERIFY_MARGIN} (default 6).}
+
 \item{cores}{Number of threads for \code{"observability"}: the default for both
 \code{cores.conditions} and \code{cores.GLp} when those are not set explicitly. The
 \code{"liesym"} and \code{"scaling"} engines are exact and serial and ignore it.}
@@ -132,6 +149,17 @@ backend and verification, and the evaluation point.}
 
 \item{scaling}{A \code{\link[=scalingControl]{scalingControl()}} list tuning the \code{"scaling"} engine: the
 symbolic backend and the evaluation point.}
+
+\item{symEngine}{For \code{method = "observability"}, which engine computes the
+observability-identifiability matrix. \code{"modular"} (default) evaluates it over
+finite fields GF(p) at rational points and lifts by CRT -- fast, scales to large,
+deep models, and drives the closed-form reconstruction and the \code{verify} guard.
+\code{"symbolic"} builds and rank/nullspace-reduces it with sympy over the exact
+rational-function field: no finite fields and no power/Hill recast (\code{base^exp}
+stays a symbolic atom), the Lie order carried to the exact saturation bound (so no
+\code{verify} guard is needed). It is an INDEPENDENT cross-check of \code{"modular"} but only
+practical for SMALL models, and currently handles a single condition (no
+conditions/events/gaps and no closed-form reconstruction).}
 }
 \value{
 For \code{"observability"}: a list with \code{identifiable}, \code{rank}, \code{dim},

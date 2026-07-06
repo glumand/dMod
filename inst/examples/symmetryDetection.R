@@ -26,6 +26,11 @@ summary(symmetryDetection(reactions, g, method = "observability",
 summary(symmetryDetection(reactions, g, method = "liesym", reduceCQ = FALSE,
                           liesym = liesymControl(ansatz = "uni", pMax = 1L)))
 summary(symmetryDetection(reactions, g, method = "scaling", reduceCQ = FALSE))
+# symEngine = "symbolic" recomputes the observability engine on an INDEPENDENT
+# pure-sympy path (exact, no finite fields, no power/Hill recast) -- a cross-check for
+# the default "modular" (GF(p) + CRT) engine, practical for the small models here.
+summary(symmetryDetection(reactions, g, method = "observability",
+                          reduceCQ = TRUE, symEngine = "symbolic"))
 
 
 ## 2. A closed-form, non-monomial direction ----------------------------------
@@ -38,6 +43,10 @@ summary(symmetryDetection(reactions, g, method = "scaling", reduceCQ = FALSE))
 res <- symmetryDetection(reactions, g, method = "observability", equilibrate = TRUE,
                          closedForm = TRUE)
 summary(res)
+# the pure-symbolic engine handles equilibrate too (rational steady state solved and
+# substituted); the same two directions, spanned differently
+summary(symmetryDetection(reactions, g, method = "observability", equilibrate = TRUE,
+                          symEngine = "symbolic"))
 
 
 ## 3. An enzyme assay and its hidden symmetries -------------------------------
@@ -70,6 +79,9 @@ curve <- symmetryDetection(gene, eqnvec(y = "p"), method = "observability",
                            closedForm = TRUE)
 
 summary(curve)
+# the same curve, reconstructed exactly by the independent pure-symbolic engine
+summary(symmetryDetection(gene, eqnvec(y = "p"), method = "observability",
+                          symEngine = "symbolic"))
 ## 5. Stacking conditions resolves a switch-gated rate ------------------------
 #
 # The rate k1 + u*k2 is gated by a switch u. A single switch value cannot
@@ -266,6 +278,9 @@ reactions <- eqnlist() |>
   addRC("", "FB2mRNA", "k_pr_FB2mRNA * C3^nhill_FB2mRNA / (Km_FB2mRNA^nhill_FB2mRNA + C3^nhill_FB2mRNA) * (1 - bool_ActD)") |>
   addRC("", "FB3mRNA", "k_pr_FB3mRNA * C3^nhill_FB3mRNA / (Km_FB3mRNA^nhill_FB3mRNA + C3^nhill_FB3mRNA) * (1 - bool_ActD)") |>
   addRC("", "FB4mRNA", "k_pr_FB4mRNA * C3^nhill_FB4mRNA / (Km_FB4mRNA^nhill_FB4mRNA + C3^nhill_FB4mRNA) * (1 - bool_ActD)") |>
+  # addRC("", "FB2mRNA", "k_pr_FB2mRNA * C3 * (1 - bool_ActD)") |>
+  # addRC("", "FB3mRNA", "k_pr_FB3mRNA * C3 * (1 - bool_ActD)") |>
+  # addRC("", "FB4mRNA", "k_pr_FB4mRNA * C3 * (1 - bool_ActD)") |>
   addRC("R1mRNA", "", "k_dg_R1mRNA * R1mRNA") |> addRC("R2mRNA", "", "k_dg_R2mRNA * R2mRNA") |>
   addRC("FB2mRNA", "", "k_dg_FB2 * FB2mRNA") |> addRC("FB3mRNA", "", "k_dg_FB3 * FB3mRNA") |>
   addRC("FB4mRNA", "", "k_dg_FB4 * FB4mRNA") |>
@@ -358,7 +373,7 @@ outsmad <- symmetryDetection(
   events = events, trafo = cond.trafo,
   forcings = c("bool_ActD","bool_CHX","bool_MG132","TGFb"),
   equilibrate = TRUE, reduceCQ = TRUE, closedForm = TRUE,
-  cores.GLp = 4)
+  cores.GLp = 20)
 
 # rank 62 / 71: 8 of the 9 non-identifiabilities close in closed form (a few minutes).
 # The known TGFb dose (init_TGFb, pinned to 1 by the trafo grid) is baked in and is not

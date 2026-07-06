@@ -92,6 +92,20 @@
 #'   (Ben-Or-Tiwari) interpolation. Every reconstructed direction is certified
 #'   against the nullspace at a fresh prime; one that cannot be reconstructed or
 #'   certified is returned with its support and `closedForm = FALSE` instead.
+#' @param verify Logical (default `TRUE`). For `"observability"`, run a fast
+#'   Schwartz-Zippel saturation guard and attach the verdict as `$verification`. It
+#'   re-uses the kernel already built for the analysis and its base point -- whose
+#'   modular steady state is cached -- and extends the Lie order past the point where
+#'   the plateau heuristic stopped. Only the Lie jet grows (the cached solve is reused,
+#'   no new steady-state solve), so it costs a handful of matrix ranks at one point, not
+#'   a second analysis. The plateau rule is the one step that can fail silently -- a rank
+#'   can plateau then grow again (a Hill exponent observable only through a high-order
+#'   derivative), and a premature stop over-reports non-identifiability. If the rank
+#'   climbs past the reported value the guard FAILS and warns; the modular rank equals
+#'   the generic rank almost surely (Schwartz-Zippel). Reconstructed directions are
+#'   already certified at a fresh prime and scalings are exact, so the guard closes
+#'   exactly the residual Lie-stop risk. Set `FALSE` to skip; the number of extra orders
+#'   is tunable via `DMOD_SYM_VERIFY_MARGIN` (default 6).
 #' @param cores Number of threads for `"observability"`: the default for both
 #'   `cores.conditions` and `cores.GLp` when those are not set explicitly. The
 #'   `"liesym"` and `"scaling"` engines are exact and serial and ignore it.
@@ -113,6 +127,16 @@
 #'   backend and verification, and the evaluation point.
 #' @param scaling A [scalingControl()] list tuning the `"scaling"` engine: the
 #'   symbolic backend and the evaluation point.
+#' @param symEngine For `method = "observability"`, which engine computes the
+#'   observability-identifiability matrix. `"modular"` (default) evaluates it over
+#'   finite fields GF(p) at rational points and lifts by CRT -- fast, scales to large,
+#'   deep models, and drives the closed-form reconstruction and the `verify` guard.
+#'   `"symbolic"` builds and rank/nullspace-reduces it with sympy over the exact
+#'   rational-function field: no finite fields and no power/Hill recast (`base^exp`
+#'   stays a symbolic atom), the Lie order carried to the exact saturation bound (so no
+#'   `verify` guard is needed). It is an INDEPENDENT cross-check of `"modular"` but only
+#'   practical for SMALL models, and currently handles a single condition (no
+#'   conditions/events/gaps and no closed-form reconstruction).
 #'
 #' @return For `"observability"`: a list with `identifiable`, `rank`, `dim`,
 #'   `lieOrderUsed` and `nonIdentifiable`. Each direction carries a `type`:
@@ -206,14 +230,16 @@ symmetryDetection <- function(f = NULL, g = NULL, trafo = NULL,
                               events = NULL, conditions = NULL,
                               equilibrate = FALSE,
                               reduceCQ = TRUE,
-                              closedForm = FALSE, cores = 1,
+                              closedForm = FALSE, verify = TRUE, cores = 1,
                               cores.conditions = cores, cores.GLp = cores,
                               control = reconstControl(),
                               liesym = liesymControl(),
-                              scaling = scalingControl()) {
+                              scaling = scalingControl(),
+                              symEngine = c("modular", "symbolic")) {
 
   if (!requireNamespace("reticulate", quietly = TRUE))
     stop("Package 'reticulate' is required for symmetryDetection().")
+  symEngine <- match.arg(symEngine)
   method <- match.arg(method)
   equilibrate <- isTRUE(equilibrate)
 
@@ -352,6 +378,32 @@ symmetryDetection <- function(f = NULL, g = NULL, trafo = NULL,
   }
 
   if (method == "observability") {
+    # pure-symbolic cross-check engine: builds the observability-identifiability matrix
+    # d/dz[g, L_f g, ...] and reduces its rank/nullspace with sympy over the exact
+    # rational-function field -- no finite fields, no power/Hill recast (base^exp stays a
+    # symbolic atom), and the Lie order is carried to the exact saturation bound so no
+    # verify guard is needed. Independent from the modular kernel, hence a strong
+    # cross-check, but only for SMALL models. Single condition; conditions/events/gaps
+    # and the closed-form reconstruction machinery do not apply here.
+    if (symEngine == "symbolic") {
+      if ((!is.null(conditions) && nrow(as.data.frame(conditions)) > 0L) ||
+          (!is.null(events) && nrow(as.data.frame(events)) > 0L))
+        stop("symEngine = \"symbolic\" handles single-condition observability only; ",
+             "conditions and events are not yet supported. Use symEngine = \"modular\".",
+             call. = FALSE)
+      sr <- sd$observabilitySympy(
+        model = toLines(fdyn), observation = toLines(gobs),
+        fixed = if (length(fixed)) fixed else NULL,
+        inputs = if (length(forcings)) forcings else NULL,
+        equilibrate = equilibrate)
+      if (!isTRUE(sr$ok))
+        stop("symEngine = \"symbolic\": ",
+             if (!is.null(sr$why)) sr$why else "could not build the symbolic system.",
+             call. = FALSE)
+      sr$method <- "observability"; sr$engine <- "symbolic"
+      sr$lieOrderUsed <- as.integer(sr$lieOrder)
+      return(structure(sr, class = "symmetryDetection"))
+    }
     # grid-substitution targets include symbols that appear only in initial
     # values, event values or a per-condition trafo, so they can be fixed too
     extraSyms <- c(if (!is.null(initial)) getSymbols(as.character(as.eqnvec(initial))),
@@ -403,7 +455,8 @@ symmetryDetection <- function(f = NULL, g = NULL, trafo = NULL,
              coresConditions = cores.conditions, coresGLp = cores.GLp,
              equilZeroStates = equilZeroStates, t0events = res$events0,
              nConditions = res$nConditions, chainOf = res$chainOf,
-             nGaps = res$nGaps, implicitSteadyState = isTRUE(ui), control = control))
+             nGaps = res$nGaps, implicitSteadyState = isTRUE(ui), control = control,
+             verify = verify))
     }
     ro <- runObs(useImplicit)
     ## explicit-eliminated fallback removed (deprecated): the implicit path no longer
@@ -425,7 +478,14 @@ symmetryDetection <- function(f = NULL, g = NULL, trafo = NULL,
            "\nA logarithmic observable log10(h) + offset equals the rational ",
            "observable scale * h; supply it in that form, or use ",
            "method = \"liesym\".", call. = FALSE)
-    return(ro$result)
+    res <- ro$result
+    if (isTRUE(verify) && is.list(res) && is.list(res$verification) &&
+        isFALSE(res$verification$ok))
+      warning("symmetryDetection(verify = TRUE): the Schwartz-Zippel saturation guard ",
+              "found the rank still growing past the reported Lie order -- the ",
+              "directions may be over-reported; inspect $verification (",
+              res$verification$reason, ").", call. = FALSE)
+    return(res)
   }
 
   # scaling: exact integer-kernel engine. A known-value dose (replace/add) pins the
@@ -479,6 +539,44 @@ symmetryDetection <- function(f = NULL, g = NULL, trafo = NULL,
     ))
   structure(res, class = "symmetryDetection")
 }
+
+
+# ---- Schwartz-Zippel saturation guard (verify = TRUE) ---------------------------
+# A fast, single-point cross-check of the ONE thing the observability heuristic can get
+# wrong silently: stopping the Lie order too early. The plateau rule declares the rank
+# saturated once it stops growing for a few orders, but a rank can plateau then grow again
+# (a Hill exponent only observable through a high-order derivative), so a premature stop
+# over-reports non-identifiability. The guard re-uses the kernel that the main analysis
+# already built and its base point -- whose modular steady-state solve is cached at the
+# saturation prime -- and simply extends the Lie order past NtUsed. Only the Lie jet grows;
+# the (expensive) f = 0 solve is not repeated, so this is a handful of matrix ranks, not a
+# second analysis. If the rank climbs past the reported value the saturation was premature.
+# By Schwartz-Zippel the modular rank at the point equals the generic rank almost surely.
+# Directions themselves are already certified at a fresh prime during reconstruction and
+# the scalings are exact, so the residual risk the guard closes is exactly the Lie stop.
+.sym_sz_saturation_guard <- function(kcall, point0Solved, NtUsed, reportedRank,
+                                     margin = as.integer(Sys.getenv("DMOD_SYM_VERIFY_MARGIN", "6"))) {
+  P <- .symPrimes[1]                          # saturation prime: point0Solved's solve is cached
+  r0 <- tryCatch(kcall(point0Solved, P, as.integer(NtUsed)), error = function(e) NULL)
+  if (is.null(r0) || !isTRUE(r0$ok))
+    return(list(ok = NA, method = "saturation guard",
+                reason = "base point not re-evaluable"))
+  base <- as.integer(r0$rank); maxR <- base; growAt <- NA_integer_
+  for (k in seq_len(max(1L, margin))) {       # extend the Lie order; only the jet grows
+    rk <- tryCatch(kcall(point0Solved, P, as.integer(NtUsed + k)), error = function(e) NULL)
+    if (is.null(rk) || !isTRUE(rk$ok)) next
+    if (as.integer(rk$rank) > maxR) maxR <- as.integer(rk$rank)
+    if (as.integer(rk$rank) > base) { growAt <- as.integer(NtUsed + k); break }
+  }
+  ok <- is.na(growAt)
+  list(ok = ok, method = "saturation guard", lieOrderUsed = as.integer(NtUsed),
+       ordersChecked = as.integer(NtUsed + max(1L, margin)),
+       kernelRank = base, kernelRankExtended = maxR, growAt = growAt,
+       reason = if (ok)
+         sprintf("rank %d stable through Lie order %d (%d orders beyond the reported saturation)",
+                 base, NtUsed + max(1L, margin), max(1L, margin))
+       else sprintf("rank grows %d -> %d at Lie order %d (the reported Lie order was premature)",
+                    base, maxR, growAt))}
 
 
 # States pinned to a known absolute value by an event (a numeric replace/add dose):
@@ -1807,15 +1905,28 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
   point0 <- pool(seq_len(nLeaves))
   poolNext <- nLeaves + 1L
 
+  # plateauNeed consecutive non-growing Lie orders required before declaring the rank
+  # saturated. A single plateau stops early on models whose rank has an intermediate
+  # plateau then grows again (e.g. a Hill exponent that only becomes observable through a
+  # high-order derivative -- the SMAD symbolic rank runs ...227,227,230,230,230,233...),
+  # spuriously reporting those params as non-identifiable. Default 3 clears the
+  # intermediate plateaus seen in practice; the verify = TRUE cross-check (integer
+  # exponents saturate cleanly, no such plateaus) is the backstop for anything a finite
+  # plateau would still miss. DMOD_SYM_LIEPLATEAU overrides; DMOD_SYM_LIEDIAG traces.
+  plateauNeed <- max(1L, as.integer(Sys.getenv("DMOD_SYM_LIEPLATEAU", "3")))
+  lieDiag <- nzchar(Sys.getenv("DMOD_SYM_LIEDIAG"))
   saturateNt <- function(point, Mtot) {
-    prev <- -1L; Nt <- 1L; res <- NULL
+    prev <- -1L; Nt <- 1L; res <- NULL; flat <- 0L; ranks <- integer(0)
     repeat {
       r <- kcall(point, P, Nt, Mtot)
       if (!isTRUE(r$ok)) return(NULL)
-      res <- r
-      if (r$rank >= nz || (r$rank == prev && Nt >= 2L) || Nt > nz + 1L) break
+      res <- r; ranks <- c(ranks, r$rank)
+      flat <- if (r$rank == prev) flat + 1L else 0L
+      if (r$rank >= nz || (flat >= plateauNeed && Nt >= 2L) || Nt > nz + 1L) break
       prev <- r$rank; Nt <- Nt + 1L
     }
+    if (lieDiag) message("[liediag] Mtot=", Mtot, " ranks by Lie order: ",
+                         paste(ranks, collapse = ","), " (nz=", nz, ")")
     list(res = res, Nt = Nt)
   }
 
@@ -2013,7 +2124,7 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
                                           t0events = list(), nConditions = NULL,
                                           chainOf = NULL, nGaps = 0L,
                                           implicitSteadyState = FALSE,
-                                          control = reconstControl()) {
+                                          control = reconstControl(), verify = FALSE) {
   ctrl <- control
   jointSS <- isTRUE(multi$jointSteadyState) && isTRUE(implicitSteadyState)
   cores <- as.integer(max(1L, coresConditions))
@@ -2207,7 +2318,13 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
         LCol    = match(as.character(rc$L),    znamesL),
         expCol  = match(as.character(rc$exp),  znamesL),
         expSlot = slotOfName(as.character(rc$exp)),
-        LSlot   = slotOfName(as.character(rc$L))))
+        LSlot   = slotOfName(as.character(rc$L)),
+        # a state base is log-normalised (its column carries xi_base/base); a parameter
+        # base -- a Michaelis constant that only appears under the exponent, kept as a
+        # coordinate so the pool/Km co-scaling is reported -- is not, so its column
+        # carries xi_base and the relation coefficient picks up a 1/base factor.
+        baseSlot  = slotOfName(as.character(rc$base)),
+        baseParam = as.character(rc$base) %in% paramNames))
       # constraint columns that legitimately map to no z-coordinate: forcings and
       # sink-cluster states (held at 0) and any `fixed` leaf. A df column outside
       # this set that fails to map into znames is a lost constraint (a bug) - flag it.
@@ -2388,13 +2505,20 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
           for (rc in recastRel) {
             expv <- as.numeric(sc0$ptc[rc$expSlot]) %% p
             Lv   <- as.numeric(sc0$ptc[rc$LSlot]) %% p
+            # 1/base factor for a non-log-normalised parameter base (state base: 1)
+            bScale <- 1
+            if (isTRUE(rc$baseParam)) {
+              bv <- as.numeric(sc0$ptc[rc$baseSlot]) %% p
+              if (bv == 0) return(list(ok = FALSE))     # degenerate point, resample
+              bScale <- .sym_invmod(bv, p)
+            }
             r1 <- numeric(nzWide)                       # E = base^exp
             r1[wc[rc$ECol]]    <- 1
-            r1[wc[rc$baseCol]] <- (-expv) %% p
+            r1[wc[rc$baseCol]] <- (p - .sym_mulmod(expv, bScale, p)) %% p   # -exp/base
             r1[wc[rc$expCol]]  <- (-Lv) %% p
             r2 <- numeric(nzWide)                       # L = log(base)
             r2[wc[rc$LCol]]    <- 1
-            r2[wc[rc$baseCol]] <- (p - 1)
+            r2[wc[rc$baseCol]] <- (p - bScale) %% p                         # -1/base
             blocks[[length(blocks) + 1L]] <- rbind(r1, r2)
           }
         }
@@ -2440,7 +2564,10 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
   # joint mode: the state columns are log-normalised in kcall4, so their z-value is
   # the (dimensionless) weight coordinate with unit value; set the base point's
   # state slots to 1 so the peel forms tangent = weight * 1 for a state column and
-  # weight * paramvalue for a parameter column.
+  # weight * paramvalue for a parameter column. This overwrites the resting-state
+  # values in point0, so keep the ORIGINAL solved point (its modular steady state is
+  # cached) for the verify guard, which re-evaluates the kernel at higher Lie order.
+  point0Solved <- sc$point0
   if (jointSS)
     for (col in which(znames %in% as.character(multi$zStateNames)))
       sc$point0[zSlots[col] + 1L] <- 1
@@ -2919,6 +3046,17 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
       d
     })
   }
+  # Schwartz-Zippel saturation guard: re-saturate the SAME kernel with a wider plateau
+  # (more consecutive non-growing Lie orders required) and check the rank does not climb
+  # past the reported value. The plateau rule is the one step that can stop early and
+  # silently over-report; a wider re-saturation catches an intermediate plateau it slipped
+  # through. This is one saturation pass -- find a modular point, extend the Lie jet -- not
+  # a second analysis (no peeling, no reconstruction). Only reached when non-identifiable.
+  if (isTRUE(verify))
+    result$verification <- tryCatch(
+      .sym_sz_saturation_guard(kcall, point0Solved, sc$NtUsed, sc$rank),
+      error = function(e) list(ok = NA, method = "saturation guard",
+                               reason = conditionMessage(e)))
   result
 }
 
@@ -3999,6 +4137,17 @@ summary.symmetryDetection <- function(object, ...) {
     cat(sprintf("%d structural non-identifiability direction(s):\n",
                 length(object$nonIdentifiable)))
     for (d in object$nonIdentifiable) .sym_print_direction(d)
+    v <- object$verification
+    if (is.list(v)) {
+      if (isTRUE(v$ok))
+        cat(sprintf("\nSchwartz-Zippel saturation guard: PASSED (%s).\n", v$reason))
+      else if (isFALSE(v$ok))
+        cat(sprintf("\nSchwartz-Zippel saturation guard: FAILED -- %s.\n  The reported directions may be over-reported; raise the Lie order.\n",
+                    v$reason))
+      else
+        cat(sprintf("\nSchwartz-Zippel saturation guard: inconclusive (%s).\n",
+                    if (!is.null(v$reason)) v$reason else "unavailable"))
+    }
   } else if (engine == "scaling") {
     cat(sprintf("%d scaling symmetry/ies (exact integer kernel):\n", object$count))
     for (d in object$nonIdentifiable) .sym_print_direction(d)
