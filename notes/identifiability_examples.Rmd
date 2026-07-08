@@ -314,5 +314,5 @@ is locally identifiable (full OIM rank verified).
 
 The non-scaling direction in Example 2 cannot be found by
 `method = "scaling"` in `symmetryDetection()`; it requires
-`method = "observability"` or `method = "liesym"`.
+`method = "observability"` or `method = "polynomial"`.
 

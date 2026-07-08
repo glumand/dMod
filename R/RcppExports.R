@@ -125,8 +125,16 @@ symObsNullChain <- function(chains, nLeaves, nStates, zSlots, point, pIn, Nt, Mt
     .Call(`_dMod_symObsNullChain`, chains, nLeaves, nStates, zSlots, point, pIn, Nt, Mtot, cores)
 }
 
+symObsNullChainSeedBatch <- function(chains, evalChain, seeds, primes, nLeaves, nStates, zSlots, Nt, Mtot, cores = 1L) {
+    .Call(`_dMod_symObsNullChainSeedBatch`, chains, evalChain, seeds, primes, nLeaves, nStates, zSlots, Nt, Mtot, cores)
+}
+
 symSolveMod <- function(A, b, pIn) {
     .Call(`_dMod_symSolveMod`, A, b, pIn)
+}
+
+symRrefMod <- function(M, pIn) {
+    .Call(`_dMod_symRrefMod`, M, pIn)
 }
 
 symFitRational <- function(sampleU, mons, rvals, pIn) {

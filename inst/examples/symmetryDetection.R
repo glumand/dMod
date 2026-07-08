@@ -23,12 +23,11 @@ g <- eqnvec(Aobs = "alpha * A")
 
 summary(symmetryDetection(reactions, g, method = "observability",
                           reduceCQ = TRUE, closedForm = TRUE))
-summary(symmetryDetection(reactions, g, method = "liesym", reduceCQ = FALSE,
-                          liesym = liesymControl(ansatz = "uni", pMax = 1L)))
+summary(symmetryDetection(reactions, g, method = "polynomial", reduceCQ = FALSE,
+                          polynomial = polynomialControl(ansatz = "uni", pMax = 1L)))
 summary(symmetryDetection(reactions, g, method = "scaling", reduceCQ = FALSE))
-# symEngine = "symbolic" recomputes the observability engine on an INDEPENDENT
-# pure-sympy path (exact, no finite fields, no power/Hill recast) -- a cross-check for
-# the default "modular" (GF(p) + CRT) engine, practical for the small models here.
+# symEngine = "symbolic": an independent pure-sympy cross-check of the default
+# "modular" (GF(p) + CRT) engine, for the small models here.
 summary(symmetryDetection(reactions, g, method = "observability",
                           reduceCQ = TRUE, symEngine = "symbolic"))
 
@@ -43,10 +42,8 @@ summary(symmetryDetection(reactions, g, method = "observability",
 res <- symmetryDetection(reactions, g, method = "observability", equilibrate = TRUE,
                          closedForm = TRUE)
 summary(res)
-# the pure-symbolic engine handles equilibrate too (rational steady state solved and
-# substituted); the same two directions, spanned differently
-summary(symmetryDetection(reactions, g, method = "observability", equilibrate = TRUE,
-                          symEngine = "symbolic"))
+# symEngine = "symbolic" does not solve steady states itself: pass an explicit
+# resting state via `trafo` (from steadyStates()) instead of equilibrate = TRUE.
 
 
 ## 3. An enzyme assay and its hidden symmetries -------------------------------
@@ -72,14 +69,15 @@ summary(symmetryDetection(f, g.enz, method = "scaling"))   # the same two
 # less mRNA well translated give the same protein. The two rates are confined to
 # the hyperbola ktx*ktl = const; any point on it yields the same trajectory
 # (only the product, setting the steady state, is identifiable). The single
-# returned direction (ktx:1, ktl:-ktl/ktx, m:m/ktx) is the tangent of that curve.
+# returned direction is the [scaling] generator ktl d/dktl - ktx d/dktx - m d/dm,
+# the tangent of that curve.
 
 gene <- eqnvec(m = "ktx - dm*m", p = "ktl*m - dp*p")   # mRNA hidden
 curve <- symmetryDetection(gene, eqnvec(y = "p"), method = "observability",
                            closedForm = TRUE)
 
 summary(curve)
-# the same curve, reconstructed exactly by the independent pure-symbolic engine
+# the same curve from the independent pure-symbolic engine
 summary(symmetryDetection(gene, eqnvec(y = "p"), method = "observability",
                           symEngine = "symbolic"))
 ## 5. Stacking conditions resolves a switch-gated rate ------------------------
@@ -98,6 +96,10 @@ multi <- symmetryDetection(fu, eqnvec(y = "A"), method = "observability",
                            events = events, conditions = cond.grid)
 
 summary(multi)
+# the pure-symbolic engine stacks conditions too -- an independent cross-check of
+# the multi-condition verdict for small models
+summary(symmetryDetection(fu, eqnvec(y = "A"), method = "observability",
+                          events = events, conditions = cond.grid, symEngine = "symbolic"))
 
 
 ## 6. Pre-equilibration: a steady-state initial condition ---------------------
@@ -139,8 +141,9 @@ summary(res)
 # fractional-root steady state, so the roles invert (E solved, base and log(base)
 # generic) and the direction is rational.
 
-# self-inhibition with a free Hill exponent n: n is identifiable, and the
-# direction that frees it returns with its log(base) factor
+# a free Hill exponent n on a Michaelis constant (the parameter base K^n): n is
+# non-identifiable -- it confounds with K, carrying an explicit log(base) factor
+# (xi_n = 1, xi_K = (K/n) log((k_pr_FB/d_FB)/K); see vignette("symmetryDetection"))
 hill <- eqnlist() |>
   addReaction("0",  "FB", "k_pr_FB")                     |>
   addReaction("FB", "0",  "d_FB * FB")                   |>
@@ -172,10 +175,7 @@ symmetryDetection(eqnvec(x = "kpr - dp*x^q + kin*u", u = "0"), eqnvec(y = "s*x")
 # receptor and the unphosphorylated kinase pools are hidden: the system is only
 # partially observed. Everything is mass-action (rational right-hand sides, no
 # free exponents), so every non-identifiable direction is recovered in closed
-# form, including the one non-monomial direction. The SMAD model below adds a
-# feedback through a Hill term with a free exponent nhill; that direction is a
-# weighted scaling whose weight is the exponent itself (xi_kinh = -nhill * kinh),
-# recovered in closed form via its minimal support in log coordinates.
+# form, including the one non-monomial direction.
 
 reactions <- eqnlist() |>
   addReaction("EGF + EGFR", "EGF_EGFR", "k_bind * EGF * EGFR") |>
@@ -249,23 +249,17 @@ summary(rmes30)
 
 ## 10. A real-world signalling network at scale ------------------------------
 #
-# A two-receptor TGF-beta / SMAD signalling model: receptor mRNA transcription
-# with Hill-type transcriptional feedback (a free exponent nhill on each feedback
-# species), translation and degradation, ligand binding to each receptor, the
-# active signalling complex, SMAD2/3 phosphorylation, the trimeric SMAD complex
-# with SMAD4, and three feedback genes, measured through scaled phospho- and
-# total-SMAD, the SMAD4 co-IP and the receptor mRNAs. The perturbations toggle
-# transcription (ActD), translation (CHX) and the proteasome (MG132), or knock a
-# receptor down, set per condition by events and a per-condition trafo list. The
-# model has 26 dynamic states and three conserved SMAD moieties, far beyond a
-# symbolic determining system. The pre-stimulus resting state is imposed with
-# equilibrate = TRUE: the states stay coordinates and f = 0 enters as a tangency
-# constraint solved per prime, the TGFb dose applied on top. (The explicit route --
-# feeding a steadyStates() solution through the trafo -- needs a rational steady
-# state; SMAD's Hill feedback makes it non-rational, so equilibrate is the route
-# here.) The free Hill exponents make the transcription rates non-rational; they are
-# recast to a rational coordinate (the log handled as a generic coordinate), so the
-# finite-field analysis still applies and runs in a few minutes.
+# A two-receptor TGF-beta / SMAD signalling model: 26 dynamic states and three
+# conserved SMAD moieties, far beyond a symbolic determining system. Receptor mRNA
+# transcription under Hill-type feedback (a free exponent on each feedback species),
+# translation, degradation, ligand binding, the active complex, SMAD2/3
+# phosphorylation and the trimeric SMAD4 complex, with three feedback genes. Only
+# scaled phospho-/total-SMAD, the SMAD4 co-IP and the receptor mRNAs are measured.
+# Perturbations toggle transcription (ActD), translation (CHX) and the proteasome
+# (MG132) or knock a receptor down, entered per condition through events and a trafo
+# list. equilibrate = TRUE imposes the resting state (SMAD's Hill feedback makes it
+# non-rational, so no explicit steadyStates() form exists); the free Hill exponents
+# are recast to rational coordinates, so the finite-field analysis still applies.
 
 addRC <- function(eq, from, to, rate, ...) addReaction(eq, from, to, rate, compartment = "Cell", ...)
 addRE <- function(eq, from, to, rate, ...) addReaction(eq, from, to, rate, compartment = "extraCell", ...)
@@ -278,9 +272,6 @@ reactions <- eqnlist() |>
   addRC("", "FB2mRNA", "k_pr_FB2mRNA * C3^nhill_FB2mRNA / (Km_FB2mRNA^nhill_FB2mRNA + C3^nhill_FB2mRNA) * (1 - bool_ActD)") |>
   addRC("", "FB3mRNA", "k_pr_FB3mRNA * C3^nhill_FB3mRNA / (Km_FB3mRNA^nhill_FB3mRNA + C3^nhill_FB3mRNA) * (1 - bool_ActD)") |>
   addRC("", "FB4mRNA", "k_pr_FB4mRNA * C3^nhill_FB4mRNA / (Km_FB4mRNA^nhill_FB4mRNA + C3^nhill_FB4mRNA) * (1 - bool_ActD)") |>
-  # addRC("", "FB2mRNA", "k_pr_FB2mRNA * C3 * (1 - bool_ActD)") |>
-  # addRC("", "FB3mRNA", "k_pr_FB3mRNA * C3 * (1 - bool_ActD)") |>
-  # addRC("", "FB4mRNA", "k_pr_FB4mRNA * C3 * (1 - bool_ActD)") |>
   addRC("R1mRNA", "", "k_dg_R1mRNA * R1mRNA") |> addRC("R2mRNA", "", "k_dg_R2mRNA * R2mRNA") |>
   addRC("FB2mRNA", "", "k_dg_FB2 * FB2mRNA") |> addRC("FB3mRNA", "", "k_dg_FB3 * FB3mRNA") |>
   addRC("FB4mRNA", "", "k_dg_FB4 * FB4mRNA") |>
@@ -361,38 +352,24 @@ cond.trafo <- eqnvec() |>
   define("x~x", x = getParameters(reactions, events)) |> 
   branch(table = cond.grid, apply = "insert")
 
-# switches and ligand are forcings. equilibrate imposes the resting state implicitly;
-# the TGFb dose is applied on top, and the perturbations enter through the trafo list.
-# In the equilibrate path each sample point's steady state is solved per condition, so
-# cores.GLp (per-point parallelism) is the knob that matters here, not cores.conditions;
-# raise it towards the number of physical cores. It parallelises on every platform: on
-# unix by forking, elsewhere (Windows) through a PSOCK pool of Python interpreters that
-# fill the coupled steady-state solves -- the dominant cost -- in parallel.
+# switches and ligand are forcings; equilibrate imposes the resting state, the TGFb
+# dose on top, and the perturbations enter through the trafo list. cores.GLp (or
+# cores) parallelises the steady-state solves and the chain-kernel batch; raise it
+# towards the number of physical cores.
 outsmad <- symmetryDetection(
   reactions, observables, method = "observability",
   events = events, trafo = cond.trafo,
   forcings = c("bool_ActD","bool_CHX","bool_MG132","TGFb"),
   equilibrate = TRUE, reduceCQ = TRUE, closedForm = TRUE,
-  cores.GLp = 20)
+  cores.GLp = 6)
 
-# rank 62 / 71: 8 of the 9 non-identifiabilities close in closed form (a few minutes).
-# The known TGFb dose (init_TGFb, pinned to 1 by the trafo grid) is baked in and is not
-# a symmetry. The eight closed directions are:
-#   - the mRNA/protein synthesis scalings (each k_pr_X paired with its readout scale),
-#   - the pSmad-feedback inhibition group,
-#   - both receptor Hill feedbacks, each a parameter-weighted scaling recovered exactly
-#     over Q(nhill) by the toric peel: xi_kinh = -nhill * kinh (the inhibition strength
-#     against the feedback protein's synthesis rate; the Hill exponents are identifiable).
-# The 9th direction stays open (reported by support only): the SMAD-pool/exponent
-# confound couples the conserved totals and observation scales with the complex-
-# formation rate AND the feedback-mRNA production rates and Hill exponents nhill_FB*.
-# It is a single wide direction that entangles a pool scaling with the feedbacks' Hill
-# terms. A random multi-parameter perturbation almost never admits an interior modular
-# steady state at every reconstruction prime, so it is reconstructed per prime (each
-# prime fills its own solvable points, coefficients lifted by CRT); but the coupled
-# steady state's solvable points are too degenerate to recover a form that reproduces
-# the direction at a fresh prime (raising perprimeCap/degreeCap/timeout does not help --
-# it still fails verification), consistent with a transcendental pool/exponent confound
-# (exp-sensitivity ~ base^n * log base). It is therefore honestly returned by support,
-# never a wrong closed form (the fresh-prime verifier rejects the degenerate fit).
+# rank 65 / 74: nine non-identifiable directions, all scalings recovered exactly from
+# the integer kernel. They are the two receptor mRNA/protein synthesis scalings (each
+# paired with its readout scale and knockdown rate), the three feedback protein/mRNA
+# synthesis scalings, the pSmad-feedback inhibition group, the two receptor Hill
+# feedbacks (parameter-weighted scalings xi_kinh = -nhill * kinh: the inhibition
+# strength against the feedback's synthesis rate, the Hill exponents identifiable), and
+# one wide SMAD-pool scaling trading the conserved totals and feedback Km's against the
+# readout gains and the complex-formation rate. The known TGFb dose (init_TGFb) is
+# baked in by the trafo grid, not a symmetry.
 summary(outsmad)

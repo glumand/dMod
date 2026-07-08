@@ -17,5 +17,5 @@ Bundles the scaling (toric) symmetry engine's parameters into one object, passed
 as \code{symmetryDetection(..., scaling = scalingControl(...))}.
 }
 \seealso{
-\code{\link[=symmetryDetection]{symmetryDetection()}}, \code{\link[=liesymControl]{liesymControl()}}
+\code{\link[=symmetryDetection]{symmetryDetection()}}, \code{\link[=polynomialControl]{polynomialControl()}}
 }

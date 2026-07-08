@@ -65,9 +65,12 @@ test_that("nlmeFit(method='focei') runs on a minimal one-eta NLME prdfn", {
 
 
 test_that("nlmeFit() rejects unknown method via match.arg", {
+  # Match on the choices list rather than match.arg()'s boilerplate ("should be
+  # one of"), which is localised — on a non-English locale R prints e.g.
+  # "'arg' sollte eines von ..." and an English-only regexp would spuriously fail.
   expect_error(nlmeFit(obj = NULL, omega = NULL, init = c(p = 1),
                        method = "doesNotExist"),
-               "'arg' should be one of")
+               "foceiQuadrature")
 })
 
 

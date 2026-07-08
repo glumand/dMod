@@ -21,6 +21,8 @@ reconstControl(
   minsupportCandCap = 20000L,
   perprimeCap = 120L,
   perprimeMinPrimes = 3L,
+  certifyPoly = FALSE,
+  certifyPolyDeg = NULL,
   timeout = Inf
 )
 }
@@ -56,9 +58,9 @@ degree bounds of the general sparse-rational (Cauchy + Ben-Or-Tiwari) path.}
 state exactly across later (post-stimulus) event boundaries.}
 
 \item{minsupportCandCap}{Cap on the number of column subsets the minimal-support
-peel enumerates when hunting narrow nullspace cocircuits. A genuinely wide
+search enumerates when hunting narrow nullspace cocircuits. A genuinely wide
 direction has no small-support cocircuit, so an exhaustive scan would test
-\code{choose(support, s)} subsets fruitlessly; the peel stops at this cap and lets
+\code{choose(support, s)} subsets fruitlessly; the search stops at this cap and lets
 any wide direction fall through to the free-column fit. Raise it only to peel
 cocircuits of unusually large support.}
 
@@ -80,6 +82,15 @@ per-prime path to lift a coefficient by CRT. A prime whose coupled solve never
 succeeds under the direction's perturbations is dropped; the rational
 reconstruction then runs over the remaining primes (their product still bounds
 the coefficient height). Below this many live primes the entry is support-only.}
+
+\item{certifyPoly}{Logical. For each \code{"affine"}/\code{"polynomial"} direction, run the
+polynomial Lie-symmetry engine (\code{method = "polynomial"}) and set \verb{$certified}
+to whether the direction is a nonzero constant combination of its generators --
+i.e. an exact polynomial Lie point symmetry, not merely an observability
+non-identifiability. \code{FALSE} by default; it is comparatively expensive.}
+
+\item{certifyPolyDeg}{Ansatz degree for \code{certifyPoly}; \code{NULL} (default) uses each
+direction's own classified degree.}
 
 \item{timeout}{Wall-clock budget in seconds for the closed-form reconstruction
 (\code{closedForm = TRUE}). When it is exceeded, the directions still being

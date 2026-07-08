@@ -22,8 +22,11 @@
 using namespace Rcpp;
 
 typedef uint64_t u64;
-typedef __int128 i128;
-typedef unsigned __int128 u128;
+// __int128 is a GCC/Clang extension (not ISO C++), used here for a 128-bit
+// accumulator in modular multiply / CRT. __extension__ marks the use as a
+// deliberate extension so -Wpedantic stays quiet without blanket-suppressing it.
+__extension__ typedef __int128 i128;
+__extension__ typedef unsigned __int128 u128;
 
 namespace {
 
@@ -719,7 +722,7 @@ bool build_one_chain(const std::vector<SegRaw>& segs, int nLeaves, int nStates,
 // Value of every output slot of a straight-line value tape (opcodes
 // CONST/ADD/MUL/INV) at the integer leaves mod p. Returns false on a zero
 // reciprocal.
-bool seed_tape_value(const std::vector<int>& op, const std::vector<int>& a,
+[[maybe_unused]] bool seed_tape_value(const std::vector<int>& op, const std::vector<int>& a,
                      const std::vector<int>& b, const std::vector<u64>& cval,
                      const std::vector<u64>& leaf, int nLeaves, u64 p,
                      std::vector<u64>& val) {
@@ -738,7 +741,7 @@ bool seed_tape_value(const std::vector<int>& op, const std::vector<int>& a,
 
 // Value and forward-mode duals (dual column j is d/d(leaf j), w = nLeaves + 1) of
 // every output slot of a straight-line tape. Returns false on a zero reciprocal.
-bool seed_tape_dual(const std::vector<int>& op, const std::vector<int>& a,
+[[maybe_unused]] bool seed_tape_dual(const std::vector<int>& op, const std::vector<int>& a,
                     const std::vector<int>& b, const std::vector<u64>& cval,
                     const std::vector<u64>& leaf, int nLeaves, u64 p,
                     std::vector<std::vector<u64> >& val) {
@@ -769,7 +772,7 @@ bool seed_tape_dual(const std::vector<int>& op, const std::vector<int>& a,
 }
 
 // Solve A X = B over GF(p), A n x n, B n x k. Returns false when A is singular.
-bool seed_solve_mod(const std::vector<std::vector<u64> >& A,
+[[maybe_unused]] bool seed_solve_mod(const std::vector<std::vector<u64> >& A,
                     const std::vector<std::vector<u64> >& B, u64 p,
                     std::vector<std::vector<u64> >& X) {
   int n = (int)A.size();
@@ -1006,6 +1009,97 @@ List symObsNullChain(List chains, int nLeaves, int nStates, IntegerVector zSlots
                       _["rank"] = rank, _["dim"] = nz);
 }
 
+// Batched seeded single-chain observability: evaluate, for many (chain, seed, prime)
+// triples, one condition's multi-segment observability rows, one OpenMP task per
+// triple. This is the batched twin of the joint/equilibrate path's per-condition,
+// per-point symObsNullChain calls (which run serially, cores=1, one condition each):
+// the reconstruction sample bank supplies every (sample point, condition) pair with
+// its pre-solved steady-state seed, and they are evaluated in parallel here. `chains`
+// is a list of conditions' segment lists; evalChain[e] selects the chain for eval e;
+// `seeds` is nB x nLeaves (the seed leaf residues, states already written in); each
+// eval carries its own prime. Segments are extracted once per (chain, distinct prime)
+// in a serial pre-pass (extract_seg_raw reduces constants per prime and touches R).
+// Returns a list of nB results, each shaped like symObsNullChain (ok, R = rank x nz
+// reduced rows, pivots, rank, dim); a vanishing denominator yields ok = FALSE.
+// [[Rcpp::export]]
+List symObsNullChainSeedBatch(List chains, IntegerVector evalChain,
+                              IntegerMatrix seeds, NumericVector primes,
+                              int nLeaves, int nStates, IntegerVector zSlots,
+                              int Nt, int Mtot, int cores = 1) {
+  int nz = zSlots.size(), w = nz + 1;
+  int T = chains.size();
+  int nB = evalChain.size();
+  std::vector<int> dualCol(nLeaves, -1);
+  for (int c = 0; c < nz; ++c) dualCol[zSlots[c]] = c;
+
+  // primes and their distinct set (extraction is per distinct prime)
+  std::vector<u64> pr(nB);
+  for (int e = 0; e < nB; ++e) pr[e] = (u64)primes[e];
+  std::vector<u64> distinct;
+  std::vector<int> primeIdx(nB);
+  for (int e = 0; e < nB; ++e) {
+    int idx = -1;
+    for (size_t k = 0; k < distinct.size(); ++k) if (distinct[k] == pr[e]) { idx = (int)k; break; }
+    if (idx < 0) { idx = (int)distinct.size(); distinct.push_back(pr[e]); }
+    primeIdx[e] = idx;
+  }
+  int nPr = (int)distinct.size();
+
+  // serial pre-pass: extract every chain's segments per distinct prime into
+  // thread-safe plain C++, so the parallel build below touches no R object.
+  std::vector<std::vector<std::vector<SegRaw> > >
+      segsRaw(nPr, std::vector<std::vector<SegRaw> >(T));
+  for (int t = 0; t < T; ++t) {
+    List segs = chains[t];
+    int nSeg = segs.size();
+    for (int pi = 0; pi < nPr; ++pi) {
+      segsRaw[pi][t].reserve(nSeg);
+      for (int sj = 0; sj < nSeg; ++sj)
+        segsRaw[pi][t].push_back(extract_seg_raw(segs[sj], nStates, w, distinct[pi]));
+    }
+  }
+
+  std::vector<int> ec(nB);
+  for (int e = 0; e < nB; ++e) ec[e] = evalChain[e];
+  std::vector<int> sd((size_t)nB * nLeaves);
+  for (int e = 0; e < nB; ++e)
+    for (int L = 0; L < nLeaves; ++L) sd[(size_t)e * nLeaves + L] = seeds(e, L);
+
+  std::vector<char> okFlag(nB, 1);
+  std::vector<std::vector<std::vector<u64> > > redRows(nB);
+  std::vector<std::vector<int> > redPiv(nB);
+  #pragma omp parallel for num_threads(cores > 0 ? cores : 1) schedule(dynamic) \
+          if (cores > 1 && nB > 1)
+  for (int e = 0; e < nB; ++e) {
+    u64 p = pr[e];
+    std::vector<int> leafPt(nLeaves);
+    for (int L = 0; L < nLeaves; ++L) leafPt[L] = sd[(size_t)e * nLeaves + L];
+    std::vector<std::vector<u64> > rows;
+    if (!build_one_chain(segsRaw[primeIdx[e]][ec[e]], nLeaves, nStates, nz, w,
+                         dualCol, leafPt, Nt, Mtot, p, rows)) { okFlag[e] = 0; continue; }
+    std::vector<int> pivots = rref_mod(rows, p);
+    int rank = (int)pivots.size();
+    redRows[e].assign(rank, std::vector<u64>(nz));
+    for (int i = 0; i < rank; ++i)
+      for (int c = 0; c < nz; ++c) redRows[e][i][c] = rows[i][c];
+    redPiv[e] = pivots;
+  }
+
+  List out(nB);
+  for (int e = 0; e < nB; ++e) {
+    if (!okFlag[e]) { out[e] = List::create(_["ok"] = false); continue; }
+    int rank = (int)redPiv[e].size();
+    IntegerMatrix R(rank, nz);
+    for (int i = 0; i < rank; ++i)
+      for (int c = 0; c < nz; ++c) R(i, c) = (int)redRows[e][i][c];
+    IntegerVector piv(rank);
+    for (int i = 0; i < rank; ++i) piv[i] = redPiv[e][i];
+    out[e] = List::create(_["ok"] = true, _["R"] = R, _["pivots"] = piv,
+                          _["rank"] = rank, _["dim"] = nz);
+  }
+  return out;
+}
+
 // Solve A x = b over GF(p); returns the solution (free variables zero) or
 // R_NilValue when the system is inconsistent.
 // [[Rcpp::export]]
@@ -1024,6 +1118,32 @@ SEXP symSolveMod(IntegerMatrix A, IntegerVector b, double pIn) {
   for (size_t i = 0; i < pivots.size(); ++i)
     if (pivots[i] < nc) x[pivots[i]] = (int)aug[i][nc];
   return x;
+}
+
+// Reduced row echelon form of a stacked GF(p) matrix. Entries arrive as doubles
+// already in [0, p) (they are log-normalised residues assembled in R); returns the
+// pivot (rank) rows in pivot-column order, the 0-based pivot columns, and the rank.
+// This is the compiled twin of R's .sym_rref_modp for the joint/equilibrate path,
+// where the final reduction runs per accepted sample point.
+// [[Rcpp::export]]
+List symRrefMod(NumericMatrix M, double pIn) {
+  u64 p = (u64)pIn;
+  int nr = M.nrow(), nc = M.ncol();
+  std::vector<std::vector<u64> > A(nr, std::vector<u64>(nc));
+  for (int i = 0; i < nr; ++i)
+    for (int j = 0; j < nc; ++j) {
+      i128 v = (i128)(long long)M(i, j) % (i128)p;
+      if (v < 0) v += p;
+      A[i][j] = (u64)v;
+    }
+  std::vector<int> pivots = rref_mod(A, p);
+  int rank = (int)pivots.size();
+  NumericMatrix R(rank, nc);
+  for (int i = 0; i < rank; ++i)
+    for (int j = 0; j < nc; ++j) R(i, j) = (double)A[i][j];
+  IntegerVector piv(rank);
+  for (int i = 0; i < rank; ++i) piv[i] = pivots[i];   // 0-based, ascending
+  return List::create(_["R"] = R, _["piv"] = piv, _["rank"] = rank);
 }
 
 // Fit a rational function num/den to samples of one nullspace entry over GF(p).

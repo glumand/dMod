@@ -441,26 +441,28 @@ def _obs_rows(obsExpr, infisSym, allVariables, rs):
 ###########################################################################
 
 def _rref_mod_p(A, p):
-    """Vectorized int64 Gauss-Jordan over GF(p). Returns (R, pivots)."""
+    """Vectorized int64 Gauss-Jordan over GF(p). Returns (R, pivots). Only the rows
+    that actually carry the pivot column are eliminated (the scaling matrix is sparse),
+    via a rank-1 update over just those rows A[nz] -= outer(col[nz], pivotRow) mod p
+    (products < p^2 < 2^62 fit int64) -- vectorized, but without touching zero rows."""
     A = (np.asarray(A, dtype=np.int64) % p)
     nrows, ncols = A.shape
     pivots = []
     r = 0
     for c in range(ncols):
-        piv = -1
-        for i in range(r, nrows):
-            if A[i, c] % p != 0:
-                piv = i
-                break
-        if piv == -1:
+        nz = np.nonzero(A[r:, c])[0]
+        if nz.size == 0:
             continue
+        piv = r + int(nz[0])
         if piv != r:
             A[[r, piv]] = A[[piv, r]]
         inv = pow(int(A[r, c]), p - 2, p)
         A[r] = (A[r] * inv) % p
-        for i in range(nrows):
-            if i != r and A[i, c] % p != 0:
-                A[i] = (A[i] - A[i, c] * A[r]) % p
+        col = A[:, c].copy()
+        col[r] = 0
+        nzr = np.nonzero(col)[0]
+        if nzr.size:
+            A[nzr] = (A[nzr] - np.outer(col[nzr], A[r])) % p
         pivots.append(c)
         r += 1
         if r == nrows:
@@ -574,11 +576,77 @@ def _modular_nullspace(M):
     return basis
 
 
-def exactNullspace(rows, ncols):
-    """Return basis vectors (list of sympy column vectors)."""
+def _modular_nullspace_int(rowsInt, ncols):
+    """Exact nullspace of an INTEGER matrix (list of int rows) via multi-prime GF(p) +
+    CRT + rational reconstruction, staying in numpy int with no per-entry sympy (the
+    analogue of _modular_nullspace for the scaling determining matrix). Returns a list
+    of sympy column vectors, or None if reconstruction/validation fails."""
+    A0 = np.asarray(rowsInt, dtype=np.int64)
+    ref_pivots = None
+    free = None
+    residues = {}
+    mods = []
+    for p in _PRIMES:
+        R, pivots = _rref_mod_p(A0 % p, p)
+        if ref_pivots is None:
+            ref_pivots = pivots
+            pivset = set(pivots)
+            free = [c for c in range(ncols) if c not in pivset]
+        elif pivots != ref_pivots:
+            continue
+        mods.append(p)
+        for ki in range(len(ref_pivots)):
+            for f in free:
+                residues.setdefault((ki, f), []).append(int(R[ki, f]) % p)
+        if len(mods) >= 4:
+            break
+    if not mods:
+        return None
+
+    from sympy.ntheory.modular import crt
+    exact = {}
+    for key, res in residues.items():
+        x, Mmod = crt(mods, res)
+        val = _rational_reconstruct(int(x), int(Mmod))
+        if val is None:
+            return None
+        exact[key] = val
+
+    basis = []
+    for f in free:
+        v = [spy.Integer(0)] * ncols
+        v[f] = spy.Integer(1)
+        for ki, c in enumerate(ref_pivots):
+            v[c] = -exact[(ki, f)]
+        basis.append(spy.Matrix(v))
+
+    # exact validation over the integers: clear denominators per basis vector, then
+    # A0 @ W == 0 in one object-dtype matmul (exact big-int, no overflow)
+    if basis:
+        cols = []
+        for v in basis:
+            L = 1
+            for e in v:
+                L = spy.ilcm(L, spy.Rational(e).q)
+            cols.append([int(spy.Rational(e) * L) for e in v])
+        W = np.array(cols, dtype=object).T
+        if np.any(A0.astype(object).dot(W) != 0):
+            return None
+    return basis
+
+
+def exactNullspace(rows, ncols, integer=False):
+    """Return basis vectors (list of sympy column vectors). With integer=True the rows
+    are known to be integer (the scaling determining matrix): the nullspace is computed
+    in numpy int over GF(p) + CRT with no per-entry sympy, falling back to the sympy
+    path below if that does not reconstruct."""
     if not rows:
         return [spy.Matrix([1 if j == c else 0 for j in range(ncols)])
                 for c in range(ncols)]
+    if integer:
+        basis = _modular_nullspace_int(rows, ncols)
+        if basis is not None:
+            return basis
     M = spy.Matrix([[spy.sympify(x) for x in row] for row in rows])
     # the modular solver needs a rational matrix; transcendental constants
     # (e.g. log(10) from a log10 observable) route to the exact sympy nullspace
@@ -723,6 +791,189 @@ def buildTransformation(infis, allVariables):
     labels = ['unknown', 'scaling', 'translation', 'MM-like', 'p>2', 'gen. translation']
     parts = [labels[i] for i in range(6) if tType[i]]
     return transformations, 'Type: ' + ', '.join(parts)
+
+
+def _canon_int_vector(prim, gens):
+    """Scale a polynomial vector by a rational constant to a canonical integer-
+    primitive form: clear coefficient denominators, divide by the integer content,
+    then fix the sign so the leading coefficient of the first nonzero component is
+    positive. Deterministic (given a fixed `gens` order), so two gauge-equivalent
+    representatives of the same direction land on the same canonical vector."""
+    coeffs = []
+    for e in prim:
+        if e == 0:
+            continue
+        for c in spy.Poly(e, *gens).coeffs():
+            coeffs.append(spy.Rational(c))
+    if not coeffs:
+        return prim
+    L = spy.Integer(1)
+    for c in coeffs:
+        L = spy.ilcm(L, c.q)
+    scaled = [spy.expand(e * L) for e in prim]
+    g = 0
+    for e in scaled:
+        if e == 0:
+            continue
+        for c in spy.Poly(e, *gens).coeffs():
+            g = spy.igcd(g, int(c))
+    if g and g != 1:
+        scaled = [spy.expand(e / g) for e in scaled]
+    for e in scaled:
+        if e != 0:
+            if spy.Poly(e, *gens).LC() < 0:
+                scaled = [spy.expand(-x) for x in scaled]
+            break
+    return scaled
+
+
+def classifyDirection(vector, degreeCap=4):
+    """Classify one non-identifiability direction and return its canonical
+    poly-primitive differential generator.
+
+    `vector` is a dict {coordinate: component_str} giving the LITERAL components
+    xi_i of the generator  X = sum_i xi_i * d/dz_i  (a scaling is passed as
+    {z_i: "w_i*z_i"}). A generator is only defined up to multiplication by a
+    nonzero function h(z); that gauge is fixed by clearing the common denominator
+    and dividing by the polynomial content of the numerators, then normalising to a
+    canonical integer-primitive representative. The class is read off the result:
+
+      scaling      : every xi_i = w_i * z_i   (own coordinate, degree 1)
+      translation  : every xi_i is a nonzero constant
+      affine       : total degree <= 1, but neither pure scaling nor translation
+      polynomial   : max total degree d in 2..degreeCap
+      general      : non-polynomial, or degree > degreeCap
+
+    Returns {'type', 'weights', 'components', 'degree'}: `weights` is the integer
+    scaling-weight map (None unless scaling); `components` is the canonical
+    generator {z_i: str(xi_i)} used to render every non-scaling class."""
+    items = [(str(k), str(v)) for k, v in vector.items()]
+    fallback = {'type': 'general', 'weights': None,
+                'components': {k: v for k, v in items}, 'degree': -1}
+    if not items:
+        return {'type': 'general', 'weights': None, 'components': {}, 'degree': 0}
+
+    # symbol table so names like E, I, S, N are model symbols, not sympy constants
+    _, parse = _make_local_parse([k + " = " + v for k, v in items])
+    comps = {}
+    try:
+        for k, v in items:
+            comps[spy.Symbol(k)] = parse(v)
+    except Exception:
+        return fallback
+
+    varset = set(comps.keys())
+    for e in comps.values():
+        varset |= set(spy.sympify(e).free_symbols)
+    gens = sorted(varset, key=spy.default_sort_key)
+    n = len(gens)
+    infis = [comps.get(z, spy.Integer(0)) for z in gens]
+
+    # canonical poly-primitive representative (gauge fix): clear the common
+    # denominator, then divide by the polynomial content of the numerators
+    try:
+        dens = [spy.fraction(spy.together(e))[1] for e in infis]
+        L = spy.Integer(1)
+        for d in dens:
+            L = spy.lcm(L, d)
+        nums = [spy.expand(spy.cancel(e * L)) for e in infis]
+        for e in nums:
+            spy.Poly(e, *gens)                 # raises if not polynomial in gens
+    except Exception:
+        return fallback
+    g = spy.Integer(0)
+    for e in nums:
+        g = spy.gcd(g, e)
+    if g == 0:
+        g = spy.Integer(1)
+    prim = [spy.expand(spy.cancel(e / g)) for e in nums]
+    prim = _canon_int_vector(prim, gens)
+
+    # read the class off the canonical representative
+    isScaling, isTransl, maxdeg = True, True, 0
+    for i, e in enumerate(prim):
+        if e == 0:
+            continue
+        P = spy.Poly(e, *gens)
+        maxdeg = max(maxdeg, P.total_degree())
+        monoms = list(P.as_dict().keys())
+        constTerm = (len(monoms) == 1 and sum(monoms[0]) == 0)
+        selfTerm = (len(monoms) == 1 and sum(monoms[0]) == 1 and monoms[0][i] == 1)
+        if not constTerm:
+            isTransl = False
+        if not selfTerm:
+            isScaling = False
+
+    comp_out = {str(gens[i]): str(prim[i]) for i in range(n) if prim[i] != 0}
+    if isScaling:
+        weights = {}
+        for i in range(n):
+            if prim[i] != 0:
+                key = tuple(1 if j == i else 0 for j in range(n))
+                weights[str(gens[i])] = int(spy.Poly(prim[i], *gens).as_dict()[key])
+        return {'type': 'scaling', 'weights': weights,
+                'components': comp_out, 'degree': 1}
+    if isTransl:
+        return {'type': 'translation', 'weights': None, 'components': comp_out, 'degree': 0}
+    if maxdeg <= 1:
+        return {'type': 'affine', 'weights': None, 'components': comp_out, 'degree': 1}
+    if maxdeg <= degreeCap:
+        return {'type': 'polynomial', 'weights': None,
+                'components': comp_out, 'degree': int(maxdeg)}
+    return {'type': 'general', 'weights': None,
+            'components': comp_out, 'degree': int(maxdeg)}
+
+
+def certifyInSpan(vector, generators):
+    """Certificate for an affine/polynomial non-identifiability direction: is the
+    generator `vector` {coord: xi_i} a nonzero CONSTANT linear combination of the
+    Lie-symmetry `generators` (each {coord: xi_i})? If so, the direction is an exact
+    polynomial Lie point symmetry (the strict determining-equation notion), not only
+    an observability non-identifiability. Decided exactly by evaluating at several
+    integer points and testing that the direction lies in the column span of the
+    generator matrix over the constants. Returns {'certified': bool}."""
+    items = [(str(k), str(v)) for k, v in vector.items()]
+    G = [{str(k): str(v) for k, v in g.items()} for g in generators]
+    if not G or not items:
+        return {'certified': False}
+    all_lines = [k + " = " + v for k, v in items] + \
+                [k + " = " + v for g in G for k, v in g.items()]
+    _, parse = _make_local_parse(all_lines)
+    coords = sorted(set(k for k, _ in items) | set(k for g in G for k in g.keys()))
+    try:
+        xi = {k: parse(v) for k, v in items}
+        Gp = [{k: parse(v) for k, v in g.items()} for g in G]
+    except Exception:
+        return {'certified': False}
+    m = len(Gp)
+    Arows, brows = [], []
+    step, pts = 0, 0
+    while pts < m + 3 and step < 400:
+        step += 1
+        subs = {spy.Symbol(coords[i]): spy.Integer(2 + (step * 13 + i * 29) % 89)
+                for i in range(len(coords))}
+        good, Ar, br = True, [], []
+        for c in coords:
+            try:
+                bv = spy.Rational(xi.get(c, spy.Integer(0)).subs(subs))
+                gv = [spy.Rational(Gp[j].get(c, spy.Integer(0)).subs(subs))
+                      for j in range(m)]
+            except Exception:
+                good = False
+                break
+            Ar.append(gv)
+            br.append(bv)
+        if good:
+            Arows.extend(Ar)
+            brows.extend(br)
+            pts += 1
+    if not Arows:
+        return {'certified': False}
+    A = spy.Matrix(Arows)
+    b = spy.Matrix(brows)
+    if all(x == 0 for x in b):
+        return {'certified': False}
+    return {'certified': A.rank() == A.row_join(b).rank()}
 
 
 def printTransformations(infisAll, allVariables, verified):
@@ -1089,12 +1340,31 @@ def _solve_mod(A, B, p):
     return [M[i][n:] for i in range(n)]
 
 
+_invModCache = {}
+
+
+def _inv_mod(a, p):
+    """Modular inverse of a mod p, memoised per (a, p). The coefficient denominators
+    of the compiled term lists are a small fixed set drawn from few primes, so this
+    replaces a per-term Fermat exponentiation with a dict hit. inv(0)=0, inv(1)=1
+    (Fermat convention: pow(0,p-2,p)=0)."""
+    a %= p
+    if a <= 1:
+        return a
+    key = (a, p)
+    v = _invModCache.get(key)
+    if v is None:
+        v = pow(a, p - 2, p)
+        _invModCache[key] = v
+    return v
+
+
 def _eval_poly_terms(terms, ptvals, p):
     """Value of one term list (from _poly_terms) at the integer point `ptvals`
     (gens order, already mod p) as a residue mod p."""
     acc = 0
     for monom, (cn, cd) in terms:
-        c = (cn % p) * pow(cd % p, p - 2, p) % p
+        c = (cn % p) * _inv_mod(cd, p) % p          # cd is a compile-time constant
         for k, e in enumerate(monom):
             if e:
                 c = c * pow(ptvals[k], e, p) % p
@@ -1106,6 +1376,8 @@ def _eval_terms(numden, ptvals, p):
     """Residue num/den mod p of a (num, den) term list at the point `ptvals`."""
     nv = _eval_poly_terms(numden[0], ptvals, p)
     dv = _eval_poly_terms(numden[1], ptvals, p)
+    if dv == 1:                                     # polynomial entry: no inverse
+        return nv
     return nv * pow(dv % p, p - 2, p) % p
 
 
@@ -1117,6 +1389,8 @@ def _eval_terms_guarded(numden, ptvals, p):
     if dv % p == 0:
         return None
     nv = _eval_poly_terms(numden[0], ptvals, p)
+    if dv == 1:
+        return nv
     return nv * pow(dv, p - 2, p) % p
 
 
@@ -1327,7 +1601,9 @@ def _solve_states_modular(polysN, solveStates, p):
             if not present:
                 continue
             picked = None
-            for v in present:
+            # deterministic pivot order (by name), so the chosen interior point is
+            # reproducible across runs and matches _solve_states_fast bit-for-bit
+            for v in sorted(present, key=str):
                 pv = spy.Poly(pl, v)
                 if pv.degree() != 1:
                     continue
@@ -1360,6 +1636,145 @@ def _solve_states_modular(polysN, solveStates, p):
     # resolve the eliminated states to numbers, latest first
     for v, expr in reversed(elim):
         sol[v] = spy.Integer(_modp_rational(expr.subs(sol), p))
+    return sol, None
+
+
+# ---- fast numeric state solve (dict polynomials mod p, no sympy in the hot loop) ----
+# The symbolic _solve_states_modular above spends its time in sympy object overhead
+# (Poly/subs/_reduce_modp) re-deriving the SAME linear elimination per point. Here the
+# per-point numeric polynomials are carried as dicts {state-exponent-tuple: coeff mod p}
+# and the linear elimination is plain modular arithmetic; only the small coupled residual
+# is handed to sympy (_coupled_groebner). Byte-identical to _solve_states_modular (same
+# pivots, same reduced residual, same interior root), cross-checked via _SS_FORCE_SYMPY.
+
+def _eval_bipoly_dict(bip, paramvals, p):
+    """Numeric state polynomial as {state-exponent-tuple: coeff mod p} from a _bipoly
+    at numeric parameter values -- the dict analogue of _eval_bipoly (no sympy Add)."""
+    d = {}
+    for sm, ct in bip:
+        c = _eval_terms(ct, paramvals, p)
+        if c:
+            d[sm] = (d.get(sm, 0) + c) % p
+    return {m: c for m, c in d.items() if c}
+
+
+def _dp_mul(a, b, nv, p):
+    """Product of two dict polynomials mod p."""
+    out = {}
+    for ma, ca in a.items():
+        for mb, cb in b.items():
+            key = tuple(ma[k] + mb[k] for k in range(nv))
+            v = (out.get(key, 0) + ca * cb) % p
+            if v:
+                out[key] = v
+            elif key in out:
+                del out[key]
+    return out
+
+
+def _dp_subst(d, i, expr, nv, p):
+    """Substitute var i -> expr (a dict poly not containing var i) into d, mod p."""
+    maxe = max((m[i] for m in d), default=0)
+    pows = [{tuple([0] * nv): 1}]
+    for _ in range(maxe):
+        pows.append(_dp_mul(pows[-1], expr, nv, p))
+    out = {}
+    for m, c in d.items():
+        term = pows[m[i]]
+        base = tuple(0 if k == i else m[k] for k in range(nv))
+        for mm, cc in term.items():
+            key = tuple(base[k] + mm[k] for k in range(nv))
+            v = (out.get(key, 0) + c * cc) % p
+            if v:
+                out[key] = v
+            elif key in out:
+                del out[key]
+    return out
+
+
+def _solve_states_fast(dps, solveStates, p):
+    """Interior point of f = 0 over GF(p) from the per-point state polynomials in dict
+    form. Linear elimination by dict-polynomial substitution mod p, the coupled residual
+    by _coupled_groebner, then numeric back-substitution. Returns (sol {Symbol: Integer},
+    None) or (None, fail-dict). Mirrors _solve_states_modular's elimination exactly."""
+    nv = len(solveStates)
+    dps = [dict(d) for d in dps]
+    remIdx = set(range(nv))
+    elim = []                          # (var_index, expr dict poly over remaining vars)
+    progress = True
+    while progress and remIdx:
+        progress = False
+        for eqi in range(len(dps)):
+            d = dps[eqi]
+            if d is None or not d:
+                continue
+            present = sorted((i for i in remIdx if any(m[i] for m in d)),
+                             key=lambda i: str(solveStates[i]))   # match the symbolic order
+            if not present:
+                continue
+            picked = None
+            for i in present:
+                if max(m[i] for m in d) != 1:          # degree in var i must be 1
+                    continue
+                c1 = 0
+                ok = True
+                for m in d:                            # coeff of var_i^1 must be const
+                    if m[i] == 1:
+                        if any(m[k] for k in range(nv) if k != i):
+                            ok = False
+                            break
+                        c1 = d[m]
+                if not ok or c1 % p == 0:
+                    continue
+                inv = pow(c1 % p, p - 2, p)
+                c0 = {m: c for m, c in d.items() if m[i] == 0}   # var_i^0 part
+                expr = {m: (c * (-inv)) % p for m, c in c0.items()}
+                expr = {m: c for m, c in expr.items() if c}
+                picked = (i, expr)
+                break
+            if picked is None:
+                continue
+            i, expr = picked
+            elim.append((i, expr))
+            dps[eqi] = None
+            for j in range(len(dps)):
+                if dps[j] and any(m[i] for m in dps[j]):
+                    dps[j] = _dp_subst(dps[j], i, expr, nv, p)
+            remIdx.discard(i)
+            progress = True
+
+    sol = {}
+    coupledIdx = [i for i in range(nv) if i in remIdx]
+    if coupledIdx:
+        resid = []
+        for d in dps:
+            if not d:
+                continue
+            e = spy.Integer(0)
+            for m, c in d.items():
+                term = spy.Integer(c)
+                for i in coupledIdx:
+                    if m[i]:
+                        term = term * solveStates[i] ** int(m[i])
+                e = e + term
+            resid.append(e)
+        coupledSyms = [solveStates[i] for i in coupledIdx]
+        rsol, fail = _coupled_groebner(resid, coupledSyms, p)
+        if fail is not None:
+            return None, fail
+        sol.update({k: spy.Integer(int(v) % p) for k, v in rsol.items()})
+
+    valById = {i: int(sol[solveStates[i]]) % p for i in coupledIdx}
+    for i, expr in reversed(elim):     # resolve eliminated vars numerically, latest first
+        acc = 0
+        for m, c in expr.items():
+            t = c
+            for k in range(nv):
+                if m[k]:
+                    t = t * pow(valById.get(k, 0), m[k], p) % p
+            acc = (acc + t) % p
+        valById[i] = acc
+        sol[solveStates[i]] = spy.Integer(acc)
     return sol, None
 
 
@@ -1466,8 +1881,12 @@ def solveSteadyStateModular(model, stateNames, paramNames, paramVals, prime,
                 break
             sol[spy.Symbol(nm)] = spy.Integer(val)
     if sol is None:
-        polysN = [_eval_bipoly(bip, list(solveStates), paramvals, p) for bip in polyBi]
-        sol, fail = _solve_states_modular(polysN, solveStates, p)
+        if _SS_FORCE_SYMPY:
+            polysN = [_eval_bipoly(bip, list(solveStates), paramvals, p) for bip in polyBi]
+            sol, fail = _solve_states_modular(polysN, solveStates, p)
+        else:
+            dps = [_eval_bipoly_dict(bip, paramvals, p) for bip in polyBi]
+            sol, fail = _solve_states_fast(dps, list(solveStates), p)
         if fail is not None:
             return fail
 
@@ -2289,7 +2708,7 @@ def _materialize_rows(rows, ncols):
 def _scaling_gens(rows, ncols, nz):
     """Reduced integer generators (primitive, over the first nz weight columns)
     of the scaling kernel given the determining rows."""
-    basis = exactNullspace(rows, ncols) if rows else []
+    basis = exactNullspace(rows, ncols, integer=True) if rows else []
     cvecs = [[v[j] for j in range(nz)] for v in basis
              if any(v[j] != 0 for j in range(nz))]
     gens = []
@@ -2535,6 +2954,10 @@ def observabilitySympy(model, observation, fixed=None, parameters=None,
     pset = set()
     for e in rhs + obs:
         pset |= spy.sympify(e).free_symbols
+    # declared parameters are coordinates too, even if they do not appear in f/g
+    # (a declared-but-absent parameter is then trivially non-identifiable), matching
+    # the modular engine
+    pset |= {local.get(nm, spy.Symbol(nm)) for nm in asL(parameters)}
     pset -= set(states)
     pset -= known
     params = sorted(pset, key=spy.default_sort_key)
@@ -2588,6 +3011,120 @@ def observabilitySympy(model, observation, fixed=None, parameters=None,
             prev = rank
             order += 1
             jet = [spy.expand(_lie_deriv(h, states, rhs)) for h in jet]
+    M = spy.Matrix(rows)
+    rank = M.rank()
+    nonId = []
+    if rank < nz:
+        for vec in M.nullspace():
+            v = [spy.cancel(vec[i]) for i in range(nz)]
+            nz_i = [i for i in range(nz) if v[i] != 0]
+            nonId.append({'support': sorted(znames[i] for i in nz_i),
+                          'vector': {znames[i]: str(v[i]) for i in nz_i},
+                          'type': 'general', 'closedForm': True})
+    return {'ok': True, 'rank': int(rank), 'dim': int(nz), 'lieOrder': int(order),
+            'nonIdentifiable': nonId, 'identifiable': bool(rank >= nz)}
+
+
+def observabilitySympyMulti(model, observation, conditionSubs=None, conditionIC0=None,
+                            fixed=None, parameters=None, inputs=None, backend='sympy'):
+    """Multi-condition pure-symbolic observability-identifiability -- the exact
+    cross-check of the modular multi-condition engine, and the generalisation of
+    observabilitySympy() (which is the single-condition, no-substitution case).
+
+    Each condition substitutes its per-condition values `conditionSubs[k]` into f and
+    g and seeds the observation jet at its own initial state `conditionIC0[k]`. A
+    direction is non-identifiable iff it lies in the nullspace of EVERY condition's
+    observability matrix, i.e. the nullspace of the row-stacked O over one SHARED
+    coordinate space -- the intersection of the per-condition observability
+    codistributions. Mirrors the coordinate/substitution semantics of
+    compileObservabilityTapeMulti. Single-segment only (no later events / gaps) and
+    no equilibrate: supply a resting steady state explicitly through the model's
+    initial conditions (`trafo`), which is a plain substitution handled here."""
+    _select_backend(backend)
+    asL = lambda v: list(v) if isinstance(v, (list, tuple)) else ([] if v is None else [v])
+    model = [str(l) for l in asL(model)]
+    observation = [str(l) for l in asL(observation)]
+    conditionSubs = [dict(c) for c in asL(conditionSubs)] or [{}]
+    conditionIC0 = [dict(c) for c in asL(conditionIC0)]
+    K = len(conditionSubs)
+    forcings = set(str(x) for x in asL(inputs))
+
+    all_lines = model + observation + asL(parameters)
+    for c in conditionSubs + conditionIC0:
+        for k, v in c.items():
+            all_lines += [str(k), str(v)]
+    local, parse = _make_local_parse(all_lines)
+
+    variables, diffEquations, _ = _read_equations(model, parse)
+    obsVars, obsFunctions, _ = _read_equations(observation, parse)
+    fixedNames = set(str(s) for s in
+                     [local.get(nm, spy.Symbol(nm)) for nm in asL(fixed)])
+
+    # constant (u' = 0) states are dropped; R has baked their per-condition value
+    # into conditionSubs, so they enter f/g as substituted constants
+    isConst = [spy.sympify(e) == 0 for e in diffEquations]
+    S = [variables[i] for i in range(len(variables)) if not isConst[i]]
+    Srhs = [spy.sympify(diffEquations[i]) for i in range(len(variables))
+            if not isConst[i]]
+
+    def pval(s):
+        return spy.sympify(parse(str(s)))
+
+    # per-condition substituted dynamics/observation and initial state
+    perCond = []
+    for c in range(K):
+        subsMap = {local.get(str(k), spy.Symbol(str(k))): pval(v)
+                   for k, v in conditionSubs[c].items()}
+        ic0 = conditionIC0[c] if c < len(conditionIC0) else {}
+        f_c = [e.subs(subsMap) for e in Srhs]
+        g_c = [spy.sympify(e).subs(subsMap) for e in obsFunctions]
+        ic_c = {}
+        for X in S:
+            e = pval(ic0[str(X)]) if str(X) in ic0 else X
+            ic_c[X] = spy.sympify(e).subs(subsMap)
+        perCond.append((f_c, g_c, ic_c))
+
+    # shared coordinate space: a state is a free coordinate iff its own symbol
+    # survives in its initial condition in SOME condition (a replace-dose or a
+    # forcing seeded to 0 drops it; no dose / an add-or-multiply dose keeps it).
+    # Parameters are the union of every condition's free symbols; both minus `fixed`.
+    freeStates = [X for X in S
+                  if any(X in ic_c[X].free_symbols for (_, _, ic_c) in perCond)]
+    paramset = set()
+    for (f_c, g_c, ic_c) in perCond:
+        for e in list(f_c) + list(g_c) + list(ic_c.values()):
+            paramset |= set(spy.sympify(e).free_symbols)
+    paramset -= set(S)
+    params = sorted(paramset, key=spy.default_sort_key)
+
+    z = [X for X in freeStates if str(X) not in fixedNames] + \
+        [s for s in params if str(s) not in fixedNames]
+    znames = [str(s) for s in z]
+    nz = len(z)
+    if nz == 0:
+        return {'ok': True, 'rank': 0, 'dim': 0, 'lieOrder': 0,
+                'nonIdentifiable': [], 'identifiable': True}
+
+    # stacked observability rows: at each Lie order, append every condition's row
+    # d/dz[ L_{f_c}^order g_c evaluated at that condition's initial state ic_c ];
+    # saturate to nz with a two-order-flat early exit (exact -> no truncation risk)
+    rows = []
+    jets = [list(g_c) for (f_c, g_c, ic_c) in perCond]     # order 0: the observables
+    prev, flat, order = -1, 0, 0
+    while True:
+        for ci, (f_c, g_c, ic_c) in enumerate(perCond):
+            for h in jets[ci]:
+                he = spy.sympify(h).subs(ic_c)             # evaluate at x(0) = ic_c
+                rows.append([spy.diff(he, zj) for zj in z])
+        rank = spy.Matrix(rows).rank()
+        flat = flat + 1 if rank == prev else 0
+        if rank >= nz or (flat >= 2 and order >= 1) or order >= nz:
+            break
+        prev = rank
+        order += 1
+        for ci, (f_c, g_c, ic_c) in enumerate(perCond):
+            jets[ci] = [spy.expand(_lie_deriv(h, S, f_c)) for h in jets[ci]]
+
     M = spy.Matrix(rows)
     rank = M.rank()
     nonId = []

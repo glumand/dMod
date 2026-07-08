@@ -469,6 +469,26 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// symObsNullChainSeedBatch
+List symObsNullChainSeedBatch(List chains, IntegerVector evalChain, IntegerMatrix seeds, NumericVector primes, int nLeaves, int nStates, IntegerVector zSlots, int Nt, int Mtot, int cores);
+RcppExport SEXP _dMod_symObsNullChainSeedBatch(SEXP chainsSEXP, SEXP evalChainSEXP, SEXP seedsSEXP, SEXP primesSEXP, SEXP nLeavesSEXP, SEXP nStatesSEXP, SEXP zSlotsSEXP, SEXP NtSEXP, SEXP MtotSEXP, SEXP coresSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< List >::type chains(chainsSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type evalChain(evalChainSEXP);
+    Rcpp::traits::input_parameter< IntegerMatrix >::type seeds(seedsSEXP);
+    Rcpp::traits::input_parameter< NumericVector >::type primes(primesSEXP);
+    Rcpp::traits::input_parameter< int >::type nLeaves(nLeavesSEXP);
+    Rcpp::traits::input_parameter< int >::type nStates(nStatesSEXP);
+    Rcpp::traits::input_parameter< IntegerVector >::type zSlots(zSlotsSEXP);
+    Rcpp::traits::input_parameter< int >::type Nt(NtSEXP);
+    Rcpp::traits::input_parameter< int >::type Mtot(MtotSEXP);
+    Rcpp::traits::input_parameter< int >::type cores(coresSEXP);
+    rcpp_result_gen = Rcpp::wrap(symObsNullChainSeedBatch(chains, evalChain, seeds, primes, nLeaves, nStates, zSlots, Nt, Mtot, cores));
+    return rcpp_result_gen;
+END_RCPP
+}
 // symSolveMod
 SEXP symSolveMod(IntegerMatrix A, IntegerVector b, double pIn);
 RcppExport SEXP _dMod_symSolveMod(SEXP ASEXP, SEXP bSEXP, SEXP pInSEXP) {
@@ -479,6 +499,18 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< IntegerVector >::type b(bSEXP);
     Rcpp::traits::input_parameter< double >::type pIn(pInSEXP);
     rcpp_result_gen = Rcpp::wrap(symSolveMod(A, b, pIn));
+    return rcpp_result_gen;
+END_RCPP
+}
+// symRrefMod
+List symRrefMod(NumericMatrix M, double pIn);
+RcppExport SEXP _dMod_symRrefMod(SEXP MSEXP, SEXP pInSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< NumericMatrix >::type M(MSEXP);
+    Rcpp::traits::input_parameter< double >::type pIn(pInSEXP);
+    rcpp_result_gen = Rcpp::wrap(symRrefMod(M, pIn));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -643,7 +675,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"_dMod_symObsNullMulti", (DL_FUNC) &_dMod_symObsNullMulti, 8},
     {"_dMod_symObsNullBatch", (DL_FUNC) &_dMod_symObsNullBatch, 8},
     {"_dMod_symObsNullChain", (DL_FUNC) &_dMod_symObsNullChain, 9},
+    {"_dMod_symObsNullChainSeedBatch", (DL_FUNC) &_dMod_symObsNullChainSeedBatch, 10},
     {"_dMod_symSolveMod", (DL_FUNC) &_dMod_symSolveMod, 3},
+    {"_dMod_symRrefMod", (DL_FUNC) &_dMod_symRrefMod, 2},
     {"_dMod_symFitRational", (DL_FUNC) &_dMod_symFitRational, 4},
     {"_dMod_symRatRecon", (DL_FUNC) &_dMod_symRatRecon, 2},
     {"_dMod_symSparsePoly", (DL_FUNC) &_dMod_symSparsePoly, 4},

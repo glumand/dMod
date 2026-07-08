@@ -8,7 +8,7 @@ symmetryDetection(
   f = NULL,
   g = NULL,
   trafo = NULL,
-  method = c("observability", "liesym", "scaling"),
+  method = c("observability", "polynomial", "scaling", "translation"),
   parameters = NULL,
   fixed = NULL,
   forcings = NULL,
@@ -22,7 +22,7 @@ symmetryDetection(
   cores.conditions = cores,
   cores.GLp = cores,
   control = reconstControl(),
-  liesym = liesymControl(),
+  polynomial = polynomialControl(),
   scaling = scalingControl(),
   symEngine = c("modular", "symbolic")
 )
@@ -45,22 +45,22 @@ entry may bake a parameter to a different number or expression per condition,
 exactly like a condition grid, and the two compose. It is the explicit route
 for per-condition steady states (a \code{steadyStates()} result per condition).}
 
-\item{method}{One of \code{"observability"} (default), \code{"liesym"} or \code{"scaling"};
-see Description.}
+\item{method}{One of \code{"observability"} (default), \code{"polynomial"}, \code{"scaling"}
+or \code{"translation"}; see Description.}
 
 \item{parameters}{Character vector of extra symbols to treat as parameters.}
 
 \item{fixed}{Character vector of symbols that are known and therefore not
 unknowns. For \code{"observability"} they are excluded from the coordinates \code{z}:
 a fixed parameter is a known constant, and a fixed state keeps its dynamics
-but carries no unknown initial value. For \code{"liesym"} their infinitesimal
+but carries no unknown initial value. For \code{"polynomial"} their infinitesimal
 ansatz is set to zero.}
 
 \item{forcings}{Character vector of externally driven (input) state names.
 For \code{"observability"} a forcing is an integrated state with default initial
 value 0 that is excluded from the \code{f = 0} steady-state constraint (so the
 constraint solves over the non-forcing states with every forcing held at
-0); for \code{"liesym"} and \code{"scaling"} the same states are the inputs whose
+0); for \code{"polynomial"} and \code{"scaling"} the same states are the inputs whose
 infinitesimal ansatz is fixed. Listed explicitly here; an \code{RHS = 0} state
 that is not a forcing is instead treated as a constant and substituted by
 its value.}
@@ -102,7 +102,7 @@ quantities, eliminate one pivot species per conserved quantity first.}
 
 \item{closedForm}{Logical. For \code{"observability"}, reconstruct the non-scaling
 directions as exact rational functions of the parameters, not just their
-support. Scaling directions are peeled exactly from the integer kernel and
+support. Scaling directions are obtained exactly from the integer kernel and
 reported in closed form regardless of this flag. A narrow entry is fit
 densely; an entry coupling many variables is recovered by sparse
 (Ben-Or-Tiwari) interpolation. Every reconstructed direction is certified
@@ -126,24 +126,24 @@ is tunable via \code{DMOD_SYM_VERIFY_MARGIN} (default 6).}
 
 \item{cores}{Number of threads for \code{"observability"}: the default for both
 \code{cores.conditions} and \code{cores.GLp} when those are not set explicitly. The
-\code{"liesym"} and \code{"scaling"} engines are exact and serial and ignore it.}
+\code{"polynomial"} and \code{"scaling"} engines are exact and serial and ignore it.}
 
 \item{cores.conditions, cores.GLp}{\code{"observability"} parallelism, split across two
-independent axes (default: \code{cores} each). \code{cores.conditions} threads the C++
-observability kernel over conditions/segments. \code{cores.GLp} forks a worker pool
-that solves the finite-field steady-state seeds of the reconstruction's sample
-points in parallel (Linux only; falls back to serial elsewhere). The two axes
-are used in separate stages, so parallelise over whichever is larger for the
-problem (many conditions vs. many sample points) and leave the other at 1 to
-avoid oversubscription. \code{cores.GLp} speeds up the closed-form reconstruction of
-models whose equilibrated resting state has a coupled (non-generically-linear)
-steady state, where each sample point needs a symbolic finite-field solve.}
+axes (default: \code{cores} each). \code{cores.conditions} threads the C++ observability
+kernel over conditions/segments. \code{cores.GLp} parallelises the finite-field
+steady-state solves of the reconstruction's sample points -- forking on Linux, a
+PSOCK pool of Python interpreters on Windows. For a coupled (equilibrate) model
+with later-event gaps the closed-form reconstruction additionally evaluates the
+per-(sample point, condition) chain kernels in one OpenMP batch, threaded over the
+larger of the two axes -- so setting either one speeds up that dominant cost on
+every platform (a Windows model that was serial there before). Raise the relevant
+axis towards the physical core count.}
 
 \item{control}{A \code{\link[=reconstControl]{reconstControl()}} list tuning the \code{"observability"} engine's
 saturation and closed-form reconstruction (relevance caps, fit degrees, term
 and gap-order caps). Raise the caps to recover wide or high-degree directions.}
 
-\item{liesym}{A \code{\link[=liesymControl]{liesymControl()}} list tuning the \code{"liesym"} engine: the
+\item{polynomial}{A \code{\link[=polynomialControl]{polynomialControl()}} list tuning the \code{"polynomial"} engine: the
 infinitesimal ansatz and degree, the extra Lie-derivative order, the symbolic
 backend and verification, and the evaluation point.}
 
@@ -158,25 +158,33 @@ deep models, and drives the closed-form reconstruction and the \code{verify} gua
 rational-function field: no finite fields and no power/Hill recast (\code{base^exp}
 stays a symbolic atom), the Lie order carried to the exact saturation bound (so no
 \code{verify} guard is needed). It is an INDEPENDENT cross-check of \code{"modular"} but only
-practical for SMALL models, and currently handles a single condition (no
-conditions/events/gaps and no closed-form reconstruction).}
+practical for SMALL models. It handles multiple \code{conditions} and single-time
+\code{events} (stacking each condition's observability rows over one shared coordinate
+space), but not later events (gaps), \code{equilibrate} (supply an explicit steady state
+through \code{trafo} instead), or the closed-form reconstruction.}
 }
 \value{
-For \code{"observability"}: a list with \code{identifiable}, \code{rank}, \code{dim},
-\code{lieOrderUsed} and \code{nonIdentifiable}. Each direction carries a \code{type}:
-\code{"scaling"} directions give the integer toric weights \code{c_i} (the symmetry is
-\verb{z_i -> lambda^\{c_i\} z_i}); \code{"general"} directions give the reconstructed
-tangent components as rational expressions (or only the \code{support} when
-\code{closedForm = FALSE}, or with a \code{reason} naming the \code{reconstControl} cap that
-stopped a requested closed form). The multi-condition path adds \code{conditions}, the number
-of distinct conditions, \code{segments}, the number of stacked analytic segments
-(later events split each condition into several), and \code{gapOrderUsed}, the
-gap power-series order at which the rank saturated (0 with no gaps). For
-\code{"scaling"}: \code{count} and the same \code{nonIdentifiable} weights. For
-\code{"liesym"}: a list of generators, each with \code{infinitesimals},
-\code{transformation}, \code{type} and \code{verified}. The result has class
-\code{symmetryDetection}; \code{print()} gives a one-line summary and \code{summary()}
-lists the directions.
+For \code{"observability"} (and \code{"translation"}): a list with \code{identifiable},
+\code{rank}, \code{dim}, \code{lieOrderUsed} and \code{nonIdentifiable}. Each direction is a
+differential generator \verb{sum_i xi_i d/dz_i} carrying a symmetry \code{type} in
+\code{"scaling"}, \code{"translation"}, \code{"affine"}, \code{"polynomial"} or \code{"general"},
+brought to a canonical polynomial-primitive representative (its gauge fixed) so
+the \code{"modular"} and \code{"symbolic"} engines report the same generator. A
+\code{"scaling"} direction stores the integer weights \code{c_i} in \code{vector} (the
+symmetry is \verb{z_i -> lambda^\{c_i\} z_i}, i.e. \verb{xi_i = c_i z_i}); every other type
+stores the generator components \code{xi_i} in \code{vector} directly -- or only the
+\code{support} when \code{closedForm = FALSE} (with a \code{reason} naming the
+\code{reconstControl} cap that stopped a requested closed form). \code{print()} and
+\code{summary()} render each direction as \verb{sum_i xi_i d/dz_i  [type]}. The
+multi-condition path adds \code{conditions}, the number of distinct conditions,
+\code{segments}, the number of stacked analytic segments (later events split each
+condition into several), and \code{gapOrderUsed}, the gap power-series order at which
+the rank saturated (0 with no gaps). \code{"translation"} returns only the
+translation-class directions of the exact additive lattice. For \code{"scaling"}:
+\code{count} and the same \code{nonIdentifiable} weights. For \code{"polynomial"}: a list of
+generators, each with \code{infinitesimals}, \code{transformation}, \code{type} and
+\code{verified}. The result has class \code{symmetryDetection}; \code{print()} gives a
+one-line summary and \code{summary()} lists the directions.
 }
 \description{
 Detects structural non-identifiabilities of a reaction network
@@ -190,7 +198,7 @@ matrix over a finite field. Full column rank means structurally locally
 identifiable; otherwise the nullspace gives the non-identifiable directions
 and the symbols they involve. Exact and scalable, defined only for rational
 right-hand sides and observables. The sensible default.
-\item \code{"liesym"}: the polynomial Lie-symmetry ansatz of Merkt et al. (2015),
+\item \code{"polynomial"}: the polynomial Lie-symmetry ansatz of Merkt et al. (2015),
 returning the explicit closed-form generator and transformation. More
 expensive (grows with \code{pMax}); use it when the explicit symmetry is wanted.
 \item \code{"scaling"}: the scaling symmetries that multiply each state and parameter
@@ -199,6 +207,11 @@ monomial-exponent conditions. Returns only the scaling part. A known-value
 dose (\code{events}) pins the dosed state (weight 0); a condition grid or
 per-condition \code{trafo} list intersects the per-condition scaling lattices.
 A steady state is a no-op here, so \code{equilibrate} does not apply.
+\item \code{"translation"}: the exact additive (constant-shift) symmetries
+\code{z_i -> z_i + eps * a_i}, the additive analogue of \code{"scaling"}. It is the
+observability engine restricted to the constant tangents that lie in the
+nullspace at every point (found by intersecting the nullspace over several
+generic points), returning only that translation lattice.
 }
 }
 \details{
@@ -238,7 +251,7 @@ eq <- eqnlist() |>
   addReaction("B", "A", "k2 * B")
 
 summary(symmetryDetection(eq, eqnvec(Aobs = "alpha * A")))          # observability
-summary(symmetryDetection(eq, eqnvec(Aobs = "alpha * A"), method = "liesym"))
+summary(symmetryDetection(eq, eqnvec(Aobs = "alpha * A"), method = "polynomial"))
 summary(symmetryDetection(eq, eqnvec(Aobs = "alpha * A"), method = "scaling"))
 
 # A steady-state initial condition as an expression: a state-named trafo entry

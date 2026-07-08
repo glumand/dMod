@@ -12,7 +12,7 @@
 #'     identifiable; otherwise the nullspace gives the non-identifiable directions
 #'     and the symbols they involve. Exact and scalable, defined only for rational
 #'     right-hand sides and observables. The sensible default.
-#'   * `"liesym"`: the polynomial Lie-symmetry ansatz of Merkt et al. (2015),
+#'   * `"polynomial"`: the polynomial Lie-symmetry ansatz of Merkt et al. (2015),
 #'     returning the explicit closed-form generator and transformation. More
 #'     expensive (grows with `pMax`); use it when the explicit symmetry is wanted.
 #'   * `"scaling"`: the scaling symmetries that multiply each state and parameter
@@ -21,6 +21,11 @@
 #'     dose (`events`) pins the dosed state (weight 0); a condition grid or
 #'     per-condition `trafo` list intersects the per-condition scaling lattices.
 #'     A steady state is a no-op here, so `equilibrate` does not apply.
+#'   * `"translation"`: the exact additive (constant-shift) symmetries
+#'     `z_i -> z_i + eps * a_i`, the additive analogue of `"scaling"`. It is the
+#'     observability engine restricted to the constant tangents that lie in the
+#'     nullspace at every point (found by intersecting the nullspace over several
+#'     generic points), returning only that translation lattice.
 #'
 #' @param f The model right-hand sides: an [eqnlist], an [eqnvec], or a named
 #'   character vector keyed by state name (anything [as.eqnvec] accepts). With an
@@ -36,14 +41,14 @@
 #'   entry may bake a parameter to a different number or expression per condition,
 #'   exactly like a condition grid, and the two compose. It is the explicit route
 #'   for per-condition steady states (a `steadyStates()` result per condition).
-#' @param method One of `"observability"` (default), `"liesym"` or `"scaling"`;
-#'   see Description.
+#' @param method One of `"observability"` (default), `"polynomial"`, `"scaling"`
+#'   or `"translation"`; see Description.
 #' @param parameters Character vector of extra symbols to treat as parameters.
 #' @param forcings Character vector of externally driven (input) state names.
 #'   For `"observability"` a forcing is an integrated state with default initial
 #'   value 0 that is excluded from the `f = 0` steady-state constraint (so the
 #'   constraint solves over the non-forcing states with every forcing held at
-#'   0); for `"liesym"` and `"scaling"` the same states are the inputs whose
+#'   0); for `"polynomial"` and `"scaling"` the same states are the inputs whose
 #'   infinitesimal ansatz is fixed. Listed explicitly here; an `RHS = 0` state
 #'   that is not a forcing is instead treated as a constant and substituted by
 #'   its value.
@@ -69,7 +74,7 @@
 #' @param fixed Character vector of symbols that are known and therefore not
 #'   unknowns. For `"observability"` they are excluded from the coordinates `z`:
 #'   a fixed parameter is a known constant, and a fixed state keeps its dynamics
-#'   but carries no unknown initial value. For `"liesym"` their infinitesimal
+#'   but carries no unknown initial value. For `"polynomial"` their infinitesimal
 #'   ansatz is set to zero.
 #' @param equilibrate Logical. For `"observability"`, start the states at a steady
 #'   state of `f` with forcings held at 0, solved exactly over a finite field
@@ -86,7 +91,7 @@
 #'   quantities, eliminate one pivot species per conserved quantity first.
 #' @param closedForm Logical. For `"observability"`, reconstruct the non-scaling
 #'   directions as exact rational functions of the parameters, not just their
-#'   support. Scaling directions are peeled exactly from the integer kernel and
+#'   support. Scaling directions are obtained exactly from the integer kernel and
 #'   reported in closed form regardless of this flag. A narrow entry is fit
 #'   densely; an entry coupling many variables is recovered by sparse
 #'   (Ben-Or-Tiwari) interpolation. Every reconstructed direction is certified
@@ -108,21 +113,21 @@
 #'   is tunable via `DMOD_SYM_VERIFY_MARGIN` (default 6).
 #' @param cores Number of threads for `"observability"`: the default for both
 #'   `cores.conditions` and `cores.GLp` when those are not set explicitly. The
-#'   `"liesym"` and `"scaling"` engines are exact and serial and ignore it.
+#'   `"polynomial"` and `"scaling"` engines are exact and serial and ignore it.
 #' @param cores.conditions,cores.GLp `"observability"` parallelism, split across two
-#'   independent axes (default: `cores` each). `cores.conditions` threads the C++
-#'   observability kernel over conditions/segments. `cores.GLp` forks a worker pool
-#'   that solves the finite-field steady-state seeds of the reconstruction's sample
-#'   points in parallel (Linux only; falls back to serial elsewhere). The two axes
-#'   are used in separate stages, so parallelise over whichever is larger for the
-#'   problem (many conditions vs. many sample points) and leave the other at 1 to
-#'   avoid oversubscription. `cores.GLp` speeds up the closed-form reconstruction of
-#'   models whose equilibrated resting state has a coupled (non-generically-linear)
-#'   steady state, where each sample point needs a symbolic finite-field solve.
+#'   axes (default: `cores` each). `cores.conditions` threads the C++ observability
+#'   kernel over conditions/segments. `cores.GLp` parallelises the finite-field
+#'   steady-state solves of the reconstruction's sample points -- forking on Linux, a
+#'   PSOCK pool of Python interpreters on Windows. For a coupled (equilibrate) model
+#'   with later-event gaps the closed-form reconstruction additionally evaluates the
+#'   per-(sample point, condition) chain kernels in one OpenMP batch, threaded over the
+#'   larger of the two axes -- so setting either one speeds up that dominant cost on
+#'   every platform (a Windows model that was serial there before). Raise the relevant
+#'   axis towards the physical core count.
 #' @param control A [reconstControl()] list tuning the `"observability"` engine's
 #'   saturation and closed-form reconstruction (relevance caps, fit degrees, term
 #'   and gap-order caps). Raise the caps to recover wide or high-degree directions.
-#' @param liesym A [liesymControl()] list tuning the `"liesym"` engine: the
+#' @param polynomial A [polynomialControl()] list tuning the `"polynomial"` engine: the
 #'   infinitesimal ansatz and degree, the extra Lie-derivative order, the symbolic
 #'   backend and verification, and the evaluation point.
 #' @param scaling A [scalingControl()] list tuning the `"scaling"` engine: the
@@ -135,24 +140,32 @@
 #'   rational-function field: no finite fields and no power/Hill recast (`base^exp`
 #'   stays a symbolic atom), the Lie order carried to the exact saturation bound (so no
 #'   `verify` guard is needed). It is an INDEPENDENT cross-check of `"modular"` but only
-#'   practical for SMALL models, and currently handles a single condition (no
-#'   conditions/events/gaps and no closed-form reconstruction).
+#'   practical for SMALL models. It handles multiple `conditions` and single-time
+#'   `events` (stacking each condition's observability rows over one shared coordinate
+#'   space), but not later events (gaps), `equilibrate` (supply an explicit steady state
+#'   through `trafo` instead), or the closed-form reconstruction.
 #'
-#' @return For `"observability"`: a list with `identifiable`, `rank`, `dim`,
-#'   `lieOrderUsed` and `nonIdentifiable`. Each direction carries a `type`:
-#'   `"scaling"` directions give the integer toric weights `c_i` (the symmetry is
-#'   `z_i -> lambda^{c_i} z_i`); `"general"` directions give the reconstructed
-#'   tangent components as rational expressions (or only the `support` when
-#'   `closedForm = FALSE`, or with a `reason` naming the `reconstControl` cap that
-#'   stopped a requested closed form). The multi-condition path adds `conditions`, the number
-#'   of distinct conditions, `segments`, the number of stacked analytic segments
-#'   (later events split each condition into several), and `gapOrderUsed`, the
-#'   gap power-series order at which the rank saturated (0 with no gaps). For
-#'   `"scaling"`: `count` and the same `nonIdentifiable` weights. For
-#'   `"liesym"`: a list of generators, each with `infinitesimals`,
-#'   `transformation`, `type` and `verified`. The result has class
-#'   `symmetryDetection`; `print()` gives a one-line summary and `summary()`
-#'   lists the directions.
+#' @return For `"observability"` (and `"translation"`): a list with `identifiable`,
+#'   `rank`, `dim`, `lieOrderUsed` and `nonIdentifiable`. Each direction is a
+#'   differential generator `sum_i xi_i d/dz_i` carrying a symmetry `type` in
+#'   `"scaling"`, `"translation"`, `"affine"`, `"polynomial"` or `"general"`,
+#'   brought to a canonical polynomial-primitive representative (its gauge fixed) so
+#'   the `"modular"` and `"symbolic"` engines report the same generator. A
+#'   `"scaling"` direction stores the integer weights `c_i` in `vector` (the
+#'   symmetry is `z_i -> lambda^{c_i} z_i`, i.e. `xi_i = c_i z_i`); every other type
+#'   stores the generator components `xi_i` in `vector` directly -- or only the
+#'   `support` when `closedForm = FALSE` (with a `reason` naming the
+#'   `reconstControl` cap that stopped a requested closed form). `print()` and
+#'   `summary()` render each direction as `sum_i xi_i d/dz_i  [type]`. The
+#'   multi-condition path adds `conditions`, the number of distinct conditions,
+#'   `segments`, the number of stacked analytic segments (later events split each
+#'   condition into several), and `gapOrderUsed`, the gap power-series order at which
+#'   the rank saturated (0 with no gaps). `"translation"` returns only the
+#'   translation-class directions of the exact additive lattice. For `"scaling"`:
+#'   `count` and the same `nonIdentifiable` weights. For `"polynomial"`: a list of
+#'   generators, each with `infinitesimals`, `transformation`, `type` and
+#'   `verified`. The result has class `symmetryDetection`; `print()` gives a
+#'   one-line summary and `summary()` lists the directions.
 #'
 #' @details
 #' **Segments and exact propagation.** With events after the earliest one, the
@@ -193,7 +206,7 @@
 #'   addReaction("B", "A", "k2 * B")
 #'
 #' summary(symmetryDetection(eq, eqnvec(Aobs = "alpha * A")))          # observability
-#' summary(symmetryDetection(eq, eqnvec(Aobs = "alpha * A"), method = "liesym"))
+#' summary(symmetryDetection(eq, eqnvec(Aobs = "alpha * A"), method = "polynomial"))
 #' summary(symmetryDetection(eq, eqnvec(Aobs = "alpha * A"), method = "scaling"))
 #'
 #' # A steady-state initial condition as an expression: a state-named trafo entry
@@ -225,7 +238,8 @@
 #' }
 #' @export
 symmetryDetection <- function(f = NULL, g = NULL, trafo = NULL,
-                              method = c("observability", "liesym", "scaling"),
+                              method = c("observability", "polynomial", "scaling",
+                                         "translation"),
                               parameters = NULL, fixed = NULL, forcings = NULL,
                               events = NULL, conditions = NULL,
                               equilibrate = FALSE,
@@ -233,7 +247,7 @@ symmetryDetection <- function(f = NULL, g = NULL, trafo = NULL,
                               closedForm = FALSE, verify = TRUE, cores = 1,
                               cores.conditions = cores, cores.GLp = cores,
                               control = reconstControl(),
-                              liesym = liesymControl(),
+                              polynomial = polynomialControl(),
                               scaling = scalingControl(),
                               symEngine = c("modular", "symbolic")) {
 
@@ -248,10 +262,11 @@ symmetryDetection <- function(f = NULL, g = NULL, trafo = NULL,
   supplied <- setdiff(names(match.call())[-1], "")
   applies <- switch(method,
     observability = c("events", "conditions", "equilibrate", "control"),
-    liesym  = "liesym",
+    translation   = c("events", "conditions", "equilibrate", "control"),
+    polynomial = "polynomial",
     scaling = c("scaling", "events", "conditions"))
   methodSpecific <- c("events", "conditions", "equilibrate",
-                      "control", "liesym", "scaling")
+                      "control", "polynomial", "scaling")
   ignored <- intersect(supplied, setdiff(methodSpecific, applies))
   if (length(ignored))
     warning("symmetryDetection(): argument(s) ", paste(ignored, collapse = ", "),
@@ -292,9 +307,9 @@ symmetryDetection <- function(f = NULL, g = NULL, trafo = NULL,
     })
     trafoSyms <- unique(unlist(lapply(trafos,
                         function(tr) getSymbols(as.character(tr)))))
-    if (method == "liesym")
+    if (method == "polynomial")
       warning("symmetryDetection(): a per-condition `trafo` list is not yet ",
-              "supported for method = \"liesym\"; pass a single trafo.", call. = FALSE)
+              "supported for method = \"polynomial\"; pass a single trafo.", call. = FALSE)
   } else if (!is.null(trafo)) {
     trafo <- as.eqnvec(trafo)
     icEntries  <- intersect(names(trafo), states)
@@ -377,33 +392,15 @@ symmetryDetection <- function(f = NULL, g = NULL, trafo = NULL,
            call. = FALSE)
   }
 
-  if (method == "observability") {
-    # pure-symbolic cross-check engine: builds the observability-identifiability matrix
-    # d/dz[g, L_f g, ...] and reduces its rank/nullspace with sympy over the exact
-    # rational-function field -- no finite fields, no power/Hill recast (base^exp stays a
-    # symbolic atom), and the Lie order is carried to the exact saturation bound so no
-    # verify guard is needed. Independent from the modular kernel, hence a strong
-    # cross-check, but only for SMALL models. Single condition; conditions/events/gaps
-    # and the closed-form reconstruction machinery do not apply here.
-    if (symEngine == "symbolic") {
-      if ((!is.null(conditions) && nrow(as.data.frame(conditions)) > 0L) ||
-          (!is.null(events) && nrow(as.data.frame(events)) > 0L))
-        stop("symEngine = \"symbolic\" handles single-condition observability only; ",
-             "conditions and events are not yet supported. Use symEngine = \"modular\".",
-             call. = FALSE)
-      sr <- sd$observabilitySympy(
-        model = toLines(fdyn), observation = toLines(gobs),
-        fixed = if (length(fixed)) fixed else NULL,
-        inputs = if (length(forcings)) forcings else NULL,
-        equilibrate = equilibrate)
-      if (!isTRUE(sr$ok))
-        stop("symEngine = \"symbolic\": ",
-             if (!is.null(sr$why)) sr$why else "could not build the symbolic system.",
-             call. = FALSE)
-      sr$method <- "observability"; sr$engine <- "symbolic"
-      sr$lieOrderUsed <- as.integer(sr$lieOrder)
-      return(structure(sr, class = "symmetryDetection"))
-    }
+  if (method %in% c("observability", "translation")) {
+    # method = "translation" is the observability engine restricted to the exact
+    # constant (additive) symmetry lattice: it peels the translation directions and
+    # returns only those (the additive analogue of method = "scaling"). It always
+    # uses the modular kernel (the peel needs it).
+    translationsOnly <- (method == "translation")
+    # shared condition/event resolution -- both the symbolic and modular engines use
+    # the same per-condition substitutions and initial conditions, so it is computed
+    # once here (the modular path below reuses `res`, `spy`, `constStates`, ...).
     # grid-substitution targets include symbols that appear only in initial
     # values, event values or a per-condition trafo, so they can be fixed too
     extraSyms <- c(if (!is.null(initial)) getSymbols(as.character(as.eqnvec(initial))),
@@ -428,6 +425,47 @@ symmetryDetection <- function(f = NULL, g = NULL, trafo = NULL,
                                    condSubs = condSubs, condInitial = condInitial)
     spy <- tryCatch(reticulate::import("sympy", convert = TRUE),
                     error = function(err) NULL)
+
+    # pure-symbolic cross-check engine: builds the observability-identifiability matrix
+    # d/dz[g, L_f g, ...] and reduces its rank/nullspace with sympy over the exact
+    # rational-function field -- no finite fields, no power/Hill recast (base^exp stays a
+    # symbolic atom), and the Lie order is carried to the exact saturation bound so no
+    # verify guard is needed. Independent from the modular kernel, hence a strong
+    # cross-check, but only for SMALL models. Handles multiple conditions and
+    # single-time events by stacking each condition's observability rows over one
+    # shared coordinate space (the intersection of the per-condition codistributions);
+    # later events (gaps) and equilibrate stay a modular feature.
+    if (symEngine == "symbolic" && !translationsOnly) {
+      if (isTRUE(equilibrate))
+        stop("symEngine = \"symbolic\" does not support equilibrate; supply the ",
+             "steady state explicitly through `trafo` (e.g. from steadyStates()), ",
+             "which is an exact substitution, or use symEngine = \"modular\".",
+             call. = FALSE)
+      if (res$nGaps > 0L)
+        stop("symEngine = \"symbolic\" handles single-segment conditions only; ",
+             "later events (gaps) need symEngine = \"modular\".", call. = FALSE)
+      sr <- sd$observabilitySympyMulti(
+        model = toLines(fdyn), observation = toLines(gobs),
+        conditionSubs = res$subs, conditionIC0 = res$ic0,
+        fixed = if (length(fixed)) fixed else NULL,
+        parameters = if (length(parameters)) parameters else NULL,
+        inputs = if (length(forcings)) forcings else NULL)
+      if (!isTRUE(sr$ok))
+        stop("symEngine = \"symbolic\": ",
+             if (!is.null(sr$why)) sr$why else "could not build the symbolic system.",
+             call. = FALSE)
+      sr$method <- "observability"; sr$engine <- "symbolic"
+      sr$lieOrderUsed <- as.integer(sr$lieOrder)
+      sr$conditions <- as.integer(res$nConditions)
+      sr$segments <- as.integer(res$nConditions)   # single-segment: one per condition
+      sr$gapOrderUsed <- 0L
+      sr$nonIdentifiable <- .sym_relabel_directions(sr$nonIdentifiable, sd,
+        if (is.null(control$degreeCap)) 4L else control$degreeCap)
+      if (isTRUE(control$certifyPoly))
+        sr$nonIdentifiable <- .sym_certify_poly(sr$nonIdentifiable,
+          toLines(fdyn), toLines(gobs), forcings, fixed, parameters, control, sd)
+      return(structure(sr, class = "symmetryDetection"))
+    }
     # equilibrate=TRUE uses the implicit determining system by default: the states
     # stay coordinates and the steady state enters as the f=0 tangency constraint
     # df.xi=0 (never forming or eliminating a symbolic x*), with each condition
@@ -456,7 +494,7 @@ symmetryDetection <- function(f = NULL, g = NULL, trafo = NULL,
              equilZeroStates = equilZeroStates, t0events = res$events0,
              nConditions = res$nConditions, chainOf = res$chainOf,
              nGaps = res$nGaps, implicitSteadyState = isTRUE(ui), control = control,
-             verify = verify))
+             verify = verify, translationsOnly = translationsOnly))
     }
     ro <- runObs(useImplicit)
     ## explicit-eliminated fallback removed (deprecated): the implicit path no longer
@@ -477,8 +515,22 @@ symmetryDetection <- function(f = NULL, g = NULL, trafo = NULL,
            paste(unlist(ro$nonrational), collapse = "\n  "),
            "\nA logarithmic observable log10(h) + offset equals the rational ",
            "observable scale * h; supply it in that form, or use ",
-           "method = \"liesym\".", call. = FALSE)
+           "method = \"polynomial\".", call. = FALSE)
     res <- ro$result
+    if (is.list(res)) {
+      res$nonIdentifiable <- .sym_relabel_directions(res$nonIdentifiable, sd,
+        if (is.null(control$degreeCap)) 4L else control$degreeCap)
+      if (!translationsOnly && isTRUE(control$certifyPoly))
+        res$nonIdentifiable <- .sym_certify_poly(res$nonIdentifiable,
+          toLines(fdyn), toLines(gobs), forcings, fixed, parameters, control, sd)
+      if (translationsOnly) {
+        # keep only the translation class (the peel returns just these; a fallback
+        # full reconstruction may also carry other classes)
+        res$nonIdentifiable <- Filter(function(d) isTRUE(d$type == "translation"),
+                                      res$nonIdentifiable)
+        res$method <- "translation"
+      }
+    }
     if (isTRUE(verify) && is.list(res) && is.list(res$verification) &&
         isFALSE(res$verification$ok))
       warning("symmetryDetection(verify = TRUE): the Schwartz-Zippel saturation guard ",
@@ -516,9 +568,10 @@ symmetryDetection <- function(f = NULL, g = NULL, trafo = NULL,
     return(structure(res, class = "symmetryDetection"))
   }
 
-  # liesym: polynomial Lie-symmetry ansatz on the (trafo-substituted) f and g;
-  # forcings are the externally driven (input) states.
-  fld <- function(nm, default) if (is.null(liesym[[nm]])) default else liesym[[nm]]
+  # polynomial: the polynomial Lie-symmetry ansatz (Merkt et al. 2015) on the
+  # (trafo-substituted) f and g; forcings are the externally driven (input) states.
+  # (This engine was named "liesym" before; the Python method tag stays "liesym".)
+  fld <- function(nm, default) if (is.null(polynomial[[nm]])) default else polynomial[[nm]]
   # the Python engine writes its own progress and report to stdout; capture it so
   # the R print/summary methods are the single display path.
   reticulate::py_capture_output(
@@ -533,7 +586,7 @@ symmetryDetection <- function(f = NULL, g = NULL, trafo = NULL,
       lieOrder    = as.integer(fld("lieOrder", 0L)),
       exact       = fld("exact", TRUE),
       verify      = fld("verify", TRUE),
-      backend     = liesym$backend,
+      backend     = if (is.null(polynomial$backend)) "symengine" else polynomial$backend,
       parameters  = if (length(parameters)) parameters else NULL,
       method      = "liesym"
     ))
@@ -764,9 +817,9 @@ symmetryDetection <- function(f = NULL, g = NULL, trafo = NULL,
 #' @param gapOrderCap Cap on the gap power-series order raised when propagating the
 #'   state exactly across later (post-stimulus) event boundaries.
 #' @param minsupportCandCap Cap on the number of column subsets the minimal-support
-#'   peel enumerates when hunting narrow nullspace cocircuits. A genuinely wide
+#'   search enumerates when hunting narrow nullspace cocircuits. A genuinely wide
 #'   direction has no small-support cocircuit, so an exhaustive scan would test
-#'   `choose(support, s)` subsets fruitlessly; the peel stops at this cap and lets
+#'   `choose(support, s)` subsets fruitlessly; the search stops at this cap and lets
 #'   any wide direction fall through to the free-column fit. Raise it only to peel
 #'   cocircuits of unusually large support.
 #' @param perprimeCap Max sample points per prime for the per-prime reconstruction
@@ -786,6 +839,13 @@ symmetryDetection <- function(f = NULL, g = NULL, trafo = NULL,
 #'   succeeds under the direction's perturbations is dropped; the rational
 #'   reconstruction then runs over the remaining primes (their product still bounds
 #'   the coefficient height). Below this many live primes the entry is support-only.
+#' @param certifyPoly Logical. For each `"affine"`/`"polynomial"` direction, run the
+#'   polynomial Lie-symmetry engine (`method = "polynomial"`) and set `$certified`
+#'   to whether the direction is a nonzero constant combination of its generators --
+#'   i.e. an exact polynomial Lie point symmetry, not merely an observability
+#'   non-identifiability. `FALSE` by default; it is comparatively expensive.
+#' @param certifyPolyDeg Ansatz degree for `certifyPoly`; `NULL` (default) uses each
+#'   direction's own classified degree.
 #' @param timeout Wall-clock budget in seconds for the closed-form reconstruction
 #'   (`closedForm = TRUE`). When it is exceeded, the directions still being
 #'   reconstructed are returned support-only (`closedForm = FALSE`) with a
@@ -811,6 +871,8 @@ reconstControl <- function(relevanceCap       = 6L,
                            minsupportCandCap  = 20000L,
                            perprimeCap        = 120L,
                            perprimeMinPrimes  = 3L,
+                           certifyPoly        = FALSE,
+                           certifyPolyDeg     = NULL,
                            timeout            = Inf) {
   stopifnot(relevanceCap >= 0L, relevanceCapDir >= 1L,
             relevanceCapSparse >= relevanceCap, degreeCap >= 0L,
@@ -818,6 +880,7 @@ reconstControl <- function(relevanceCap       = 6L,
             laurentDegNum >= 1L, laurentDegDen >= 0L, laurentCandCap >= 1L,
             generalDegNum >= 1L, generalDegDen >= 1L, gapOrderCap >= 0L,
             minsupportCandCap >= 1L, perprimeCap >= 1L, perprimeMinPrimes >= 2L,
+            is.logical(certifyPoly), is.null(certifyPolyDeg) || certifyPolyDeg >= 1L,
             is.numeric(timeout), timeout > 0)
   structure(list(relevanceCap       = as.integer(relevanceCap),
                  relevanceCapDir    = as.integer(relevanceCapDir),
@@ -835,15 +898,18 @@ reconstControl <- function(relevanceCap       = 6L,
                  minsupportCandCap  = as.integer(minsupportCandCap),
                  perprimeCap        = as.integer(perprimeCap),
                  perprimeMinPrimes  = as.integer(perprimeMinPrimes),
+                 certifyPoly        = isTRUE(certifyPoly),
+                 certifyPolyDeg     = if (is.null(certifyPolyDeg)) NULL
+                                      else as.integer(certifyPolyDeg),
                  timeout            = timeout),
             class = c("reconstControl", "list"))
 }
 
 
-#' Tuning control for `symmetryDetection(method = "liesym")`
+#' Tuning control for `symmetryDetection(method = "polynomial")`
 #'
 #' Bundles the polynomial Lie-symmetry engine's parameters into one object, passed
-#' as `symmetryDetection(..., liesym = liesymControl(...))`.
+#' as `symmetryDetection(..., polynomial = polynomialControl(...))`.
 #'
 #' @param ansatz Type of infinitesimal ansatz: `"uni"`, `"par"` or `"multi"`.
 #' @param pMax Maximal degree of the infinitesimal ansatz (integer `>= 1`).
@@ -855,16 +921,16 @@ reconstControl <- function(relevanceCap       = 6L,
 #' @param allTrafos Logical. Keep transformations that share a common parameter
 #'   factor instead of dropping them.
 #' @param backend `"symengine"` (faster, falls back to sympy) or `"sympy"`.
-#' @return A `liesymControl` list.
+#' @return A `polynomialControl` list.
 #' @seealso [symmetryDetection()], [scalingControl()]
 #' @export
-liesymControl <- function(ansatz    = c("uni", "par", "multi"),
-                          pMax      = 2L,
-                          lieOrder  = 0L,
-                          exact     = TRUE,
-                          verify    = TRUE,
-                          allTrafos = FALSE,
-                          backend   = c("symengine", "sympy")) {
+polynomialControl <- function(ansatz    = c("uni", "par", "multi"),
+                              pMax      = 2L,
+                              lieOrder  = 0L,
+                              exact     = TRUE,
+                              verify    = TRUE,
+                              allTrafos = FALSE,
+                              backend   = c("symengine", "sympy")) {
   ansatz  <- match.arg(ansatz)
   backend <- match.arg(backend)
   stopifnot(pMax >= 1L, lieOrder >= 0L,
@@ -873,7 +939,7 @@ liesymControl <- function(ansatz    = c("uni", "par", "multi"),
                  lieOrder = as.integer(lieOrder), exact = isTRUE(exact),
                  verify = isTRUE(verify), allTrafos = isTRUE(allTrafos),
                  backend = backend),
-            class = c("liesymControl", "list"))
+            class = c("polynomialControl", "list"))
 }
 
 
@@ -884,7 +950,7 @@ liesymControl <- function(ansatz    = c("uni", "par", "multi"),
 #'
 #' @param backend `"symengine"` (faster, falls back to sympy) or `"sympy"`.
 #' @return A `scalingControl` list.
-#' @seealso [symmetryDetection()], [liesymControl()]
+#' @seealso [symmetryDetection()], [polynomialControl()]
 #' @export
 scalingControl <- function(backend = c("symengine", "sympy")) {
   backend <- match.arg(backend)
@@ -972,6 +1038,20 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
     piv <- c(piv, col - 1L); row <- row + 1L
   }
   list(R = M, piv = piv, rank = length(piv))
+}
+
+# RREF of the rows of B, but with the columns in `physCols0` (0-based) taken as
+# pivots first, so distinct residual directions receive distinct PHYSICAL pivots
+# (the forward path anchors on them). Returns the reduced rows in the original
+# column order and each row's 0-based pivot column.
+.sym_phys_rref <- function(B, physCols0, nz, p) {
+  if (nrow(B) == 0L) return(list(R = B, piv = integer(0)))
+  ord <- c(sort(as.integer(physCols0)),
+           sort(setdiff(0:(nz - 1L), as.integer(physCols0))))   # physical columns first
+  rr <- .sym_rref_modp(B[, ord + 1L, drop = FALSE], p)
+  Rback <- matrix(0, nrow(rr$R), nz)
+  Rback[, ord + 1L] <- rr$R
+  list(R = Rback, piv = ord[rr$piv + 1L])                        # 0-based original pivots
 }
 
 # k-by-k matrix inverse over GF(p) by Gauss-Jordan; NULL if singular.
@@ -1580,21 +1660,27 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
 # bignum CRT (no 4-prime cap). Returns a verified closed-form entry or a support-only fallback.
 .sym_perprime_forward <- function(f, sc, kcall, kcallFwd, znames, zSlots, leafNames, nz,
                                   scaling, stateColNames, paramNames, recast, sd, spy, ctrl,
-                                  physCols, models, realStateNames, solveParamNames, solveHeld) {
+                                  physCols, models, realStateNames, solveParamNames, solveHeld,
+                                  acIn = NULL, listAnchors = FALSE) {
   # three 31-bit primes give a ~2^93 CRT modulus -- ample for the (clean, small) coefficients of a
   # physical symmetry, while each extra prime is another full per-point kernel pass, so keep it low.
   rp8 <- unique(as.integer(c(.symPrimes, 2147483563, 2147483549, 2147483543, 2147483497)))
   nPrimeFwd <- max(2L, min(3L, length(rp8) - 1L))
   primes <- rp8[seq_len(nPrimeFwd)]; qv <- rp8[length(primes) + 1L]; P1 <- primes[1]
-  fb <- function(reason) { v <- .sym_null_residues(sc$ref, f, P1)
-    list(support = sort(znames[v != 0]), type = "general", closedForm = FALSE, reason = reason) }
-  if (is.null(sd) || is.null(kcallFwd) || .sym_expired(ctrl)) return(fb("forward path unavailable"))
+  dirSupport <- NULL   # this direction's support, set once its anchor is known
+  fb <- function(reason) {
+    supp <- if (!is.null(dirSupport)) dirSupport
+            else { v <- .sym_null_residues(sc$ref, f, P1); sort(znames[v != 0]) }
+    list(support = supp, type = "general", closedForm = FALSE, reason = reason) }
+  if (is.null(sd) || is.null(kcallFwd) || .sym_expired(ctrl)) {
+    if (listAnchors) return(integer(0)); return(fb("forward path unavailable")) }
   rdiag <- nzchar(Sys.getenv("DMOD_SYM_ROBUSTDIAG"))
   stripName <- function(nm) sub("\\|c[0-9]+$", "", nm)
   npt <- length(sc$point0); poolN <- sc$poolNext
   draw <- function(n) { u <- sc$pool(poolN + seq_len(n) - 1L); poolN <<- poolN + n; u }
   freeColsOf <- function(rp) setdiff(0:(nz - 1L), as.integer(rp$pivots))
   isStateCol <- logical(nz); isStateCol[which(znames %in% stateColNames)] <- TRUE
+  physSet <- if (is.null(physCols)) (seq_len(nz) - 1L) else as.integer(physCols)
   nS <- length(scaling)
   Wn <- lapply(scaling, function(s) names(s$vector)); Wv <- lapply(scaling, function(s) as.character(unlist(s$vector)))
   tangentsAt <- function(zvals, p) {
@@ -1612,32 +1698,54 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
     for (j in seq_along(Sr$piv)) { fac <- B[, Sr$piv[j] + 1L] %% p
       for (i in seq_len(nrow(B))) if (fac[i] != 0) B[i, ] <- (B[i, ] - .sym_mulmod(Sr$R[j, ], fac[i], p)) %% p }
     B }
+  # the residual direction normalised on `ac`, in a CONSISTENT gauge across sample
+  # points: reduce the free-column null space by the scalings, physical-first RREF, and
+  # return the direction with ac = 1 and every physical pivot = 0. This is well defined
+  # whether `ac` is itself a pivot here or not (the forward kernel frees the states, so
+  # its pivot set can differ from the backward one that chose the anchor), and gives a
+  # distinct direction per anchor -- unlike "first row with ac != 0", which collapses
+  # anchors that share a row.
   extract <- function(rp, zvals, p, ac) {
     B <- t(vapply(freeColsOf(rp), function(fc) .sym_null_residues(rp, fc, p), integer(nz)))
     Bred <- reduceRows(B, tangentsAt(zvals, p), p)
-    for (r in which(apply(Bred, 1L, function(x) any(x %% p != 0)))) { a <- Bred[r, ac + 1L] %% p
-      if (a != 0) return(as.integer(.sym_mulmod(Bred[r, ], .sym_invmod(a, p), p))) }
-    NULL }
+    Bred <- Bred[apply(Bred, 1L, function(x) any(x %% p != 0)), , drop = FALSE]
+    if (nrow(Bred) == 0L) return(NULL)
+    rr <- .sym_phys_rref(Bred, physSet, nz, p)
+    pr <- match(ac, rr$piv)
+    if (!is.na(pr)) return(as.integer(rr$R[pr, ] %% p))          # ac is a pivot: its row
+    if ((ac + 1L) > nz) return(NULL)
+    v <- integer(nz); v[ac + 1L] <- 1L                          # ac free: 1 on ac, 0 on pivots
+    for (i in seq_along(rr$piv)) v[rr$piv[i] + 1L] <- as.integer((p - rr$R[i, ac + 1L]) %% p)
+    v }
   kxB <- function(pt, p, ac) { rp <- kcall(pt, p, sc$NtUsed)
     if (!isTRUE(rp$ok) || rp$rank != sc$rank) return(NULL); extract(rp, pt[zSlots + 1L], p, ac) }
   kxF <- function(pt, p, ac, sr) { rp <- kcallFwd(pt, p, sc$NtUsed, sr)
     if (!isTRUE(rp$ok) || rp$rank != sc$rank) return(NULL); extract(rp, pt[zSlots + 1L], p, ac) }
 
-  # 1. anchor + support from a backward-valid P1 point (structural; forward or backward agree)
+  # 1. anchor set: RREF the residual free-column null vectors (mod scalings) at a fresh
+  # backward-valid point, over the PHYSICAL columns, so each residual direction gets a
+  # DISTINCT physical pivot. With `listAnchors` return the whole set; otherwise
+  # reconstruct the one at `acIn` (or the first). This replaces "always the first
+  # residual", which collapsed every call -- over a >1-dimensional residual space --
+  # onto a single (often already-known) direction.
   ptbB <- NULL
   for (att in seq_len(200L)) { cand <- draw(npt)
     r <- kcall(cand, P1, sc$NtUsed); if (isTRUE(r$ok) && r$rank == sc$rank) { ptbB <- cand; break } }
-  if (is.null(ptbB)) return(fb("forward: no backward base for support"))
+  if (is.null(ptbB)) { if (listAnchors) return(integer(0)); return(fb("forward: no backward base for support")) }
   rp0 <- kcall(ptbB, P1, sc$NtUsed)
   B0 <- t(vapply(freeColsOf(rp0), function(fc) .sym_null_residues(rp0, fc, P1), integer(nz)))
   Bred0 <- reduceRows(B0, tangentsAt(ptbB[zSlots + 1L], P1), P1)
-  nzr <- which(apply(Bred0, 1L, function(x) any(x %% P1 != 0)))
-  if (!length(nzr)) return(fb("forward: empty residual"))
-  v9 <- Bred0[nzr[1], ]
-  physSet <- if (is.null(physCols)) (seq_len(nz) - 1L) else as.integer(physCols)
-  acC <- intersect(which(v9 %% P1 != 0) - 1L, physSet); if (!length(acC)) return(fb("forward: no anchor"))
-  ac <- acC[1]
-  v0 <- as.integer(.sym_mulmod(v9, .sym_invmod(v9[ac + 1L] %% P1, P1), P1))
+  Bred0 <- Bred0[apply(Bred0, 1L, function(x) any(x %% P1 != 0)), , drop = FALSE]
+  if (nrow(Bred0) == 0L) { if (listAnchors) return(integer(0)); return(fb("forward: empty residual")) }
+  rr0 <- .sym_phys_rref(Bred0, physSet, nz, P1)
+  anchors <- rr0$piv[rr0$piv %in% physSet]
+  if (listAnchors) return(anchors)
+  if (!length(anchors)) return(fb("forward: no physical residual anchor"))
+  ac <- if (!is.null(acIn)) as.integer(acIn) else anchors[1]
+  arow <- match(ac, rr0$piv)
+  if (is.na(arow)) return(fb("forward: requested anchor is not a residual pivot"))
+  v0 <- as.integer(.sym_mulmod(rr0$R[arow, ], .sym_invmod(rr0$R[arow, ac + 1L] %% P1, P1), P1))
+  dirSupport <- sort(unique(stripName(znames[which(v0 %% P1 != 0)])))
   suppNames <- unique(stripName(znames[c(ac, setdiff(which(v0 %% P1 != 0) - 1L, ac)) + 1L]))
 
   # 2. turnover transversal (avoids the direction's support + the recast coords)
@@ -1768,6 +1876,31 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
     if (!okv) return(fb("forward: reconstructed direction failed fresh-point verification")) }
   if (rdiag) message("[fwd] VERIFIED (base-independent) -- closing direction (states are resting-level symbols)")
   list(support = sort(names(entries)), vector = entries, type = "general", closedForm = TRUE)
+}
+
+
+# Reconstruct EVERY residual (non-scaling) direction the coupled/recast case leaves to
+# the forward path. One shared anchor set (distinct physical pivots via .sym_phys_rref),
+# then the single-direction forward per anchor, so a residual space of dimension > 1 is
+# recovered as that many DISTINCT directions instead of the first one repeated. Returns a
+# list of directions (each closed or support-only), or NULL if no anchor set forms.
+.sym_perprime_forward_multi <- function(residualFree, sc, kcall, kcallFwd, znames, zSlots,
+                                        leafNames, nz, scaling, stateColNames, paramNames,
+                                        recast, sd, spy, ctrl, physCols, models,
+                                        realStateNames, solveParamNames, solveHeld) {
+  if (!length(residualFree)) return(list())
+  # reconstruct the WHOLE non-scaling residual (all free columns mod the exact
+  # scalings): a distinct physical anchor per residual direction. The caller adopts
+  # the set only if every one closes, and replaces BOTH the peel and the per-column
+  # results, so the peeled/forward split never has to be reconciled.
+  fwd1 <- function(acIn, listAnchors)
+    .sym_perprime_forward(residualFree[1], sc, kcall, kcallFwd, znames, zSlots, leafNames,
+                          nz, scaling, stateColNames, paramNames, recast, sd, spy, ctrl,
+                          physCols, models, realStateNames, solveParamNames, solveHeld,
+                          acIn = acIn, listAnchors = listAnchors)
+  anchors <- fwd1(NULL, TRUE)
+  if (!length(anchors)) return(NULL)
+  lapply(anchors, function(a) fwd1(a, FALSE))
 }
 
 
@@ -1977,6 +2110,196 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
 }
 
 
+# Nullspace basis (columns) of an arbitrary GF(p) matrix M with nc columns.
+.sym_null_basis_of <- function(M, nc, p) {
+  rr <- .sym_rref_modp(M, p)
+  free <- setdiff(seq_len(nc) - 1L, rr$piv)
+  if (!length(free)) return(matrix(0L, nc, 0L))
+  vapply(free, function(fc) {
+    v <- integer(nc); v[fc + 1L] <- 1L
+    for (ri in seq_along(rr$piv))
+      v[rr$piv[ri] + 1L] <- as.integer((p - rr$R[ri, fc + 1L]) %% p)
+    v
+  }, integer(nc))
+}
+
+
+# RREF row-basis (rank x nz) of the intersection of the column spans of A and B
+# over GF(p), via the nullspace of [A | -B]: a combination (x, y) there gives a
+# vector A x = B y common to both spans. The canonical RREF makes the result
+# comparable across primes/points.
+.sym_intersect_rref <- function(A, B, nz, p) {
+  a <- ncol(A); b <- ncol(B)
+  if (a == 0L || b == 0L) return(matrix(0L, 0L, nz))
+  Am <- matrix(as.numeric(A) %% p, nz, a)
+  M <- cbind(Am, (p - matrix(as.numeric(B) %% p, nz, b)) %% p)   # [A | -B]
+  nb <- .sym_null_basis_of(M, a + b, p)
+  if (ncol(nb) == 0L) return(matrix(0L, 0L, nz))
+  X <- matrix(as.numeric(nb[seq_len(a), , drop = FALSE]), a)
+  inter <- .sym_mulmod_matmat(Am, X, p)                          # nz x k, = A x
+  rr <- .sym_rref_modp(t(inter), p)
+  rr$R[seq_len(rr$rank), , drop = FALSE]
+}
+
+
+# GF(p) matrix product A (m x k) %*% B (k x n), split-multiply to stay exact.
+.sym_mulmod_matmat <- function(A, B, p) {
+  m <- nrow(A); n <- ncol(B); k <- ncol(A)
+  out <- matrix(0, m, n)
+  for (j in seq_len(n)) {
+    acc <- numeric(m)
+    for (l in seq_len(k)) acc <- (acc + .sym_mulmod(A[, l], B[l, j], p)) %% p
+    out[, j] <- acc
+  }
+  out
+}
+
+
+# Exact translation lattice: the CONSTANT tangents that lie in the observability
+# nullspace at EVERY point. A translation z_i -> z_i + eps*a_i has a point-
+# independent tangent a, so it survives the intersection of the nullspaces over
+# several generic points; a scaling's tangent w*z varies with the point and drops
+# out. The surviving GF(p) subspace is the translation lattice; each basis vector's
+# constant components are lifted to exact rationals by single-prime rational
+# reconstruction. Reconstruction-free (no rational fit over the whole coordinate),
+# so the directions carry the same exactness as the scalings. Returns the
+# translation entries and the Bmat with their tangents appended (excluding them
+# from the residual reconstruction), or NULL if generic points could not be
+# gathered (caller then skips the peel -- no regression).
+.sym_peel_translations <- function(sc, kcall, freeCols, N, nz, P, ctrl, Bmat, znames) {
+  if (!ncol(N)) return(list(translations = list(), Bmat = Bmat))
+  npts <- if (is.null(ctrl$translPoints)) 3L else as.integer(ctrl$translPoints)
+  C <- N
+  nL <- length(sc$point0)
+  base <- sc$poolNext + 4096L                    # clear of the reconstruction probes
+  for (t in seq_len(npts)) {
+    if (!ncol(C)) break
+    cand <- NULL
+    for (att in seq_len(ctrl$probeRetries)) {
+      off <- base + ((t - 1L) * ctrl$probeRetries + (att - 1L)) * (nL + 1L)
+      pert <- sc$point0
+      for (li in seq_len(nL)) pert[li] <- sc$pool(off + li)
+      cnd <- tryCatch(kcall(pert, P, sc$NtUsed), error = function(e) NULL)
+      if (!is.null(cnd) && isTRUE(cnd$ok) &&
+          identical(as.integer(cnd$pivots), as.integer(sc$pivots))) { cand <- cnd; break }
+    }
+    if (is.null(cand)) return(NULL)              # graceful skip: no regression
+    Nk <- .sym_nullspace_basis(cand, freeCols, P)
+    rows <- .sym_intersect_rref(C, Nk, nz, P)
+    C <- if (nrow(rows)) t(rows) else matrix(0L, nz, 0L)
+  }
+  if (!ncol(C)) return(list(translations = list(), Bmat = Bmat))
+  latt <- .sym_rref_modp(t(C), P)                # canonical RREF row-basis mod P
+  rows <- latt$R[seq_len(latt$rank), , drop = FALSE]
+  translations <- list()
+  for (r in seq_len(nrow(rows))) {
+    tang <- as.integer(rows[r, ] %% P)
+    if (all(tang == 0) || .sym_in_span(Bmat, tang, nz, P)) next
+    rec <- tryCatch(symRatRecon(matrix(tang, ncol = 1L), as.integer(P)),
+                    error = function(e) NULL)
+    if (is.null(rec) || any(rec$den == "0")) next
+    num <- rec$num; den <- rec$den
+    comps <- list()
+    for (i in seq_len(nz)) {
+      if (num[i] == "0") next
+      comps[[znames[i]]] <- if (den[i] == "1") num[i] else paste0(num[i], "/", den[i])
+    }
+    if (!length(comps)) next
+    Bmat <- cbind(Bmat, tang)
+    translations[[length(translations) + 1L]] <- list(
+      support = sort(names(comps)), vector = comps,
+      type = "translation", closedForm = TRUE)
+  }
+  list(translations = translations, Bmat = Bmat)
+}
+
+
+# Classify one closed-form direction into {scaling, translation, affine,
+# polynomial, general} on its canonical poly-primitive generator, via the Python
+# classifier. A generator is defined only up to a nonzero function h(z); the
+# classifier fixes that gauge, so the modular and symbolic engines land on the
+# same representative (a "disguised" scaling like xi = (1, -ktl/ktx, m/ktx) is
+# recognised as the scaling (ktx, -ktl, m)). A native scaling with an integer
+# weight is canonicalised too; one with a symbolic (Hill) weight is left as-is,
+# since the classifier reads it as a degree-2 polynomial. Returns the direction
+# with $type/$vector/$degree updated (scaling: $vector = integer weights, so the
+# weight convention downstream is preserved; every other class: $vector = the
+# canonical generator components).
+.sym_classify_direction <- function(d, sd, degreeCap) {
+  if (is.null(d$vector)) return(d)
+  if (isTRUE(d$type == "scaling")) {
+    wint <- suppressWarnings(as.integer(as.character(unlist(d$vector))))
+    if (anyNA(wint)) return(d)                       # Hill / symbolic weight: keep
+    lit <- setNames(as.list(paste0(as.character(unlist(d$vector)), "*",
+                                   names(d$vector))), names(d$vector))
+  } else {
+    lit <- setNames(as.list(as.character(unlist(d$vector))), names(d$vector))
+  }
+  cls <- tryCatch(sd$classifyDirection(lit, as.integer(degreeCap)),
+                  error = function(e) NULL)
+  if (is.null(cls) || is.null(cls$type)) return(d)
+  d$type <- as.character(cls$type)
+  d$degree <- if (!is.null(cls$degree)) as.integer(cls$degree) else NULL
+  if (identical(d$type, "scaling")) {
+    d$vector <- lapply(cls$weights, function(w) as.character(w))
+    d$support <- sort(names(cls$weights))
+  } else {
+    d$vector <- lapply(cls$components, function(x) as.character(x))
+    d$support <- sort(names(cls$components))
+  }
+  d
+}
+
+
+# Post-process every closed-form direction through the classifier so both the
+# modular and symbolic engines report the same canonical generator and symmetry
+# class. Support-only directions (no closed form) are left untouched. Runs at the
+# top-level observability returns, so it covers both symEngine paths.
+.sym_relabel_directions <- function(nonId, sd, degreeCap) {
+  if (is.null(sd) || !length(nonId)) return(nonId)
+  lapply(nonId, function(d) if (is.null(d$vector)) d
+                            else .sym_classify_direction(d, sd, degreeCap))
+}
+
+
+# Optional certificate (reconstControl(certifyPoly = TRUE)): run the polynomial
+# Lie-symmetry engine at the relevant degree and flag each affine/polynomial
+# direction that is a nonzero constant linear combination of the returned
+# generators -- i.e. an exact polynomial Lie POINT symmetry (the strict
+# determining-equation notion), not merely an observability non-identifiability.
+# Sets $certified (TRUE/FALSE); a FALSE just means the direction is not a strict
+# polynomial symmetry, it stays a valid non-identifiability. `modelLines`/`obsLines`
+# are the already-serialised f and g (toLines is a local closure of the caller).
+.sym_certify_poly <- function(nonId, modelLines, obsLines, forcings, fixed,
+                              parameters, ctrl, sd) {
+  cand <- Filter(function(d) isTRUE(d$type %in% c("affine", "polynomial")), nonId)
+  if (!length(cand) || is.null(sd)) return(nonId)
+  deg <- if (!is.null(ctrl$certifyPolyDeg)) as.integer(ctrl$certifyPolyDeg)
+         else max(vapply(cand, function(d)
+           if (is.null(d$degree)) 1L else as.integer(d$degree), integer(1)))
+  gens <- tryCatch({
+    reticulate::py_capture_output(
+      r <- sd$symmetryDetectiondMod(
+        model = modelLines, observation = obsLines,
+        ansatz = "multi", pMax = as.integer(max(1L, deg)),
+        inputs = if (length(forcings)) forcings else NULL, fixed = fixed,
+        allTrafos = TRUE, lieOrder = 0L, exact = TRUE, verify = FALSE,
+        backend = "symengine",
+        parameters = if (length(parameters)) parameters else NULL, method = "liesym"))
+    r
+  }, error = function(e) NULL)
+  genVecs <- if (is.null(gens)) list()
+             else Filter(Negate(is.null), lapply(gens, function(g) g$infinitesimals))
+  lapply(nonId, function(d) {
+    if (!isTRUE(d$type %in% c("affine", "polynomial"))) return(d)
+    d$certified <- length(genVecs) > 0L &&
+      isTRUE(tryCatch(sd$certifyInSpan(d$vector, genVecs)$certified,
+                      error = function(e) FALSE))
+    d
+  })
+}
+
+
 # Peel the scaling directions common to all conditions. Each generator is
 # projected onto the unknown coordinates z (state weights outside z, e.g. under a
 # steady-state constraint, drop out), turned into its tangent w_c * z_c at the
@@ -2124,7 +2447,8 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
                                           t0events = list(), nConditions = NULL,
                                           chainOf = NULL, nGaps = 0L,
                                           implicitSteadyState = FALSE,
-                                          control = reconstControl(), verify = FALSE) {
+                                          control = reconstControl(), verify = FALSE,
+                                          translationsOnly = FALSE) {
   ctrl <- control
   jointSS <- isTRUE(multi$jointSteadyState) && isTRUE(implicitSteadyState)
   cores <- as.integer(max(1L, coresConditions))
@@ -2207,6 +2531,10 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
     out
   }
   tapes <- lapply(multi$tapes, tapeFields)
+
+  # batched per-chunk evaluator for the coupled+gap reconstruction loop (set inside
+  # the joint block below when hasGaps); NULL keeps the serial parMap fallback.
+  kchunk <- NULL
 
   if (ssConstraint) {
     # constraint mode: states are not free coordinates. Per (point, prime) solve
@@ -2455,76 +2783,142 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
       # each condition is solved and observed at its OWN resting state; the state
       # columns are then log-normalised (multiplied by x*_c) so a scaling weight is
       # condition-independent, and the per-condition [Obs ; df] blocks are stacked.
+      #
+      # one condition's [Obs ; df] blocks embedded in the wide space, given its kernel
+      # result `obs` and solve `sc0`. Shared verbatim by the serial kcall4 below and
+      # the batched kchunk, so both paths are byte-identical. NULL = degenerate point.
+      oneCondBlocks <- function(mi, obs, sc0, p) {
+        if (!isTRUE(obs$ok)) return(NULL)
+        oR <- matrix(as.numeric(obs$R), nrow = obs$rank, ncol = nzL)
+        dR <- dfRowsCond(sc0$sol, p)
+        # a state whose on-manifold value hits 0 mod p (unlucky point/prime, or a
+        # genuinely-zero state) makes its log-normalised column degenerate - reject
+        # the whole point so the saturator resamples at a fresh point/prime
+        xvals <- as.numeric(sc0$ptc[jointStateSlot]) %% p
+        if (any(xvals == 0)) {
+          if (nzchar(Sys.getenv("DMOD_SYM_FWDDIAG")))
+            message("[fwddiag] zero log-normal coord at slots ",
+                    paste(jointStateSlot[xvals == 0], collapse = ","))
+          return(NULL) }
+        for (m in seq_along(logCols)) {
+          xv <- xvals[m]
+          oR[, logCols[m]] <- .sym_mulmod(oR[, logCols[m]], xv, p)
+          if (nrow(dR)) dR[, logCols[m]] <- .sym_mulmod(dR[, logCols[m]], xv, p)
+        }
+        # embed this condition's [Obs ; df] into its own wide state block (shared
+        # param/L columns overlap, state columns go to block mi)
+        wc <- wideCols[[mi]]
+        bl <- list()
+        eO <- matrix(0, nrow(oR), nzWide); eO[, wc] <- oR
+        bl[[length(bl) + 1L]] <- eO
+        if (nrow(dR)) {
+          eD <- matrix(0, nrow(dR), nzWide); eD[, wc] <- dR
+          bl[[length(bl) + 1L]] <- eD
+        }
+        # tie E and L back to the base for this condition (numeric exp/log(base)
+        # coefficients from this condition's sample point)
+        for (rc in recastRel) {
+          expv <- as.numeric(sc0$ptc[rc$expSlot]) %% p
+          Lv   <- as.numeric(sc0$ptc[rc$LSlot]) %% p
+          # 1/base factor for a non-log-normalised parameter base (state base: 1)
+          bScale <- 1
+          if (isTRUE(rc$baseParam)) {
+            bv <- as.numeric(sc0$ptc[rc$baseSlot]) %% p
+            if (bv == 0) return(NULL)                  # degenerate point, resample
+            bScale <- .sym_invmod(bv, p)
+          }
+          r1 <- numeric(nzWide)                       # E = base^exp
+          r1[wc[rc$ECol]]    <- 1
+          r1[wc[rc$baseCol]] <- (p - .sym_mulmod(expv, bScale, p)) %% p   # -exp/base
+          r1[wc[rc$expCol]]  <- (-Lv) %% p
+          r2 <- numeric(nzWide)                       # L = log(base)
+          r2[wc[rc$LCol]]    <- 1
+          r2[wc[rc$baseCol]] <- (p - bScale) %% p                         # -1/base
+          bl[[length(bl) + 1L]] <- rbind(r1, r2)
+        }
+        bl
+      }
+      # one condition's observability kernel at its seeded resting state: a chain of
+      # segments across post-t0 event gaps, or the single equilibrate segment.
+      condObs <- function(ci, ptc, p, Nt, Mtot) {
+        if (hasGaps)
+          symObsNullChain(list(tapes[chainGroups[[chainOf[ci]]]]), nLeaves, nStates,
+                          zSlotsL, as.integer(ptc %% p), p, as.integer(Nt),
+                          as.integer(Mtot), 1L)
+        else
+          symObsNullMulti(list(tapes[[ci]]), nLeaves, nStates, zSlotsL,
+                          as.integer(ptc %% p), p, as.integer(Nt), 1L)
+      }
       kcall4 <- function(point, p, Nt, Mtot = 0L, solveFn = jointSolveCond) {
         blocks <- list()
         for (mi in seq_len(Kc)) {
           ci <- equilConds[mi]
           sc0 <- solveFn(point, p, ci)
           if (is.null(sc0)) { ssWhy <<- "joint solve failed"; return(list(ok = FALSE)) }
-          # observe the whole condition at its own resting state: with post-t0 event
-          # gaps this is a chain of segments (the resting first segment plus the
-          # propagated post-dose ones), so the kernel propagates across the gap;
-          # without gaps it is the single equilibrate segment.
-          if (hasGaps) {
-            chain <- chainGroups[[chainOf[ci]]]
-            obs <- symObsNullChain(list(tapes[chain]), nLeaves, nStates, zSlotsL,
-                                   as.integer(sc0$ptc %% p), p, as.integer(Nt),
-                                   as.integer(Mtot), 1L)
-          } else {
-            obs <- symObsNullMulti(list(tapes[[ci]]), nLeaves, nStates, zSlotsL,
-                                   as.integer(sc0$ptc %% p), p, as.integer(Nt), 1L)
-          }
-          if (!isTRUE(obs$ok)) return(list(ok = FALSE))
-          oR <- matrix(as.numeric(obs$R), nrow = obs$rank, ncol = nzL)
-          dR <- dfRowsCond(sc0$sol, p)
-          # a state whose on-manifold value hits 0 mod p (unlucky point/prime, or a
-          # genuinely-zero state) makes its log-normalised column degenerate - reject
-          # the whole point so the saturator resamples at a fresh point/prime
-          xvals <- as.numeric(sc0$ptc[jointStateSlot]) %% p
-          if (any(xvals == 0)) {
-            if (nzchar(Sys.getenv("DMOD_SYM_FWDDIAG")))
-              message("[fwddiag] zero log-normal coord ci=", ci, " at slots ",
-                      paste(jointStateSlot[xvals == 0], collapse = ","))
-            return(list(ok = FALSE)) }
-          for (m in seq_along(logCols)) {
-            xv <- xvals[m]
-            oR[, logCols[m]] <- .sym_mulmod(oR[, logCols[m]], xv, p)
-            if (nrow(dR)) dR[, logCols[m]] <- .sym_mulmod(dR[, logCols[m]], xv, p)
-          }
-          # embed this condition's [Obs ; df] into its own wide state block (shared
-          # param/L columns overlap, state columns go to block mi)
-          wc <- wideCols[[mi]]
-          eO <- matrix(0, nrow(oR), nzWide); eO[, wc] <- oR
-          blocks[[length(blocks) + 1L]] <- eO
-          if (nrow(dR)) {
-            eD <- matrix(0, nrow(dR), nzWide); eD[, wc] <- dR
-            blocks[[length(blocks) + 1L]] <- eD
-          }
-          # tie E and L back to the base for this condition (numeric exp/log(base)
-          # coefficients from this condition's sample point)
-          for (rc in recastRel) {
-            expv <- as.numeric(sc0$ptc[rc$expSlot]) %% p
-            Lv   <- as.numeric(sc0$ptc[rc$LSlot]) %% p
-            # 1/base factor for a non-log-normalised parameter base (state base: 1)
-            bScale <- 1
-            if (isTRUE(rc$baseParam)) {
-              bv <- as.numeric(sc0$ptc[rc$baseSlot]) %% p
-              if (bv == 0) return(list(ok = FALSE))     # degenerate point, resample
-              bScale <- .sym_invmod(bv, p)
-            }
-            r1 <- numeric(nzWide)                       # E = base^exp
-            r1[wc[rc$ECol]]    <- 1
-            r1[wc[rc$baseCol]] <- (p - .sym_mulmod(expv, bScale, p)) %% p   # -exp/base
-            r1[wc[rc$expCol]]  <- (-Lv) %% p
-            r2 <- numeric(nzWide)                       # L = log(base)
-            r2[wc[rc$LCol]]    <- 1
-            r2[wc[rc$baseCol]] <- (p - bScale) %% p                         # -1/base
-            blocks[[length(blocks) + 1L]] <- rbind(r1, r2)
-          }
+          b <- oneCondBlocks(mi, condObs(ci, sc0$ptc, p, Nt, Mtot), sc0, p)
+          if (is.null(b)) return(list(ok = FALSE))
+          blocks <- c(blocks, b)
         }
-        rr <- .sym_rref_modp(do.call(rbind, blocks), p)
-        list(ok = TRUE, R = rr$R[seq_len(rr$rank), , drop = FALSE],
+        # final stacked reduction over GF(p): the compiled kernel (symRrefMod)
+        # runs per accepted sample here; .sym_rref_modp is the identical R fallback
+        rr <- symRrefMod(do.call(rbind, blocks), p)
+        list(ok = TRUE, R = rr$R,
              pivots = as.integer(rr$piv), rank = as.integer(rr$rank), dim = nzWide)
+      }
+      # Batched twin of the serial parMap(kcall4) loop for the coupled + gap path: in
+      # joint mode symObsNullChain runs once per (point, condition), single-threaded --
+      # the dominant reconstruction cost, run serially on Windows (parMap is serial
+      # there). Solve every (point, condition) seed (warmSolves fills the cache in
+      # parallel), evaluate ALL chain kernels in one OpenMP batch over the seeds, then
+      # assemble + reduce each point in R (cheap). Byte-identical to looping kcall4.
+      if (hasGaps) {
+        chainsList <- lapply(seq_len(Kc), function(mi)
+          tapes[chainGroups[[chainOf[equilConds[mi]]]]])
+        # CPU-bound batch over evals: take the larger of the two core budgets (setting
+        # either cores.conditions or cores.GLp then parallelises it), capped per call.
+        coresChunk <- as.integer(max(1L, max(cores, coresGLp)))
+        kchunk <- function(pointList, primeVec, Nt) {
+          warmSolves(pointList, primeVec)
+          nP <- length(pointList)
+          perCond <- vector("list", nP)   # per point: list of Kc sc0, or NULL if any fails
+          seedRows <- list(); evChain <- integer(0); evPrime <- numeric(0)
+          for (i in seq_len(nP)) {
+            pt <- pointList[[i]]; pp <- primeVec[[i]]
+            per <- vector("list", Kc); okAll <- TRUE
+            for (mi in seq_len(Kc)) {
+              sc0 <- jointSolveCond(pt, pp, equilConds[mi])
+              if (is.null(sc0)) { okAll <- FALSE; break }
+              per[[mi]] <- sc0
+            }
+            if (!okAll) next
+            perCond[[i]] <- per
+            for (mi in seq_len(Kc)) {
+              seedRows[[length(seedRows) + 1L]] <- as.integer(per[[mi]]$ptc %% pp)
+              evChain <- c(evChain, mi - 1L); evPrime <- c(evPrime, pp)
+            }
+          }
+          kr <- if (length(seedRows))
+            symObsNullChainSeedBatch(chainsList, as.integer(evChain),
+              do.call(rbind, seedRows), as.numeric(evPrime), nLeaves, nStates,
+              zSlotsL, as.integer(Nt), as.integer(MtotUsed),
+              as.integer(min(coresChunk, length(evChain))))
+            else list()
+          out <- vector("list", nP); e <- 0L
+          for (i in seq_len(nP)) {
+            if (is.null(perCond[[i]])) { out[[i]] <- list(ok = FALSE); next }
+            blocks <- list(); bad <- FALSE
+            for (mi in seq_len(Kc)) {
+              e <- e + 1L
+              b <- oneCondBlocks(mi, kr[[e]], perCond[[i]][[mi]], primeVec[[i]])
+              if (is.null(b)) bad <- TRUE else blocks <- c(blocks, b)
+            }
+            out[[i]] <- if (bad) list(ok = FALSE) else {
+              rr <- symRrefMod(do.call(rbind, blocks), primeVec[[i]])
+              list(ok = TRUE, R = rr$R, pivots = as.integer(rr$piv),
+                   rank = as.integer(rr$rank), dim = nzWide) }
+          }
+          out
+        }
       }
       # from here on the analysis runs over the wide per-condition coordinate space;
       # the kernel/df closures above keep the local names (nzL/znamesL/zSlotsL)
@@ -2594,6 +2988,13 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
         as.integer(pp[seq_len(nLeaves)])))
       symObsNullBatch(tapes, nLeaves, nStates, zSlots, M, as.numeric(primeVec),
                       as.integer(Nt), cores)
+    } else if (!is.null(kchunk) && length(pointList) > 0L &&
+               !nzchar(Sys.getenv("DMOD_SYM_NOCHUNK"))) {
+      # coupled + gap path: batch every (point, condition) chain-kernel evaluation in
+      # one OpenMP call over the pre-solved seeds instead of the serial per-point loop
+      # (the dominant cost, previously serial on Windows). kchunk warms the solves.
+      # DMOD_SYM_NOCHUNK forces the serial fallback (byte-identical cross-check).
+      kchunk(pointList, primeVec, Nt)
     } else {
       # fill the coupled-solve cache for the whole batch in parallel (Windows pool),
       # then run the per-point kernel/reduce on the master over the cached solves
@@ -2663,8 +3064,27 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
     }
   }
 
-  # free directions not spanned by the scalings are the residual non-scaling ones
-  scalCols <- ncol(Bmat)
+  scalCols <- ncol(Bmat)          # scaling tangents only (fixed before translations)
+
+  # exact translation lattice for method = "translation": the constant (additive)
+  # directions, extracted before reconstruction. Their tangents join Bmat so the
+  # residual reconstruction skips them, like the scalings. A graceful skip (NULL,
+  # e.g. no generic point on a coupled steady state) falls back to the ordinary
+  # reconstruction, which still finds them.
+  translations <- list()
+  if (translationsOnly) {
+    tp <- tryCatch(.sym_peel_translations(sc, kcall, freeCols, N, nz, P, ctrl, Bmat,
+                                          znames),
+                   error = function(e) NULL)
+    if (!is.null(tp)) {
+      translations <- tp$translations; Bmat <- tp$Bmat
+      # method = "translation": return only the exact lattice, no rational fit of
+      # the residual (general) directions
+      if (translationsOnly) { result$nonIdentifiable <- translations; return(result) }
+    }
+  }
+
+  # free directions not spanned by the scalings/translations are the residual ones
   residualFree <- integer(0)
   for (fc in freeCols) {
     bf <- .sym_null_residues(sc$ref, fc, P)
@@ -2708,18 +3128,22 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
     probeNext <- sc$poolNext
     relProbe <- vector("list", nAug)
     pending <- seq_len(nAug)
-    for (att in seq_len(ctrl$probeRetries)) {
+    # the relevance probe only feeds the per-direction reconstruction; when there are
+    # no residual directions to reconstruct (all identifiability directions came from
+    # the scaling pass / base rank) relProbe is never consumed, so skip the probe --
+    # its per-leaf solves + kernels otherwise dominate the run at scale
+    if (length(residualFree)) for (att in seq_len(ctrl$probeRetries)) {
       if (!length(pending) || .sym_expired(ctrl)) break
       perts <- lapply(pending, function(li) {
         pert <- sc$point0
         pert[li] <- sc$pool(probeNext + (li - 1L) * ctrl$probeRetries + (att - 1L))
         pert
       })
-      # the per-leaf solves are independent -> fill them in parallel (Windows pool),
-      # then read the residues off the cached solves; on unix parMap forks instead
-      warmSolves(perts, rep(P, length(perts)))
-      cands <- parMap(seq_along(pending),
-                      function(j) kcall(perts[[j]], P, sc$NtUsed))
+      # the per-leaf solves are independent -> one batched kernel call. On the
+      # plain path this is a single OpenMP-over-leaves symObsNullBatch (also on
+      # Windows, where parMap is serial); the coupled/gap path falls back inside
+      # kbatch to warmSolves (Windows pool) + per-point kcall exactly as before.
+      cands <- kbatch(perts, rep(P, length(perts)), sc$NtUsed)
       resolved <- logical(length(pending))
       for (j in seq_along(pending)) {
         li <- pending[j]; pert <- perts[[j]]; cand <- cands[[j]]
@@ -2941,22 +3365,47 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
       }
       interp <- lapply(seq_along(residualFree), function(ii) {
         fc <- residualFree[ii]
-        if (robustFirst && ssConstraint && !is.null(sd)) {
-          rr <- tryRobust(fc)
-          if (!is.null(rr)) { .tlog(sprintf("dense dir %d/%d done (closed=TRUE, robustFirst)",
-                                            ii, length(residualFree))); return(rr) }
-        }
         r <- if (bankMissing) reconstructOne(fc, NULL, perPrime = TRUE)
              else reconstructOne(fc, NULL, sharedBank = bank)
         if (!isTRUE(r$closedForm) && ssConstraint && !bankMissing)
           r <- reconstructOne(fc, NULL, perPrime = TRUE)
-        if (!isTRUE(r$closedForm) && ssConstraint && !is.null(sd) && robustEnabled) {
-          rr <- tryRobust(fc); if (!is.null(rr)) r <- rr
-        }
         .tlog(sprintf("dense dir %d/%d done (closed=%s)", ii, length(residualFree),
                       isTRUE(r$closedForm)))
         r
       })
+
+      # Coupled/recast residual directions the pivot-pinned gauge cannot sample (its
+      # relevance probe misses the recast leaf, since perturbing it shifts the pivots, so
+      # the standard/per-prime path returns them support-only regardless of whether the
+      # shared bank filled): reconstruct the WHOLE residual set with the forward path,
+      # each direction on a distinct physical anchor. Adopt only when it closes EVERY
+      # residual (each entry is certified base-independently inside), so a partial/failed
+      # pass leaves the honest support-only result untouched. This is the default route
+      # for such directions now; the old per-column tryRobust (opt-in) collapsed every
+      # column onto one direction.
+      if (ssConstraint && !is.null(sd) && !is.null(kcallFwd) && length(recast) &&
+          !allClosed(interp)) {
+        # forward reconstructs the whole non-scaling residual (one anchor per direction).
+        # The constant (scaling) directions are already peeled in log coordinates, and the
+        # forward path -- built for leaf-DEPENDENT (x*-dependent) entries -- declines them
+        # ("residual constant in every leaf"); it closes exactly the leaf-dependent
+        # residuals. Adopt those as the per-column results (keeping the peel) when their
+        # count matches the residual set, each certified base-independently inside.
+        fwd <- tryCatch(
+          .sym_perprime_forward_multi(residualFree, sc, kcall, kcallFwd, znames, zSlots,
+            leafNamesAug, nz, scaling, as.character(multi$zStateNames),
+            as.character(multi$paramNames), recast, sd, spy, ctrl, physColsPP,
+            models, realStateNames, solveParamNames, solveHeld),
+          error = function(e) NULL)
+        fwdClosed <- if (is.null(fwd)) list()
+                     else Filter(function(e) isTRUE(e$closedForm), fwd)
+        if (length(fwdClosed) == length(residualFree) && length(fwdClosed)) {
+          interp <- lapply(fwdClosed, function(e) {
+            if (length(recast)) e$vector <- .sym_recast_backsub(e$vector, recast, sd)
+            e })
+          .tlog(sprintf("forward-multi closed %d residual direction(s)", length(fwdClosed)))
+        }
+      }
 
       # rescue: the free-column gauge may entangle a few genuinely independent
       # directions; retry each still-open one modulo the exact scalings, in the
@@ -2995,13 +3444,13 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
     .tlog(sprintf("reconstruction done: %d/%d closed",
                   sum(vapply(interp, function(e) isTRUE(e$closedForm), logical(1))),
                   length(interp)))
-    result$nonIdentifiable <- c(scaling, peeled, interp)
+    result$nonIdentifiable <- c(scaling, translations, peeled, interp)
   } else {
     support <- lapply(residualFree, function(fc) {
       v <- .sym_null_residues(sc$ref, fc, P)
       list(support = sort(znames[v != 0]), type = "general", closedForm = FALSE)
     })
-    result$nonIdentifiable <- c(scaling, support)
+    result$nonIdentifiable <- c(scaling, translations, support)
   }
   # joint mode: drop directions supported only on the auxiliary recast / state
   # coordinates with no physical-parameter content (e.g. the trivial log-coordinate
@@ -3718,15 +4167,24 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
   timedOut <- "reconstruction time budget (reconstControl(timeout=)) exceeded"
   if (.sym_expired(ctrl)) return(fallback(timedOut))
 
-  # a constant entry (no relevant leaf) is reconstructed from the base point
+  # a constant entry (no relevant leaf) is reconstructed from the base point. The
+  # base-point kernel is identical across support columns and primes, so evaluate
+  # it once (batched over primes -> one OpenMP call on the plain path) and index
+  # the cached residues per column.
+  constBase <- NULL
   constEntry <- function(col) {
-    res <- vapply(.symPrimes, function(pj) {
-      rp <- kcall(point0, pj, NtUsed)
-      if (!isTRUE(rp$ok) || !identical(as.integer(rp$pivots), as.integer(pivots)))
-        return(NA_real_)
-      nvp <- nv(rp, pj)
-      if (is.null(nvp)) return(NA_real_)
-      nvp[col + 1L]
+    if (is.null(constBase)) {
+      kr <- kbatch(rep(list(point0), length(.symPrimes)), .symPrimes, NtUsed)
+      constBase <<- lapply(seq_along(.symPrimes), function(k) {
+        rp <- kr[[k]]
+        if (!isTRUE(rp$ok) || !identical(as.integer(rp$pivots), as.integer(pivots)))
+          return(NULL)
+        nv(rp, .symPrimes[k])
+      })
+    }
+    res <- vapply(seq_along(.symPrimes), function(k) {
+      nvp <- constBase[[k]]
+      if (is.null(nvp)) NA_real_ else nvp[col + 1L]
     }, numeric(1))
     if (anyNA(res)) return(NULL)
     rec <- symRatRecon(matrix(as.integer(res), 1L), as.integer(.symPrimes))
@@ -4062,21 +4520,70 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
 
 
 # which engine produced a result, from the fields it carries
-# the observability and scaling results carry a `method` tag; a bare liesym
-# generator list has none.
-.sym_engine <- function(x) if (length(x$method)) as.character(x$method)[1] else "liesym"
+# the observability, translation and scaling results carry a `method` tag; a bare
+# polynomial (formerly "liesym") generator list has none.
+.sym_engine <- function(x) if (length(x$method)) as.character(x$method)[1] else "polynomial"
 
-# one formatted line for a non-identifiability / symmetry direction
+# the partial-derivative operator d/d<var>, printed with the glyph U+2202 built
+# from an escape so this source file stays pure ASCII (a literal glyph would trip
+# the R CMD check non-ASCII warning, which fails CI).
+.sym_partial <- function(var) paste0("\u2202/\u2202", var)
+
+# the generator component xi_i of a scaling from its weight w and coordinate:
+# w = 1 -> "var", w = -1 -> "-var", else "w*var"
+.sym_scaling_component <- function(w, var) {
+  w <- as.character(w)
+  if (w == "1") var
+  else if (w == "-1") paste0("-", var)
+  else paste0(w, "*", var)
+}
+
+# one signed generator term "<coef> d/d<var>": pull a leading '-' out for the
+# join, elide a unit coefficient, and parenthesise a multi-term (sum) coefficient.
+.sym_signed_term <- function(xi, var) {
+  xi <- trimws(xi)
+  neg <- startsWith(xi, "-")
+  mag <- if (neg) trimws(sub("^-", "", xi)) else xi
+  bare <- gsub("\\*\\*", "^", mag)                    # exponents are not sums
+  needParen <- grepl("[+]", bare) || grepl(".[-]", bare)
+  coef <- if (mag == "1") ""
+          else paste0(if (needParen) paste0("(", mag, ")") else mag, " ")
+  list(neg = neg, text = paste0(coef, .sym_partial(var)))
+}
+
+# join signed terms into "a - b + c"
+.sym_join_generator <- function(signed) {
+  if (!length(signed)) return("0")
+  out <- paste0(if (signed[[1]]$neg) "-" else "", signed[[1]]$text)
+  for (k in seq_along(signed)[-1])
+    out <- paste0(out, if (signed[[k]]$neg) " - " else " + ", signed[[k]]$text)
+  out
+}
+
+# the symmetry-class tag, carrying the degree for a polynomial direction
+.sym_class_tag <- function(d) {
+  if (isTRUE(d$type == "polynomial") && !is.null(d$degree))
+    sprintf("polynomial (%d)", d$degree)
+  else d$type
+}
+
+# one formatted line for a non-identifiability / symmetry direction: the
+# differential generator  sum_i xi_i d/dz_i  followed by its class tag. For a
+# scaling, $vector holds the integer weights (xi_i = w_i z_i); for every other
+# class it holds the generator components xi_i directly.
 .sym_direction_line <- function(d) {
-  if (!is.null(d$vector)) {
-    txt <- paste(vapply(names(d$vector),
-                        function(k) paste0(k, " : ", d$vector[[k]]),
-                        character(1)), collapse = ",  ")
-    paste0("[", d$type, "] ", txt)
-  } else {
-    paste0("[", d$type, ", closed form not found] involves: ",
-           paste(d$support, collapse = ", "))
-  }
+  if (is.null(d$vector))
+    return(paste0("[", d$type, ", closed form not found] involves: ",
+                  paste(d$support, collapse = ", ")))
+  signed <- lapply(names(d$vector), function(k) {
+    xi <- if (isTRUE(d$type == "scaling"))
+            .sym_scaling_component(d$vector[[k]], k)
+          else as.character(d$vector[[k]])
+    .sym_signed_term(xi, k)
+  })
+  tag <- .sym_class_tag(d)
+  if (isTRUE(d$certified)) tag <- paste0(tag, ", certified")
+  paste0(.sym_join_generator(signed), "   [", tag, "]")
 }
 
 # print one line indented and wrapped to the console width
@@ -4094,7 +4601,7 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
 #' @export
 print.symmetryDetection <- function(x, ...) {
   engine <- .sym_engine(x)
-  if (engine == "observability") {
+  if (engine %in% c("observability", "translation")) {
     head <- if (isTRUE(x$identifiable))
       sprintf("structurally identifiable (rank %d/%d)", x$rank, x$dim)
     else
@@ -4109,7 +4616,7 @@ print.symmetryDetection <- function(x, ...) {
     n <- length(x)
   }
   cat(sprintf("<symmetryDetection: %s> %s\n", engine, head))
-  nopen <- if (engine == "observability")
+  nopen <- if (engine %in% c("observability", "translation"))
     sum(vapply(x$nonIdentifiable,
                function(d) !isTRUE(d$closedForm) && !is.null(d$reason), logical(1)))
   else 0L
@@ -4124,18 +4631,24 @@ print.symmetryDetection <- function(x, ...) {
 summary.symmetryDetection <- function(object, ...) {
   engine <- .sym_engine(object)
   cat(strrep("-", 60), "\n", sep = "")
-  if (engine == "observability") {
-    cat(sprintf("Observability (exact analytic): rank %d / %d  (Lie order %d)\n",
-                object$rank, object$dim, object$lieOrderUsed))
+  if (engine %in% c("observability", "translation")) {
+    if (engine == "translation")
+      cat(sprintf("Translation lattice (exact additive symmetries): rank %d / %d\n",
+                  object$rank, object$dim))
+    else
+      cat(sprintf("Observability (exact analytic): rank %d / %d  (Lie order %d)\n",
+                  object$rank, object$dim, object$lieOrderUsed))
     if (!is.null(object$conditions) && object$conditions > 1L)
       cat(sprintf("  %d conditions, %d segments, gap order %d\n",
                   object$conditions, object$segments, object$gapOrderUsed))
     if (isTRUE(object$identifiable)) {
-      cat("Model is structurally locally identifiable (full rank).\n")
+      cat(if (engine == "translation")
+            "Model is structurally locally identifiable (full rank).\n"
+          else "Model is structurally locally identifiable (full rank).\n")
       return(invisible(object))
     }
-    cat(sprintf("%d structural non-identifiability direction(s):\n",
-                length(object$nonIdentifiable)))
+    cat(sprintf("%d %s direction(s):\n", length(object$nonIdentifiable),
+                if (engine == "translation") "translation" else "structural non-identifiability"))
     for (d in object$nonIdentifiable) .sym_print_direction(d)
     v <- object$verification
     if (is.list(v)) {
@@ -4152,7 +4665,7 @@ summary.symmetryDetection <- function(object, ...) {
     cat(sprintf("%d scaling symmetry/ies (exact integer kernel):\n", object$count))
     for (d in object$nonIdentifiable) .sym_print_direction(d)
   } else {
-    cat(sprintf("%d Lie-point transformation(s):\n", length(object)))
+    cat(sprintf("%d polynomial Lie-symmetry generator(s):\n", length(object)))
     for (tr in object) {
       vmap <- tr$infinitesimals
       txt <- paste(vapply(names(vmap),
