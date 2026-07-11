@@ -231,7 +231,9 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
 #' participating species) and picks one pivot species per total by Gaussian
 #' elimination, so that `C[, pivots]` is invertible even for overlapping
 #' totals. Tie-breaks prefer species not in `avoid`, then species not needed
-#' by later totals, then non-`parameters`, then alphabetical order.
+#' by later totals, then non-`parameters`, then alphabetical order. A species
+#' named in `prefer` is used as its total's pivot whenever it is a valid
+#' candidate, overriding the tie-break.
 #'
 #' @param totals Named list of CQ expressions (from [getTotals()]).
 #' @param states State names participating in the model.
@@ -239,11 +241,13 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
 #' @param avoid Species to keep as states where possible (not eliminated),
 #'   e.g. a moiety species that appears under a free exponent and so must
 #'   stay a bare symbol. Honoured only when a total has another candidate.
+#' @param prefer Species to use as pivot when valid (from `freeInitial`), one
+#'   per total; a name that is not a valid candidate for any total is ignored.
 #' @return `list(C_mat, pivots, cq_sets)`. `pivots` is aligned to `totals`
 #'   with `NA` where a total has fewer than two free species.
 #' @keywords internal
 .cq_pivot_decomposition <- function(totals, states, parameters = character(0),
-                                    avoid = character(0)) {
+                                    avoid = character(0), prefer = character(0)) {
   cq_sets <- lapply(totals, function(expr) intersect(getSymbols(expr), states))
   all_cq_species <- unique(unlist(cq_sets, use.names = FALSE))
   n_cq <- length(totals)
@@ -267,11 +271,15 @@ Pexpl <- function(trafo, parameters = NULL, attach.input = FALSE, condition = NU
     nz <- cand[abs(C_red[i, cand]) > 1e-12]
     if (!length(nz)) next
     if (length(keep <- setdiff(nz, avoid))) nz <- keep
-    future <- if (i < n_cq)
-      unique(unlist(cq_sets[(i + 1L):n_cq], use.names = FALSE)) else character(0)
-    pool <- if (length(safe <- setdiff(nz, future))) safe else nz
-    nu   <- setdiff(pool, parameters)
-    e    <- if (length(nu)) sort(nu)[1L] else sort(pool)[1L]
+    if (length(pref <- intersect(prefer, nz))) {
+      e <- sort(pref)[1L]                          # user-chosen pivot (freeInitial)
+    } else {
+      future <- if (i < n_cq)
+        unique(unlist(cq_sets[(i + 1L):n_cq], use.names = FALSE)) else character(0)
+      pool <- if (length(safe <- setdiff(nz, future))) safe else nz
+      nu   <- setdiff(pool, parameters)
+      e    <- if (length(nu)) sort(nu)[1L] else sort(pool)[1L]
+    }
     if (i < n_cq) {
       piv <- C_red[i, e]
       for (j in (i + 1L):n_cq)

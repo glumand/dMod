@@ -15,16 +15,16 @@ symmetryDetection(
   events = NULL,
   conditions = NULL,
   equilibrate = FALSE,
-  reduceCQ = TRUE,
-  closedForm = FALSE,
+  reduceCQ = FALSE,
+  freeInitial = NULL,
+  reconstruct = FALSE,
   verify = TRUE,
   cores = 1,
-  cores.conditions = cores,
-  cores.GLp = cores,
   control = reconstControl(),
   polynomial = polynomialControl(),
   scaling = scalingControl(),
-  symEngine = c("modular", "symbolic")
+  symEngine = c("modular", "symbolic"),
+  verbose = getOption("dMod.sym.verbose", TRUE)
 )
 }
 \arguments{
@@ -34,16 +34,12 @@ character vector keyed by state name (anything \link{as.eqnvec} accepts). With a
 
 \item{g}{The observation functions, as an \link{eqnvec} or named character vector.}
 
-\item{trafo}{Optional parameter transformation. Either one \link{eqnvec} (applied to
-every condition) or, for \code{"observability"}, a \emph{list} of \link{eqnvec}s, one per
-condition. A parameter-named entry (inner symbol = expression in the outer
-parameters) is substituted into \code{f} and \code{g}; a state-named entry is that
-state's initial condition (a parameter, number or rational expression). A
-solved steady state from \link{steadyStates} can be passed whole. A per-condition
-list defines the conditions (or aligns with the \code{conditions} grid rows): each
-entry may bake a parameter to a different number or expression per condition,
-exactly like a condition grid, and the two compose. It is the explicit route
-for per-condition steady states (a \code{steadyStates()} result per condition).}
+\item{trafo}{Optional parameter transformation: one \link{eqnvec} (applied to every
+condition) or, for \code{"observability"}, a \emph{list} of \link{eqnvec}s (one per condition).
+A parameter-named entry is substituted into \code{f} and \code{g}; a state-named entry is
+that state's initial condition. A solved steady state from \link{steadyStates} can be
+passed whole, and a per-condition list is the explicit route for per-condition
+steady states.}
 
 \item{method}{One of \code{"observability"} (default), \code{"polynomial"}, \code{"scaling"}
 or \code{"translation"}; see Description.}
@@ -56,88 +52,74 @@ a fixed parameter is a known constant, and a fixed state keeps its dynamics
 but carries no unknown initial value. For \code{"polynomial"} their infinitesimal
 ansatz is set to zero.}
 
-\item{forcings}{Character vector of externally driven (input) state names.
-For \code{"observability"} a forcing is an integrated state with default initial
-value 0 that is excluded from the \code{f = 0} steady-state constraint (so the
-constraint solves over the non-forcing states with every forcing held at
-0); for \code{"polynomial"} and \code{"scaling"} the same states are the inputs whose
-infinitesimal ansatz is fixed. Listed explicitly here; an \code{RHS = 0} state
-that is not a forcing is instead treated as a constant and substituted by
-its value.}
+\item{forcings}{Character vector of externally driven (input) state names. For
+\code{"observability"} a forcing is an integrated state (default initial value 0)
+excluded from the \code{f = 0} steady-state constraint; for \code{"polynomial"}/\code{"scaling"}
+it is an input whose infinitesimal ansatz is fixed.}
 
-\item{events}{Optional \link{eventlist}. For \code{"observability"} the event value is
-looked up in \code{conditions} when it names a grid column, so the boolean
-switches and the stimulus levels of a condition grid reach the analysis.
-The Taylor expansion starts at the earliest event time (or 0 with no events):
-the steady state holds up to that moment and the earliest events are composed
-onto it as the first segment's initial condition; events at later times split
-the timeline into analytic segments, one local Taylor jet each, all stacked,
-with the state propagated exactly across each gap (Details).}
+\item{events}{Optional \link{eventlist}. For \code{"observability"} an event value naming a
+\code{conditions} grid column is read from that grid. The Taylor expansion starts at
+the earliest event time; later events split the timeline into segments that are
+stacked, the state propagated exactly across each gap (Details).}
 
-\item{conditions}{Optional data frame of experimental conditions (a dMod
-condition grid: one row per condition, columns named by model symbols or by
-event-value placeholders). When supplied, \code{"observability"} runs the
-multi-condition analysis: each condition is compiled with its own symbol
-substitutions (a numeric cell bakes a symbol to a constant, a symbol cell
-renames it, e.g. a knockdown-specific rate) and its event-defined initial
-values, and the observability matrices of all conditions are stacked. A
-direction is reported non-identifiable only when it is unobservable in every
-condition (the intersection nullspace), and known inputs are constants of
-each condition rather than free symbols, so they never appear in a
-reconstructed direction. The directions are returned in closed form.}
+\item{conditions}{Optional data frame of experimental conditions (one row per
+condition; columns named by model symbols or event-value placeholders). For
+\code{"observability"} each condition is compiled with its own substitutions (a
+numeric cell bakes a symbol to a constant, a symbol cell renames it) and their
+observability matrices are stacked: a direction is non-identifiable only when
+unobservable in every condition (the intersection nullspace).}
 
 \item{equilibrate}{Logical. For \code{"observability"}, start the states at a steady
-state of \code{f} with forcings held at 0, solved exactly over a finite field
-without a symbolic solution (parameters are never solved for); the earliest
-events (e.g. a dose) are applied on top. A free power or Hill exponent is supported,
-whether or not its base has a linear turnover term: the term \code{base^exp} is
-recast to a rational coordinate \code{E = base^exp} with a companion \code{L = log(base)}, so the verdict (which parameters, including the exponent, are
-identifiable) is exact. With \code{closedForm}, \code{E} and \code{L} are
-sampled as coordinates and back-substituted, so a non-identifiable direction
-is returned in closed form even when it involves \code{base^exp} or \code{log(base)}.
-State initial conditions given in \code{trafo} are ignored when equilibrating.}
+state of \code{f} (forcings held at 0), solved over a finite field; the earliest
+events are applied on top. State initial conditions in \code{trafo} are then ignored.
+A free power/Hill exponent is supported with or without \code{equilibrate}.}
 
-\item{reduceCQ}{Logical. If the model is an \link{eqnlist} with conserved
-quantities, eliminate one pivot species per conserved quantity first.}
+\item{reduceCQ}{Logical. Controls how a conserved moiety (which makes the
+\code{equilibrate} steady-state system \code{f = 0} rank-deficient) is handled for an
+\link{eqnlist}. \code{FALSE} (default) keeps every species a coordinate and, under
+\code{equilibrate}, holds one pivot species' resting value as its initial-value
+parameter (the "held-variable" parameterisation): the steady state becomes a
+function of that value with the other moiety species solved from \code{f = 0}.
+Following the dMod / deSolve convention that a parameter named like a state is
+that state's initial value, the moiety freedom is reported under the pivot
+species' own name. \code{TRUE} instead eliminates one pivot species per conserved
+quantity and reports the moiety freedom on a \code{total} parameter (the pivot
+species is then no longer a coordinate); it trades a simpler (often all-scaling)
+basis for fewer coordinates, which helps large models. Both give the same
+identifiability; they differ only in the moiety coordinate. If a state-named
+\code{trafo} initial condition names a species that participates in a conserved
+quantity, \code{reduceCQ} is forced to \code{FALSE} (with a warning): \code{TRUE} would
+otherwise eliminate a moiety species and silently discard the supplied
+steady-state relation, so the model would no longer start at the given steady
+state.}
 
-\item{closedForm}{Logical. For \code{"observability"}, reconstruct the non-scaling
-directions as exact rational functions of the parameters, not just their
-support. Scaling directions are obtained exactly from the integer kernel and
-reported in closed form regardless of this flag. A narrow entry is fit
-densely; an entry coupling many variables is recovered by sparse
-(Ben-Or-Tiwari) interpolation. Every reconstructed direction is certified
-against the nullspace at a fresh prime; one that cannot be reconstructed or
-certified is returned with its support and \code{closedForm = FALSE} instead.}
+\item{freeInitial}{Character vector of state names. Under the held-variable
+parameterisation (\code{equilibrate = TRUE}, \code{reduceCQ = FALSE}), \code{f = 0} pins every
+moiety species but one, and that one (the pivot) keeps its free resting value as
+its initial-value parameter. \code{freeInitial} chooses that pivot per conserved
+quantity (one species each) instead of the automatic choice, so the moiety
+freedom is reported on the species you name. A name that is not a valid moiety
+pivot is ignored, and the argument is ignored (with a warning) outside the
+held-variable case, where every species already carries a free initial value.}
+
+\item{reconstruct}{Logical. For \code{"observability"}, reconstruct the non-scaling
+directions as exact rational functions (a free exponent via its \code{base^exp} /
+\code{log(base)} recast), not just their support; scalings are always exact. A
+direction that cannot be reconstructed or certified is returned support-only
+(its \code{explicit} field is then \code{FALSE}).}
 
 \item{verify}{Logical (default \code{TRUE}). For \code{"observability"}, run a fast
-Schwartz-Zippel saturation guard and attach the verdict as \verb{$verification}. It
-re-uses the kernel already built for the analysis and its base point -- whose
-modular steady state is cached -- and extends the Lie order past the point where
-the plateau heuristic stopped. Only the Lie jet grows (the cached solve is reused,
-no new steady-state solve), so it costs a handful of matrix ranks at one point, not
-a second analysis. The plateau rule is the one step that can fail silently -- a rank
-can plateau then grow again (a Hill exponent observable only through a high-order
-derivative), and a premature stop over-reports non-identifiability. If the rank
-climbs past the reported value the guard FAILS and warns; the modular rank equals
-the generic rank almost surely (Schwartz-Zippel). Reconstructed directions are
-already certified at a fresh prime and scalings are exact, so the guard closes
-exactly the residual Lie-stop risk. Set \code{FALSE} to skip; the number of extra orders
-is tunable via \code{DMOD_SYM_VERIFY_MARGIN} (default 6).}
+Schwartz-Zippel saturation guard that extends the Lie order past the plateau
+heuristic and warns if the rank is still growing (a premature stop would
+over-report non-identifiability); the verdict is attached as \verb{$verification}.
+The margin of extra orders is set by \code{DMOD_SYM_VERIFY_MARGIN} (default 6).}
 
-\item{cores}{Number of threads for \code{"observability"}: the default for both
-\code{cores.conditions} and \code{cores.GLp} when those are not set explicitly. The
-\code{"polynomial"} and \code{"scaling"} engines are exact and serial and ignore it.}
-
-\item{cores.conditions, cores.GLp}{\code{"observability"} parallelism, split across two
-axes (default: \code{cores} each). \code{cores.conditions} threads the C++ observability
-kernel over conditions/segments. \code{cores.GLp} parallelises the finite-field
-steady-state solves of the reconstruction's sample points -- forking on Linux, a
-PSOCK pool of Python interpreters on Windows. For a coupled (equilibrate) model
-with later-event gaps the closed-form reconstruction additionally evaluates the
-per-(sample point, condition) chain kernels in one OpenMP batch, threaded over the
-larger of the two axes -- so setting either one speeds up that dominant cost on
-every platform (a Windows model that was serial there before). Raise the relevant
-axis towards the physical core count.}
+\item{cores}{Number of threads for \code{"observability"}. The reconstruction's
+finite-field steady-state solves are parallelised over the sample points (fork
+on Linux, PSOCK pool on Windows), and the observability kernel threads over
+conditions/segments; \code{cores} is split across these two (nested) axes so they
+never oversubscribe. The \code{"polynomial"} and \code{"scaling"} engines are exact and
+serial and ignore it.}
 
 \item{control}{A \code{\link[=reconstControl]{reconstControl()}} list tuning the \code{"observability"} engine's
 saturation and closed-form reconstruction (relevance caps, fit degrees, term
@@ -145,98 +127,74 @@ and gap-order caps). Raise the caps to recover wide or high-degree directions.}
 
 \item{polynomial}{A \code{\link[=polynomialControl]{polynomialControl()}} list tuning the \code{"polynomial"} engine: the
 infinitesimal ansatz and degree, the extra Lie-derivative order, the symbolic
-backend and verification, and the evaluation point.}
+backend and verification.}
 
 \item{scaling}{A \code{\link[=scalingControl]{scalingControl()}} list tuning the \code{"scaling"} engine: the
-symbolic backend and the evaluation point.}
+symbolic backend.}
 
-\item{symEngine}{For \code{method = "observability"}, which engine computes the
-observability-identifiability matrix. \code{"modular"} (default) evaluates it over
-finite fields GF(p) at rational points and lifts by CRT -- fast, scales to large,
-deep models, and drives the closed-form reconstruction and the \code{verify} guard.
-\code{"symbolic"} builds and rank/nullspace-reduces it with sympy over the exact
-rational-function field: no finite fields and no power/Hill recast (\code{base^exp}
-stays a symbolic atom), the Lie order carried to the exact saturation bound (so no
-\code{verify} guard is needed). It is an INDEPENDENT cross-check of \code{"modular"} but only
-practical for SMALL models. It handles multiple \code{conditions} and single-time
-\code{events} (stacking each condition's observability rows over one shared coordinate
-space), but not later events (gaps), \code{equilibrate} (supply an explicit steady state
-through \code{trafo} instead), or the closed-form reconstruction.}
+\item{symEngine}{For \code{"observability"}, the engine computing the matrix:
+\code{"modular"} (default; finite fields GF(p) + CRT, fast and scalable, drives the
+closed-form reconstruction and \code{verify}) or \code{"symbolic"} (exact sympy
+rational-function field, an independent cross-check for SMALL models; no recast,
+no \code{equilibrate}, no event gaps, no closed-form reconstruction).}
+
+\item{verbose}{Logical (default \code{TRUE}, overridable with
+\code{options(dMod.sym.verbose =)}). Print the result report on return (as
+\code{print()} renders it); set \code{FALSE} to compute silently.}
 }
 \value{
-For \code{"observability"} (and \code{"translation"}): a list with \code{identifiable},
-\code{rank}, \code{dim}, \code{lieOrderUsed} and \code{nonIdentifiable}. Each direction is a
-differential generator \verb{sum_i xi_i d/dz_i} carrying a symmetry \code{type} in
-\code{"scaling"}, \code{"translation"}, \code{"affine"}, \code{"polynomial"} or \code{"general"},
-brought to a canonical polynomial-primitive representative (its gauge fixed) so
-the \code{"modular"} and \code{"symbolic"} engines report the same generator. A
-\code{"scaling"} direction stores the integer weights \code{c_i} in \code{vector} (the
-symmetry is \verb{z_i -> lambda^\{c_i\} z_i}, i.e. \verb{xi_i = c_i z_i}); every other type
-stores the generator components \code{xi_i} in \code{vector} directly -- or only the
-\code{support} when \code{closedForm = FALSE} (with a \code{reason} naming the
-\code{reconstControl} cap that stopped a requested closed form). \code{print()} and
-\code{summary()} render each direction as \verb{sum_i xi_i d/dz_i  [type]}. The
-multi-condition path adds \code{conditions}, the number of distinct conditions,
-\code{segments}, the number of stacked analytic segments (later events split each
-condition into several), and \code{gapOrderUsed}, the gap power-series order at which
-the rank saturated (0 with no gaps). \code{"translation"} returns only the
-translation-class directions of the exact additive lattice. For \code{"scaling"}:
-\code{count} and the same \code{nonIdentifiable} weights. For \code{"polynomial"}: a list of
-generators, each with \code{infinitesimals}, \code{transformation}, \code{type} and
-\code{verified}. The result has class \code{symmetryDetection}; \code{print()} gives a
-one-line summary and \code{summary()} lists the directions.
+An object of class \code{symmetryDetection}, the same shape for every
+\code{method}, holding the \emph{verdict} at the top level and the \emph{how} under \verb{$info}:
+\describe{
+\item{\code{method}}{the engine that ran (\code{"observability"}, \code{"translation"},
+\code{"scaling"} or \code{"polynomial"}).}
+\item{\code{identifiable}}{\code{TRUE}/\code{FALSE} for \code{"observability"}/\code{"translation"}
+(a full-rank verdict); \code{NA} for \code{"scaling"}/\code{"polynomial"}, which search
+non-exhaustively so "nothing found" is no proof of identifiability.}
+\item{\code{rank}, \code{dim}}{the observability-matrix rank and coordinate-space
+dimension (both \code{NA} for the scaling/polynomial engines).}
+\item{\code{symmetries}}{a list of the found generators/directions (empty when
+identifiable), each a differential generator \verb{sum_i xi_i d/dz_i} in a
+canonical gauge. Fields: \code{generator} (components \code{xi_i}, keyed by
+coordinate); \code{weights} (a scaling's integer weights, else \code{NULL}); \code{type}
+(\code{"scaling"}, \code{"translation"}, \code{"affine"}, \code{"polynomial"} or \code{"general"});
+\code{degree}; \code{support} (the coordinates involved, the only field set when no
+closed form was reached); \code{explicit}; \code{reason}; \code{certified};
+\code{transformation} (the finite map, polynomial engine); \code{verified}.}
+\item{\code{info}}{\code{engine}, \code{lieOrderUsed}, \code{gapOrderUsed}, \code{conditions},
+\code{segments}, the \code{settings} used, \code{elapsed} seconds and the \code{verification}
+guard.}
+\item{\code{call}}{the matched call.}
+}
+\code{print()} shows the verdict and generators; \code{summary()} adds the computation
+block, and \code{summary(x, verbose = TRUE)} the settings and guard detail.
 }
 \description{
-Detects structural non-identifiabilities of a reaction network
-plus its observation map, driven through the Python module
-\code{symmetryDetectionVersion2} via \code{reticulate}. The model \code{f}, observables \code{g}
-and optional transformation \code{trafo} are given as equations (anything
-\link{as.eqnvec} accepts). The engine is chosen with \code{method}:
+Detects structural non-identifiabilities of a reaction network and
+its observation map, via the Python module \code{symmetryDetectionVersion2}
+(\code{reticulate}). The model \code{f}, observables \code{g} and optional \code{trafo} are given as
+equations (anything \link{as.eqnvec} accepts). The engine is chosen with \code{method}:
 \itemize{
-\item \code{"observability"} (default): the rank of the observability-identifiability
-matrix over a finite field. Full column rank means structurally locally
-identifiable; otherwise the nullspace gives the non-identifiable directions
-and the symbols they involve. Exact and scalable, defined only for rational
-right-hand sides and observables. The sensible default.
+\item \code{"observability"} (default): rank of the observability-identifiability matrix
+over a finite field; the nullspace gives the non-identifiable directions.
+Exact and scalable; needs rational right-hand sides and observables. A free
+power/Hill exponent (\code{base^exp}) is supported, recast internally.
 \item \code{"polynomial"}: the polynomial Lie-symmetry ansatz of Merkt et al. (2015),
-returning the explicit closed-form generator and transformation. More
-expensive (grows with \code{pMax}); use it when the explicit symmetry is wanted.
-\item \code{"scaling"}: the scaling symmetries that multiply each state and parameter
-by a power of one common factor, from the integer kernel of the
-monomial-exponent conditions. Returns only the scaling part. A known-value
-dose (\code{events}) pins the dosed state (weight 0); a condition grid or
-per-condition \code{trafo} list intersects the per-condition scaling lattices.
-A steady state is a no-op here, so \code{equilibrate} does not apply.
-\item \code{"translation"}: the exact additive (constant-shift) symmetries
-\code{z_i -> z_i + eps * a_i}, the additive analogue of \code{"scaling"}. It is the
-observability engine restricted to the constant tangents that lie in the
-nullspace at every point (found by intersecting the nullspace over several
-generic points), returning only that translation lattice.
+returning the explicit generator and finite transformation (grows with \code{pMax}).
+\item \code{"scaling"}: the scaling symmetries only, from the integer kernel of the
+monomial-exponent conditions (\code{equilibrate} does not apply).
+\item \code{"translation"}: the exact additive (constant-shift) symmetries, the additive
+analogue of \code{"scaling"}.
 }
 }
 \details{
-\strong{Segments and exact propagation.} With events after the earliest one, the
-timeline is split at the distinct event times into analytic segments, one local
-Taylor jet per segment over a shared coordinate space, all stacked (across
-conditions) like conditions. A later segment's start state is the previous
-segment's state flowed across the inter-event gap and mapped by the event. That
-finite-time nonlinear flow is transcendental, so it is carried not by plugging
-in the numeric gap length but by keeping the gap length a \emph{formal power-series
-variable} \eqn{\Delta t}: the kernel propagates the state as its exact Taylor
-series in \eqn{\Delta t} (the coefficients it already computes), and an
-identifiability direction must annihilate every \eqn{\Delta t} coefficient (a
-polynomial vanishing for generic timing). The gap order is raised alongside the
-Lie order until the rank stabilises (\code{gapOrderUsed}), giving the \strong{exact
-identifiability for generic inter-event timing}, transient channels included.
-Truncating the gap order early is sound (a conservative lower bound on the rank).
-
-This makes parameters identifiable that only enter through a transient between
-events (e.g. an inhibitor pre-incubation whose relaxed state seeds the stimulus
-phase): place the inhibitor event at the earliest time so the gap to the stimulus
-is propagated. A \code{replace}/\code{add}/\code{multiply} event on a dynamic state is applied
-exactly to the propagated state. A dose on a conserved-moiety \emph{pivot} species
-eliminated by \code{reduceCQ} is not seen (it is no longer a state); keep that
-species (\code{reduceCQ = FALSE}) to dose it.
+With events after the earliest one, \code{"observability"} splits the timeline
+at the event times into segments and propagates the state exactly across each
+inter-event gap (for generic timing), so a parameter entering only through a
+transient between events is identified -- place such an event at the earliest
+time. A \code{replace}/\code{add}/\code{multiply} event acts on the propagated state; a dose on
+a species eliminated by \code{reduceCQ} is not seen (keep it with \code{reduceCQ = FALSE}).
+The method internals are covered in \code{vignette("symmetryDetection")}.
 }
 \note{
 The interface, defaults and output structure may still change between
@@ -244,20 +202,25 @@ releases.
 }
 \examples{
 \dontrun{
-# The canonical scaling symmetry, found by all three engines: a reversible
-# reaction observed only through alpha * A leaves the absolute scale free.
+# The canonical scaling symmetry: a reversible reaction observed only through
+# alpha * A leaves the absolute scale free.
 eq <- eqnlist() |>
   addReaction("A", "B", "k1 * A") |>
   addReaction("B", "A", "k2 * B")
 
-summary(symmetryDetection(eq, eqnvec(Aobs = "alpha * A")))          # observability
-summary(symmetryDetection(eq, eqnvec(Aobs = "alpha * A"), method = "polynomial"))
-summary(symmetryDetection(eq, eqnvec(Aobs = "alpha * A"), method = "scaling"))
+# Assigning still shows the result: symmetryDetection() prints its report on
+# return. print(out) is terse (verdict + generators); summary(out) adds the
+# computation block (engine, Lie order, saturation guard, timing).
+out <- symmetryDetection(eq, eqnvec(Aobs = "alpha * A"))   # observability
+print(out)
+summary(out)
+out <- symmetryDetection(eq, eqnvec(Aobs = "alpha * A"), method = "polynomial")
+out <- symmetryDetection(eq, eqnvec(Aobs = "alpha * A"), method = "scaling")
 
 # A steady-state initial condition as an expression: a state-named trafo entry
 # is the initial condition, seeded with its parameter sensitivities.
-summary(symmetryDetection(eqnvec(x = "b - a*x"), eqnvec(y = "s*x"),
-                          trafo = eqnvec(x = "b/a"), closedForm = TRUE))
+out <- symmetryDetection(eqnvec(x = "b - a*x"), eqnvec(y = "s*x"),
+                         trafo = eqnvec(x = "b/a"), reconstruct = TRUE)
 
 # Several experimental conditions: a switch held at one generic value makes
 # k1 and k2 look unidentifiable, but two values (set per condition by an
@@ -266,16 +229,18 @@ fu <- eqnvec(A = "-(k1 + u * k2) * A", u = "0")
 events <- addEvent(eventlist(), var = "u", time = -1, value = "var_u",
                    method = "replace")
 grid <- data.frame(var_u = c(0, 1), row.names = c("ctrl", "stim"))
-symmetryDetection(fu, eqnvec(y = "A"), method = "observability",
-                  events = events, conditions = grid)$identifiable
+out <- symmetryDetection(fu, eqnvec(y = "A"), method = "observability",
+                         events = events, conditions = grid)
+out$identifiable   # the object's fields are there for programmatic use
 
 # Pre-equilibrated model with a dose event: the steady state b/a is the
 # relaxation attractor; a known dose makes (a, b, s) identifiable.
 dose <- addEvent(eventlist(), var = "x", time = 0, value = "dose",
                  method = "replace")
-summary(symmetryDetection(eqnvec(x = "b - a*x"), eqnvec(y = "s*x"),
-                          method = "observability", events = dose,
-                          conditions = data.frame(dose = 2, row.names = "stim")))
+out <- symmetryDetection(eqnvec(x = "b - a*x"), eqnvec(y = "s*x"),
+                         method = "observability", events = dose,
+                         conditions = data.frame(dose = 2, row.names = "stim"))
+summary(out)
 
 # Full worked script (scaling, closed-form directions, an enzyme assay, a
 # transcription-translation rate curve, conditions and steady states):

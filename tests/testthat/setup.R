@@ -2,6 +2,10 @@
 # end of the run so wayward setwd() inside individual tests cannot break
 # testthat's relative-path lookups for the rest of the session.
 .dmod_initial_wd <- getwd()
+
+# symmetryDetection() prints its report on assignment by default (interactive
+# convenience); silence that in the test run so it does not flood the output.
+options(dMod.sym.verbose = FALSE)
 if (requireNamespace("withr", quietly = TRUE)) {
   withr::defer(setwd(.dmod_initial_wd), testthat::teardown_env())
 }

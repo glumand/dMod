@@ -40,15 +40,14 @@
 }
 
 
-# numeric tangent of a reported direction at point `pt` over `coords`. A scaling
-# direction carries integer weights c_i (tangent c_i * z_i); a general direction
-# carries the tangent components directly as rational expressions.
+# numeric tangent of a reported direction at point `pt` over `coords`. $generator
+# always holds the tangent components xi_i directly (a scaling's integer weight
+# w_i is expanded to xi_i = w_i * z_i at the finalisation boundary), so evaluating
+# each component at the point gives the tangent.
 .sym_tangent <- function(d, pt, coords) {
   v <- setNames(numeric(length(coords)), coords)
-  for (nm in names(d$vector))
-    v[nm] <- if (isTRUE(d$type == "scaling"))
-      as.numeric(d$vector[[nm]]) * pt[[nm]]
-    else eval(parse(text = d$vector[[nm]]), pt)
+  for (nm in names(d$generator))
+    v[nm] <- eval(parse(text = d$generator[[nm]]), pt)
   v
 }
 
@@ -60,11 +59,11 @@ test_that("liesym finds and verifies the canonical scaling symmetry", {
                            method = "polynomial", reduceCQ = FALSE,
                            polynomial = polynomialControl(ansatz = "uni", pMax = 1L))
 
-  expect_true(is.list(res))
-  expect_gte(length(res), 1L)
-  scaling <- res[grepl("scaling", vapply(res, function(r) r$type, character(1)))]
+  gens <- res$symmetries
+  expect_gte(length(gens), 1L)
+  scaling <- gens[grepl("scaling", vapply(gens, function(r) r$type, character(1)))]
   expect_gte(length(scaling), 1L)
-  expect_true(all(c("A", "B", "alpha") %in% names(scaling[[1]]$infinitesimals)))
+  expect_true(all(c("A", "B", "alpha") %in% names(scaling[[1]]$generator)))
   expect_true(isTRUE(scaling[[1]]$verified))
 })
 
@@ -78,7 +77,8 @@ test_that("liesym exact and legacy float solvers agree on the canonical case", {
   leg <- symmetryDetection(.canonical(), eqnvec(Aobs = "alpha * A"),
                            method = "polynomial", reduceCQ = FALSE,
                            polynomial = polynomialControl(ansatz = "uni", pMax = 1L, exact = FALSE))
-  expect_equal(length(ex), length(leg))
+  expect_gte(length(ex$symmetries), 1L)          # non-vacuous: both actually find a symmetry
+  expect_equal(length(ex$symmetries), length(leg$symmetries))
 })
 
 
@@ -89,9 +89,9 @@ test_that("liesym handles a log10 observable with an offset parameter", {
                            method = "polynomial", reduceCQ = FALSE,
                            polynomial = polynomialControl(ansatz = "uni", pMax = 1L))
 
-  expect_gte(length(res), 1L)
-  gen <- res[[1]]
-  expect_true(all(c("A", "B", "c") %in% names(gen$infinitesimals)))
+  expect_gte(length(res$symmetries), 1L)
+  gen <- res$symmetries[[1]]
+  expect_true(all(c("A", "B", "c") %in% names(gen$generator)))
   expect_true(isTRUE(gen$verified))
 })
 
@@ -103,7 +103,7 @@ test_that("a trafo that fixes a parameter removes its symmetry", {
   res <- symmetryDetection(.canonical(), eqnvec(Aobs = "alpha * A"),
                            trafo = eqnvec(alpha = "1"), method = "polynomial",
                            reduceCQ = FALSE, polynomial = polynomialControl(ansatz = "uni", pMax = 1L))
-  expect_equal(length(res), 0L)
+  expect_equal(length(res$symmetries), 0L)
 })
 
 
@@ -115,7 +115,7 @@ test_that("a trafo renames a rate and is substituted into the model", {
                            trafo = eqnvec(k1 = "kf"), method = "observability",
                            reduceCQ = FALSE)
   expect_false(res$identifiable)
-  supp <- unlist(lapply(res$nonIdentifiable, function(d) d$support))
+  supp <- unlist(lapply(res$symmetries, function(d) d$support))
   expect_true(all(c("A", "B", "alpha") %in% supp))
   expect_false("k1" %in% supp)
 })
@@ -129,7 +129,7 @@ test_that("observability flags the canonical non-identifiability", {
 
   expect_false(res$identifiable)
   expect_lt(res$rank, res$dim)
-  supports <- lapply(res$nonIdentifiable, function(d) d$support)
+  supports <- lapply(res$symmetries, function(d) d$support)
   expect_true(any(vapply(supports,
                          function(s) all(c("A", "B", "alpha") %in% s), logical(1))))
 })
@@ -150,8 +150,8 @@ test_that("scaling finds the canonical scaling exactly via the integer kernel", 
 
   res <- symmetryDetection(.canonical(), eqnvec(Aobs = "alpha * A"),
                            method = "scaling", reduceCQ = FALSE)
-  expect_equal(res$count, 1L)
-  v <- res$nonIdentifiable[[1]]$vector
+  expect_equal(length(res$symmetries), 1L)
+  v <- res$symmetries[[1]]$weights
   expect_true(all(c("A", "B", "alpha") %in% names(v)))
   expect_equal(as.integer(v[["A"]]), as.integer(v[["B"]]))
   expect_equal(as.integer(v[["alpha"]]), -as.integer(v[["A"]]))
@@ -171,7 +171,7 @@ test_that("observability scales to a deep chain via the exact modular engine", {
 
   expect_false(res$identifiable)
   expect_lt(res$rank, res$dim)
-  expect_gte(length(res$nonIdentifiable), 1L)
+  expect_gte(length(res$symmetries), 1L)
 })
 
 
@@ -185,53 +185,53 @@ test_that("observability rejects a non-rational observable", {
 })
 
 
-test_that("closedForm observability returns exact rational directions", {
+test_that("reconstruct observability returns exact rational directions", {
   if (!.sympy_works()) skip("reticulate/sympy not available")
 
   res <- symmetryDetection(.canonical(), eqnvec(Aobs = "alpha * A"),
-                           method = "observability", closedForm = TRUE,
+                           method = "observability", reconstruct = TRUE,
                            reduceCQ = FALSE)
 
   expect_false(res$identifiable)
-  expect_equal(res$engine, "analytic")
-  expect_true(all(vapply(res$nonIdentifiable,
-                         function(d) is.logical(d$closedForm) && length(d$support) > 0,
+  expect_equal(res$info$engine, "modular")
+  expect_true(all(vapply(res$symmetries,
+                         function(d) is.logical(d$explicit) && length(d$support) > 0,
                          logical(1))))
   # the calibration scaling, peeled exactly as an integer toric direction
-  scal <- Filter(function(d) all(c("A", "B", "alpha") %in% names(d$vector)),
-                 res$nonIdentifiable)
+  scal <- Filter(function(d) all(c("A", "B", "alpha") %in% names(d$generator)),
+                 res$symmetries)
   expect_gte(length(scal), 1L)
   d <- scal[[1]]
   expect_identical(d$type, "scaling")
   # A and B carry equal weight, opposite to the readout gain alpha
-  w <- vapply(d$vector, as.integer, integer(1))
+  w <- vapply(d$weights, as.integer, integer(1))
   expect_equal(unname(w[["A"]]), unname(w[["B"]]))
   expect_equal(unname(w[["alpha"]]), -unname(w[["A"]]))
 })
 
 
-test_that("closedForm observability reconstructs a non-monomial direction", {
+test_that("reconstruct observability reconstructs a non-monomial direction", {
   if (!.sympy_works()) skip("reticulate/sympy not available")
 
   res <- symmetryDetection(.canonical(), eqnvec(Aobs = "alpha * A"),
-                           method = "observability", closedForm = TRUE,
+                           method = "observability", reconstruct = TRUE,
                            reduceCQ = FALSE)
   # the conserved-quantity direction, reported as its canonical polynomial-
   # primitive (affine) generator: dB = A + B, dk1 = k2, dk2 = -k2 -- the same
   # direction as the raw dk2 = 1, dk1 = -1, dB = -(A + B)/k2, cleared of its 1/k2 gauge
-  d <- Filter(function(d) all(c("B", "k1", "k2") %in% names(d$vector)) &&
-                isTRUE(d$closedForm), res$nonIdentifiable)
+  d <- Filter(function(d) all(c("B", "k1", "k2") %in% names(d$generator)) &&
+                isTRUE(d$explicit), res$symmetries)
   expect_gte(length(d), 1L)
   d <- d[[1]]
   expect_equal(d$type, "affine")
-  expect_true(.sym_expr_equal(d$vector[["k2"]], "-k2"))
-  expect_true(.sym_expr_equal(d$vector[["k1"]], "k2"))
-  expect_true(.sym_expr_equal(d$vector[["B"]], "A + B"))
+  expect_true(.sym_expr_equal(d$generator[["k2"]], "-k2"))
+  expect_true(.sym_expr_equal(d$generator[["k1"]], "k2"))
+  expect_true(.sym_expr_equal(d$generator[["B"]], "A + B"))
 
   # the scaling engine alone finds only the scaling symmetry, not this direction
   sc <- symmetryDetection(.canonical(), eqnvec(Aobs = "alpha * A"),
                           method = "scaling", reduceCQ = FALSE)
-  expect_equal(sc$count, 1L)
+  expect_equal(length(sc$symmetries), 1L)
 })
 
 
@@ -239,21 +239,21 @@ test_that("the closed-form and support-only verdicts agree", {
   if (!.sympy_works()) skip("reticulate/sympy not available")
 
   ana <- symmetryDetection(.canonical(), eqnvec(Aobs = "alpha * A"),
-                           method = "observability", closedForm = TRUE,
+                           method = "observability", reconstruct = TRUE,
                            reduceCQ = FALSE)
   sup <- symmetryDetection(.canonical(), eqnvec(Aobs = "alpha * A"),
-                           method = "observability", closedForm = FALSE,
+                           method = "observability", reconstruct = FALSE,
                            reduceCQ = FALSE)
   expect_equal(ana$rank, sup$rank)
   expect_equal(ana$dim, sup$dim)
   # scalings are peeled exactly and reported in closed form in both modes;
-  # only the residual (non-scaling) directions stay support-only without closedForm
-  general <- Filter(function(d) !isTRUE(d$type == "scaling"), sup$nonIdentifiable)
-  expect_false(any(vapply(general, function(d) isTRUE(d$closedForm), logical(1))))
+  # only the residual (non-scaling) directions stay support-only without reconstruct
+  general <- Filter(function(d) !isTRUE(d$type == "scaling"), sup$symmetries)
+  expect_false(any(vapply(general, function(d) isTRUE(d$explicit), logical(1))))
 })
 
 
-test_that("closedForm observability handles a deep chain", {
+test_that("reconstruct observability handles a deep chain", {
   if (!.sympy_works()) skip("reticulate/sympy not available")
 
   eq <- eqnlist() |>
@@ -263,13 +263,14 @@ test_that("closedForm observability handles a deep chain", {
     addReaction("C", "D", "k3 * C") |>
     addReaction("D", "",  "k4 * D")
   res <- symmetryDetection(eq, eqnvec(yD = "scale * D"),
-                           method = "observability", closedForm = TRUE,
+                           method = "observability", reconstruct = TRUE,
                            reduceCQ = FALSE)
 
   expect_false(res$identifiable)
-  expect_gte(length(res$nonIdentifiable), 1L)
-  expect_true(all(vapply(res$nonIdentifiable,
-                         function(d) is.logical(d$closedForm), logical(1))))
+  expect_gte(length(res$symmetries), 1L)
+  # the scaling directions of the chain are peeled and returned in closed form
+  expect_true(any(vapply(res$symmetries,
+                         function(d) isTRUE(d$explicit), logical(1))))
 })
 
 
@@ -277,15 +278,15 @@ test_that("a fixed parameter is excluded from z and removes its symmetry", {
   if (!.sympy_works()) skip("reticulate/sympy not available")
 
   free  <- symmetryDetection(.canonical(), eqnvec(Aobs = "alpha * A"),
-                             method = "observability", closedForm = TRUE,
+                             method = "observability", reconstruct = TRUE,
                              reduceCQ = FALSE)
   fixed <- symmetryDetection(.canonical(), eqnvec(Aobs = "alpha * A"),
-                             method = "observability", closedForm = TRUE,
+                             method = "observability", reconstruct = TRUE,
                              fixed = "alpha", reduceCQ = FALSE)
 
   expect_equal(fixed$dim, free$dim - 1L)
-  expect_lt(length(fixed$nonIdentifiable), length(free$nonIdentifiable))
-  expect_false("alpha" %in% unlist(lapply(fixed$nonIdentifiable,
+  expect_lt(length(fixed$symmetries), length(free$symmetries))
+  expect_false("alpha" %in% unlist(lapply(fixed$symmetries,
                                           function(d) d$support)))
 })
 
@@ -303,11 +304,11 @@ test_that("observability, liesym and scaling agree on the scaling symmetry", {
   scl <- symmetryDetection(.canonical(), eqnvec(Aobs = "alpha * A"),
                            method = "scaling", reduceCQ = FALSE)
 
-  expect_true(any(vapply(obs$nonIdentifiable,
+  expect_true(any(vapply(obs$symmetries,
                          function(d) abAlpha(d$support), logical(1))))
-  expect_true(any(vapply(lie,
-                         function(g) abAlpha(names(g$infinitesimals)), logical(1))))
-  expect_true(any(vapply(scl$nonIdentifiable,
+  expect_true(any(vapply(lie$symmetries,
+                         function(g) abAlpha(names(g$generator)), logical(1))))
+  expect_true(any(vapply(scl$symmetries,
                          function(d) abAlpha(d$support), logical(1))))
 })
 
@@ -319,7 +320,7 @@ test_that("a steady-state expression initial condition is seeded with its duals"
   # trajectory is constant, so only the product s*b/a is observed (rank 1 of 3)
   res <- symmetryDetection(eqnvec(x = "b - a*x"), eqnvec(y = "s*x"),
                            trafo = eqnvec(x = "b/a"), method = "observability",
-                           closedForm = TRUE, reduceCQ = FALSE)
+                           reconstruct = TRUE, reduceCQ = FALSE)
   expect_false(res$identifiable)
   expect_equal(res$rank, 1L)
   expect_equal(res$dim, 3L)
@@ -352,7 +353,7 @@ test_that("equilibrate reproduces the explicit steady state", {
   f <- eqnvec(x = "b - a*x")
   g <- eqnvec(y = "s*x")
   res <- symmetryDetection(f, g, method = "observability",
-                           equilibrate = TRUE, closedForm = TRUE,
+                           equilibrate = TRUE, reconstruct = TRUE,
                            reduceCQ = FALSE)
   expect_false(res$identifiable)
   expect_equal(res$rank, 1L)
@@ -361,7 +362,7 @@ test_that("equilibrate reproduces the explicit steady state", {
   # gradient grad(s*b/a) = (-s*b/a^2, s/a, b/a) in coordinates (a, b, s)
   vals <- list(a = 2, b = 3, s = 5)
   grad <- c(a = -vals$s * vals$b / vals$a^2, b = vals$s / vals$a, s = vals$b / vals$a)
-  for (d in res$nonIdentifiable) {
+  for (d in res$symmetries) {
     v <- .sym_tangent(d, vals, c("a", "b", "s"))
     expect_equal(sum(grad * v), 0, tolerance = 1e-9)
   }
@@ -376,7 +377,7 @@ test_that("equilibrate handles a steady state with no rational form", {
   # residue; the modular solver finds it and the verdict is still reached
   res <- symmetryDetection(eqnvec(x = "b - a*x^2"), eqnvec(y = "s*x"),
                            method = "observability", equilibrate = TRUE,
-                           closedForm = TRUE, reduceCQ = FALSE)
+                           reconstruct = TRUE, reduceCQ = FALSE)
   expect_false(res$identifiable)
   expect_equal(res$rank, 1L)
   expect_equal(res$dim, 3L)
@@ -503,7 +504,7 @@ test_that("the C++ steady-state seed reproduces the symbolic verdict", {
   # state, the symSteadyStateSeed kernel for a free-Hill-exponent recast one) must
   # reproduce the symbolic per-point solve.
   sd <- .sd_module()
-  dirset <- function(r) sort(vapply(r$nonIdentifiable,
+  dirset <- function(r) sort(vapply(r$symmetries,
     function(d) paste(sort(d$support), collapse = "+"), character(1)))
   agree <- function(...) {
     cpp <- symmetryDetection(...)
@@ -531,7 +532,7 @@ test_that("the C++ steady-state seed reproduces the symbolic verdict", {
         events = addEvent(eventlist(), var = "u", time = -1, value = "var_u",
                           method = "replace"),
         conditions = data.frame(var_u = c(0, 1), row.names = c("c1", "c2")),
-        closedForm = TRUE, reduceCQ = FALSE)
+        reconstruct = TRUE, reduceCQ = FALSE)
 })
 
 
@@ -550,18 +551,18 @@ test_that("the analytic-segment kernel agrees across thread counts", {
   run <- function(cores)
     symmetryDetection(f, g, method = "observability", events = ev,
                       conditions = grid, forcings = "u",
-                      closedForm = TRUE, reduceCQ = FALSE, cores = cores)
+                      reconstruct = TRUE, reduceCQ = FALSE, cores = cores)
   serial <- run(1L)
   parallel <- run(4L)
   expect_identical(serial$rank, parallel$rank)
   expect_identical(serial$identifiable, parallel$identifiable)
-  expect_equal(length(serial$nonIdentifiable), length(parallel$nonIdentifiable))
+  expect_equal(length(serial$symmetries), length(parallel$symmetries))
 })
 
 test_that("the batched chain kernel matches the serial path (joint + gap)", {
   if (!.sympy_works()) skip("reticulate/sympy not available")
 
-  # equilibrate + a later-event gap + closedForm routes the reconstruction through
+  # equilibrate + a later-event gap + reconstruct routes the reconstruction through
   # the batched per-(point, condition) chain kernel (kchunk). DMOD_SYM_NOCHUNK forces
   # the serial per-point fallback; the two must be byte-identical.
   f  <- as.eqnvec(c(R = "kpr - kdg*R + kon*u*R", u = "0"))
@@ -576,11 +577,11 @@ test_that("the batched chain kernel matches the serial path (joint + gap)", {
     on.exit(Sys.setenv(DMOD_SYM_NOCHUNK = old))
     symmetryDetection(f, g, method = "observability", equilibrate = TRUE,
                       events = ev, conditions = cg, forcings = "u",
-                      closedForm = TRUE, reduceCQ = FALSE)
+                      reconstruct = TRUE, reduceCQ = FALSE)
   }
   batched <- run(FALSE)
   serial  <- run(TRUE)
-  lineOf <- function(o) sort(vapply(o$nonIdentifiable, dMod:::.sym_direction_line,
+  lineOf <- function(o) sort(vapply(o$symmetries, dMod:::.sym_direction_line,
                                     character(1)))
   expect_identical(batched$rank, serial$rank)
   expect_identical(batched$identifiable, serial$identifiable)
@@ -599,14 +600,14 @@ test_that("observability recovers the Michaelis-Menten enzyme symmetries", {
   # closed-form directions annihilate exactly the observable invariants
   # {s*S, s*Km, s*kcat*Etot}.
   res <- symmetryDetection(eqnvec(S = "-kcat*Etot*S/(Km + S)"), eqnvec(y = "s*S"),
-                           method = "observability", closedForm = TRUE,
+                           method = "observability", reconstruct = TRUE,
                            reduceCQ = FALSE)
   expect_false(res$identifiable)
   expect_equal(res$rank, 3L)
   expect_equal(res$dim, 5L)
-  expect_length(res$nonIdentifiable, 2L)
-  expect_true(all(vapply(res$nonIdentifiable,
-                         function(d) isTRUE(d$closedForm), logical(1))))
+  expect_length(res$symmetries, 2L)
+  expect_true(all(vapply(res$symmetries,
+                         function(d) isTRUE(d$explicit), logical(1))))
 
   pt <- list(S = 2, Etot = 3, Km = 5, s = 7, kcat = 11)
   coords <- c("S", "Etot", "Km", "s", "kcat")
@@ -617,7 +618,7 @@ test_that("observability recovers the Michaelis-Menten enzyme symmetries", {
     sKm   = pt$s * v["Km"] + pt$Km * v["s"],
     sVmax = pt$kcat * pt$Etot * v["s"] + pt$s * pt$Etot * v["kcat"] +
             pt$s * pt$kcat * v["Etot"])
-  for (d in res$nonIdentifiable)
+  for (d in res$symmetries)
     expect_equal(unname(dInv(.sym_tangent(d, pt, coords))), c(0, 0, 0),
                  tolerance = 1e-9)
 })
@@ -632,15 +633,15 @@ test_that("observability finds the transcription-translation rate curve", {
   # direction must annihilate the observable invariants {ktx*ktl, ktl*m}
   res <- symmetryDetection(eqnvec(m = "ktx - dm*m", p = "ktl*m - dp*p"),
                            eqnvec(y = "p"), method = "observability",
-                           closedForm = TRUE, reduceCQ = FALSE)
+                           reconstruct = TRUE, reduceCQ = FALSE)
   expect_false(res$identifiable)
   expect_equal(res$rank, 5L)
   expect_equal(res$dim, 6L)
-  expect_length(res$nonIdentifiable, 1L)
-  d <- res$nonIdentifiable[[1]]
-  expect_true(isTRUE(d$closedForm))
+  expect_length(res$symmetries, 1L)
+  d <- res$symmetries[[1]]
+  expect_true(isTRUE(d$explicit))
   # the curve lives in the two rates and the hidden mRNA only
-  expect_setequal(names(d$vector), c("m", "ktx", "ktl"))
+  expect_setequal(names(d$generator), c("m", "ktx", "ktl"))
 
   pt <- list(m = 2, p = 3, ktx = 5, ktl = 7, dm = 11, dp = 13)
   v <- .sym_tangent(d, pt, c("m", "p", "ktx", "ktl", "dm", "dp"))
@@ -660,32 +661,32 @@ test_that("scaling directions are peeled exactly past the interpolation cap", {
   # them all exactly, in both closed-form and support mode.
   f <- eqnvec(x = "-k * x")
   g <- eqnvec(y = "s*a*b*c*d*e*x")
-  res <- symmetryDetection(f, g, method = "observability", closedForm = TRUE,
+  res <- symmetryDetection(f, g, method = "observability", reconstruct = TRUE,
                            reduceCQ = FALSE)
   expect_false(res$identifiable)
   expect_equal(res$dim, 8L)
   expect_equal(res$rank, 2L)
-  expect_length(res$nonIdentifiable, 6L)
-  expect_true(all(vapply(res$nonIdentifiable, function(d)
-    isTRUE(d$type == "scaling") && isTRUE(d$closedForm), logical(1))))
+  expect_length(res$symmetries, 6L)
+  expect_true(all(vapply(res$symmetries, function(d)
+    isTRUE(d$type == "scaling") && isTRUE(d$explicit), logical(1))))
 
   # every scaling leaves the product invariant: the signed weights of its factors
   # (the free initial value x0 is the coordinate "x") sum to zero
   factors <- c(s = 1, a = 1, b = 1, c = 1, d = 1, e = 1, x = 1)
   inv <- function(d) {
     w <- setNames(numeric(length(factors)), names(factors))
-    for (nm in names(d$vector)) if (nm %in% names(factors))
-      w[nm] <- as.numeric(d$vector[[nm]])
+    for (nm in names(d$weights)) if (nm %in% names(factors))
+      w[nm] <- as.numeric(d$weights[[nm]])
     sum(w * factors)
   }
-  expect_true(all(vapply(res$nonIdentifiable,
+  expect_true(all(vapply(res$symmetries,
                          function(d) abs(inv(d)) < 1e-9, logical(1))))
 
   # the default (support) mode reports the same scalings in closed form
   sup <- symmetryDetection(f, g, method = "observability", reduceCQ = FALSE)
-  expect_true(all(vapply(sup$nonIdentifiable, function(d)
-    isTRUE(d$type == "scaling") && !is.null(d$vector), logical(1))))
-  expect_length(sup$nonIdentifiable, 6L)
+  expect_true(all(vapply(sup$symmetries, function(d)
+    isTRUE(d$type == "scaling") && !is.null(d$generator), logical(1))))
+  expect_length(sup$symmetries, 6L)
 })
 
 
@@ -699,25 +700,25 @@ test_that("peeled scalings and per-entry reconstruction combine on two moieties"
     addReaction("A1", "B1", "k1 * A1") |> addReaction("B1", "A1", "k2 * B1") |>
     addReaction("A2", "B2", "k3 * A2") |> addReaction("B2", "A2", "k4 * B2")
   res <- symmetryDetection(eq, eqnvec(y1 = "s * A1", y2 = "s * A2"),
-                           method = "observability", closedForm = TRUE,
+                           method = "observability", reconstruct = TRUE,
                            reduceCQ = FALSE)
   expect_equal(res$rank, 6L)
   expect_equal(res$dim, 9L)
-  expect_length(res$nonIdentifiable, 3L)
-  types <- vapply(res$nonIdentifiable, function(d) d$type, character(1))
+  expect_length(res$symmetries, 3L)
+  types <- vapply(res$symmetries, function(d) d$type, character(1))
   expect_equal(sum(types == "scaling"), 1L)
   expect_equal(sum(types == "affine"), 2L)   # each moiety direction is affine once canonicalised
-  expect_true(all(vapply(res$nonIdentifiable,
-                         function(d) isTRUE(d$closedForm), logical(1))))
+  expect_true(all(vapply(res$symmetries,
+                         function(d) isTRUE(d$explicit), logical(1))))
 
   # each conserved direction satisfies its moiety relation: the canonical affine
   # generator shifts B_i along the conserved total A_i + B_i
-  gen <- Filter(function(d) d$type == "affine", res$nonIdentifiable)
+  gen <- Filter(function(d) d$type == "affine", res$symmetries)
   for (d in gen) {
-    expect_true(any(grepl("^B[12]$", names(d$vector))))
-    expect_true(.sym_expr_equal(d$vector[[grep("^B[12]$", names(d$vector),
+    expect_true(any(grepl("^B[12]$", names(d$generator))))
+    expect_true(.sym_expr_equal(d$generator[[grep("^B[12]$", names(d$generator),
                                                 value = TRUE)]],
-                                if ("B1" %in% names(d$vector)) "A1 + B1"
+                                if ("B1" %in% names(d$generator)) "A1 + B1"
                                 else "A2 + B2"))
   }
 })
@@ -731,8 +732,8 @@ test_that("equilibrate supports a free Hill/power exponent", {
   r <- symmetryDetection(
     eqnvec(p = "kpr/(1+kinh*p^nhill) - dp*p + kin*u", u = "0"), eqnvec(y = "s*p"),
     method = "observability", equilibrate = TRUE, forcings = "u", events = ev,
-    conditions = cond, closedForm = FALSE, reduceCQ = FALSE)
-  supp <- unlist(lapply(r$nonIdentifiable, function(d) d$support))
+    conditions = cond, reconstruct = FALSE, reduceCQ = FALSE)
+  supp <- unlist(lapply(r$symmetries, function(d) d$support))
   expect_false("nhill" %in% supp)            # the Hill coefficient is identifiable
   expect_equal(r$dim, 6L)
   # a base without a linear turnover term has a steady state that is a fractional
@@ -742,26 +743,40 @@ test_that("equilibrate supports a free Hill/power exponent", {
   r2 <- symmetryDetection(
     eqnvec(x = "kpr - dp*x^q + kin*u", u = "0"), eqnvec(y = "s*x"),
     method = "observability", equilibrate = TRUE, forcings = "u", events = ev,
-    conditions = cond, closedForm = TRUE, reduceCQ = FALSE)
-  expect_length(r2$nonIdentifiable, 1L)
-  d2 <- r2$nonIdentifiable[[1]]
-  expect_true(isTRUE(d2$closedForm))
+    conditions = cond, reconstruct = TRUE, reduceCQ = FALSE)
+  expect_length(r2$symmetries, 1L)
+  d2 <- r2$symmetries[[1]]
+  expect_true(isTRUE(d2$explicit))
   expect_equal(d2$type, "scaling")                   # a q-weighted toric scaling
   expect_false("q" %in% d2$support)                  # the exponent is identifiable
   # the free-exponent recast makes dp's scaling weight 1 - q; the readout scale s and
   # the synthesis rates carry integer weights, and the input rate kin scales along
-  expect_true(.sym_expr_equal(d2$vector[["dp"]], "1 - q"))
-  expect_true(.sym_expr_equal(d2$vector[["kpr"]], "1"))
-  expect_true(.sym_expr_equal(d2$vector[["s"]], "-1"))
-  exprs2 <- as.character(unlist(d2$vector))
+  expect_true(.sym_expr_equal(d2$weights[["dp"]], "1 - q"))
+  expect_true(.sym_expr_equal(d2$weights[["kpr"]], "1"))
+  expect_true(.sym_expr_equal(d2$weights[["s"]], "-1"))
+  exprs2 <- as.character(unlist(d2$weights))
   expect_false(any(grepl("log\\(", exprs2)))         # the direction is rational
   expect_false(any(grepl("_E_|_L_", exprs2)))         # no internal recast symbol leaks
-  # a free exponent without equilibrate is non-rational and rejected
-  expect_error(
-    symmetryDetection(eqnvec(p = "kpr/(1+kinh*p^nhill) - dp*p"),
-                      eqnvec(y = "s*p"), method = "observability",
-                      equilibrate = FALSE, reduceCQ = FALSE),
-    "rational")
+  # a free exponent WITHOUT equilibrate is handled by the transient recast: E = p^nhill
+  # and L = log(p) become free-initial-value coordinates tied to (p, nhill) by the
+  # recast relation, so the observability system stays rational. The transient model
+  # (free initial value p, no steady state) is MORE identifiable than the equilibrated
+  # one: the single symmetry is the parameter-weighted scaling p->L*p, kpr->L*kpr,
+  # kinh->kinh*L^-nhill, s->s/L, recovered in closed form with kinh weighted by nhill.
+  r3 <- symmetryDetection(eqnvec(p = "kpr/(1+kinh*p^nhill) - dp*p"),
+                          eqnvec(y = "s*p"), method = "observability",
+                          equilibrate = FALSE, reduceCQ = FALSE, reconstruct = TRUE)
+  expect_equal(r3$dim, 6L)                            # p(0), kpr, kinh, dp, nhill, s
+  expect_equal(r3$rank, 5L)
+  expect_length(r3$symmetries, 1L)
+  d3 <- r3$symmetries[[1]]
+  expect_true(isTRUE(d3$explicit))
+  expect_false("nhill" %in% d3$support)              # the Hill exponent is identifiable
+  expect_setequal(d3$support, c("kinh", "kpr", "p", "s"))
+  gen3 <- as.character(unlist(d3$generator))
+  expect_true(any(grepl("nhill", gen3)))             # kinh carries the nhill-weight
+  expect_false(any(grepl("_E_|_L_", gen3)))          # no internal recast symbol leaks
+  expect_false(any(grepl("log\\(", gen3)))           # this direction is rational in nhill
 })
 
 
@@ -775,10 +790,10 @@ test_that("equilibrate reconstructs Hill directions in closed form via the recas
   r <- symmetryDetection(
     eqnvec(p = "kpr/(1+kinh*p^nhill) - dp*p + kin*u", u = "0"), eqnvec(y = "s*p"),
     method = "observability", equilibrate = TRUE, events = ev,
-    conditions = cond, closedForm = TRUE, reduceCQ = FALSE)
-  expect_true(all(vapply(r$nonIdentifiable,
-                         function(d) isTRUE(d$closedForm), logical(1))))
-  exprs <- unlist(lapply(r$nonIdentifiable, function(d) as.character(unlist(d$vector))))
+    conditions = cond, reconstruct = TRUE, reduceCQ = FALSE)
+  expect_true(all(vapply(r$symmetries,
+                         function(d) isTRUE(d$explicit), logical(1))))
+  exprs <- unlist(lapply(r$symmetries, function(d) as.character(unlist(d$generator))))
   expect_true(any(grepl("p\\*\\*nhill", exprs)))   # the power E -> base^exp
   expect_true(any(grepl("log\\(p\\)", exprs)))      # the transcendental L -> log(base)
   expect_false(any(grepl("_E_|_L_", exprs)))        # no internal recast symbol leaks
@@ -805,7 +820,7 @@ test_that("a parameter-base (Michaelis) Hill exponent is non-identifiable (dim 7
                          equilibrate = TRUE, reduceCQ = FALSE)
   expect_false(r$identifiable)
   expect_equal(r$dim, 7L)
-  supp <- unlist(lapply(r$nonIdentifiable, function(d) d$support))
+  supp <- unlist(lapply(r$symmetries, function(d) d$support))
   expect_true("K" %in% supp)
   expect_true("n" %in% supp)
 
@@ -816,15 +831,15 @@ test_that("a parameter-base (Michaelis) Hill exponent is non-identifiable (dim 7
                x  = "k_pr_x*K^n/(d_x*(K^n + (k_pr_FB/d_FB)^n))")
   sres <- symmetryDetection(hill, obs, method = "observability",
                             symEngine = "symbolic", trafo = ss)
-  nd <- Filter(function(d) "n" %in% d$support, sres$nonIdentifiable)
+  nd <- Filter(function(d) "n" %in% d$support, sres$symmetries)
   expect_length(nd, 1L)
-  v <- nd[[1]]$vector
+  v <- nd[[1]]$generator
   expect_true(.sym_expr_equal(v[["n"]], "1"))
   expect_true(.sym_expr_equal(v[["K"]], "(-K*log(K) + K*log(k_pr_FB/d_FB))/n"))
 })
 
 
-test_that("modular closedForm recovers the parameter-base (Michaelis) Hill direction", {
+test_that("modular reconstruct recovers the parameter-base (Michaelis) Hill direction", {
   if (!.sympy_works()) skip("reticulate/sympy not available")
   # The forward reconstruction closes the leaf-dependent residual recast directions
   # (each on a distinct physical anchor); the n-direction comes back in closed form
@@ -837,11 +852,65 @@ test_that("modular closedForm recovers the parameter-base (Michaelis) Hill direc
     addReaction("0",  "x",  "k_pr_x * K^n / (K^n + FB^n)") |>
     addReaction("x",  "0",  "d_x * x")
   r <- symmetryDetection(hill, eqnvec(xobs = "scale * x"), method = "observability",
-                         equilibrate = TRUE, closedForm = TRUE, reduceCQ = FALSE)
-  expect_true(all(vapply(r$nonIdentifiable,
-                         function(d) isTRUE(d$closedForm), logical(1))))
-  exprs <- unlist(lapply(r$nonIdentifiable, function(d) as.character(unlist(d$vector))))
+                         equilibrate = TRUE, reconstruct = TRUE, reduceCQ = FALSE)
+  expect_true(all(vapply(r$symmetries,
+                         function(d) isTRUE(d$explicit), logical(1))))
+  exprs <- unlist(lapply(r$symmetries, function(d) as.character(unlist(d$generator))))
   expect_true(any(grepl("log\\(", exprs)))          # the n-direction's log(base) factor
+})
+
+
+test_that("equilibrate without reduceCQ uses the held-variable moiety parameterisation", {
+  if (!.sympy_works()) skip("reticulate/sympy not available")
+  # A conserved moiety A + B under equilibrate makes f = 0 rank-deficient. reduceCQ
+  # eliminates the pivot and reports the moiety freedom on a `total` parameter;
+  # reduceCQ = FALSE instead holds one pivot's resting value under the pivot's own
+  # name (dMod/deSolve convention: a parameter named like a state is its initial
+  # value), keeps every species a coordinate, and reports the SAME identifiability
+  # (rank/dim/direction count) with the pivot's initial value in place of the total.
+  # u modulates the A->B rate (conservation preserved, transient informative). The
+  # pool is a shared parameter, so a second condition does NOT double the direction.
+  eq <- eqnlist() |>
+    addReaction("A", "B", "k1 * A * (1 + kin*u)") |>
+    addReaction("B", "A", "k2 * B") |>
+    addReaction("0", "u", "0")
+  obs <- eqnvec(y = "scale * A")
+  ev  <- addEvent(eventlist(), var = "u", time = 0, value = "dose", method = "replace")
+  cond <- data.frame(dose = c(1, 2), row.names = c("d1", "d2"))
+  args <- list(eq, obs, method = "observability", equilibrate = TRUE,
+               forcings = "u", events = ev, conditions = cond, reconstruct = TRUE)
+
+  rT <- do.call(symmetryDetection, c(args, list(reduceCQ = TRUE)))
+  rF <- do.call(symmetryDetection, c(args, list(reduceCQ = FALSE)))
+
+  # same identifiability structure, just a different parameterisation of the moiety
+  expect_equal(rF$rank, rT$rank)
+  expect_equal(rF$dim, rT$dim)
+  expect_equal(length(rF$symmetries), length(rT$symmetries))
+
+  suppF <- unlist(lapply(rF$symmetries, function(d) d$support))
+  suppT <- unlist(lapply(rT$symmetries, function(d) d$support))
+  expect_true("A" %in% suppF)                      # held: pivot initial value appears
+  expect_false(any(grepl("^total", suppF)))        # held: no `total` coordinate
+  expect_true(any(grepl("^total", suppT)))         # reduceCQ: the total does appear
+  expect_false("A" %in% suppT)                     # reduceCQ: pivot A is eliminated
+
+  # every direction closes in the held parameterisation too: the pool scaling is
+  # peeled onto the pivot's initial-value parameter (weight matching the total's), not
+  # left as an unreconstructed support-only direction
+  expect_true(all(vapply(rF$symmetries,
+                         function(d) isTRUE(d$explicit), logical(1))))
+  pool <- Filter(function(d) "A" %in% d$support, rF$symmetries)
+  expect_true(length(pool) >= 1L)
+  expect_true(.sym_expr_equal(pool[[1]]$generator[["A"]], "A"))     # weight +1
+
+  # a single condition works too, and does not error on the rank-deficient f = 0
+  cond1 <- data.frame(dose = 1, row.names = "d1")
+  r1 <- do.call(symmetryDetection,
+                c(list(eq, obs, method = "observability", equilibrate = TRUE,
+                       forcings = "u", events = ev, conditions = cond1,
+                       reconstruct = TRUE, reduceCQ = FALSE)))
+  expect_true("A" %in% unlist(lapply(r1$symmetries, function(d) d$support)))
 })
 
 
@@ -869,8 +938,8 @@ test_that("the verification gate accepts correct and rejects wrong closed forms"
   fakeKcall <- function(point, p, Nt)
     list(ok = TRUE, R = matrix(c(1L, 3L), 1, 2), pivots = 0L, rank = 1L, dim = 2L)
   znames <- c("a", "b"); leafNames <- c("a", "b"); point0 <- c(7, 11)
-  good <- list(vector = list(a = "-3", b = "1"), type = "general", closedForm = TRUE)
-  bad  <- list(vector = list(a = "-5", b = "1"), type = "general", closedForm = TRUE)
+  good <- list(vector = list(a = "-3", b = "1"), type = "general", reconstruct = TRUE)
+  bad  <- list(vector = list(a = "-5", b = "1"), type = "general", reconstruct = TRUE)
   expect_true(dMod:::.sym_verify_direction(good, 1L, znames, leafNames, point0, 1L,
                                            fakeKcall, sd))
   expect_false(dMod:::.sym_verify_direction(bad, 1L, znames, leafNames, point0, 1L,
@@ -1037,7 +1106,7 @@ test_that("log-coordinate gauge reconstructs a parameter-weighted scaling", {
     as.numeric(point0), pool, 100L, 1L, fakeKcall, spy, NULL,
     lg$residueFns[[1]], reconstControl())
   e <- dir$entry
-  expect_true(isTRUE(e$closedForm))
+  expect_true(isTRUE(e$explicit))
   e$vector <- dMod:::.sym_logcoord_backsub(e$vector, spy)
 
   # back-transformed entries are the sparse c*z form (the b entry couples only n)
@@ -1062,13 +1131,13 @@ test_that("sparse reconstruction matches the dense path when forced", {
   # (both report the same canonical affine generator: dB = A + B, dk1 = k2)
   eq <- eqnlist() |> addReaction("A", "B", "k1 * A") |> addReaction("B", "A", "k2 * B")
   res <- symmetryDetection(eq, eqnvec(Aobs = "alpha * A"), method = "observability",
-                           closedForm = TRUE, reduceCQ = FALSE,
+                           reconstruct = TRUE, reduceCQ = FALSE,
                            control = reconstControl(relevanceCap = 0L))
-  d <- Filter(function(x) all(c("B", "k1", "k2") %in% names(x$vector)) &&
-                isTRUE(x$closedForm), res$nonIdentifiable)
+  d <- Filter(function(x) all(c("B", "k1", "k2") %in% names(x$generator)) &&
+                isTRUE(x$explicit), res$symmetries)
   expect_gte(length(d), 1L)
-  expect_true(.sym_expr_equal(d[[1]]$vector[["B"]], "A + B"))
-  expect_true(.sym_expr_equal(d[[1]]$vector[["k1"]], "k2"))
+  expect_true(.sym_expr_equal(d[[1]]$generator[["B"]], "A + B"))
+  expect_true(.sym_expr_equal(d[[1]]$generator[["k1"]], "k2"))
 })
 
 
@@ -1085,8 +1154,8 @@ test_that("multi-condition observability identifies a switch-gated rate", {
   multi <- symmetryDetection(f, g, method = "observability",
                              events = ev, conditions = cg, reduceCQ = FALSE)
   expect_true(multi$identifiable)
-  expect_equal(multi$conditions, 2L)
-  expect_false(any(vapply(multi$nonIdentifiable,
+  expect_equal(multi$info$conditions, 2L)
+  expect_false(any(vapply(multi$symmetries,
                           function(d) "u" %in% d$support, logical(1))))
 })
 
@@ -1122,7 +1191,7 @@ test_that("multi-condition observability keeps a confounder common to all condit
   res <- symmetryDetection(f, g, method = "observability", events = ev,
                            conditions = cg, reduceCQ = FALSE)
   expect_false(res$identifiable)
-  supp <- unlist(lapply(res$nonIdentifiable, function(d) d$support))
+  supp <- unlist(lapply(res$symmetries, function(d) d$support))
   expect_true(all(c("A", "s") %in% supp))
   expect_false("u" %in% supp)
 })
@@ -1145,9 +1214,9 @@ test_that("a post-t0 event opens a second segment, propagated exactly", {
   cg <- data.frame(d0 = 1, d1 = 1, row.names = "c1")
 
   r <- symmetryDetection(f, g, method = "observability", events = ev,
-                         conditions = cg, closedForm = TRUE)
-  expect_equal(r$conditions, 1L)
-  expect_equal(r$segments, 2L)
+                         conditions = cg, reconstruct = TRUE)
+  expect_equal(r$info$conditions, 1L)
+  expect_equal(r$info$segments, 2L)
   expect_equal(r$dim, 3L)             # A(0), s, k -- no free carry coordinates
   expect_true(r$identifiable)         # the second dose's jump reveals the scale s
 })
@@ -1165,7 +1234,7 @@ test_that("with no post-t0 events the analysis collapses to a single segment", {
 
   r <- symmetryDetection(f, g, method = "observability", events = ev,
                          conditions = cg)
-  expect_equal(r$segments, 1L)
+  expect_equal(r$info$segments, 1L)
   expect_equal(r$dim, 3L)             # A(0), s, k
   expect_false(r$identifiable)
 })
@@ -1189,9 +1258,9 @@ test_that("exact propagation identifies a transient-channel parameter", {
   r30 <- symmetryDetection(f, g, method = "observability", equilibrate = TRUE,
                            events = ev, conditions = cg,
                            forcings = c("inh", "stim"))
-  supp30 <- unlist(lapply(r30$nonIdentifiable, function(d) d$support))
-  expect_equal(r30$segments, 2L)
-  expect_true(r30$gapOrderUsed >= 1L)       # the gap series carries kinh
+  supp30 <- unlist(lapply(r30$symmetries, function(d) d$support))
+  expect_equal(r30$info$segments, 2L)
+  expect_true(r30$info$gapOrderUsed >= 1L)       # the gap series carries kinh
   expect_false("kinh" %in% supp30)          # propagated: kinh identifiable
 })
 
@@ -1211,8 +1280,8 @@ test_that("equilibrate seeds the first segment and propagates to a later one", {
 
   r <- symmetryDetection(f, g, method = "observability", equilibrate = TRUE,
                          events = ev, conditions = cg)
-  expect_equal(r$conditions, 1L)
-  expect_equal(r$segments, 2L)
+  expect_equal(r$info$conditions, 1L)
+  expect_equal(r$info$segments, 2L)
   expect_true(r$identifiable)         # known dose pins s, then b; a from relaxation
 })
 
@@ -1235,19 +1304,19 @@ test_that("a free-Hill-exponent feedback closes as a weighted scaling", {
                          events = addEvent(eventlist(), var = "u", time = 0,
                                            value = "dose", method = "replace"),
                          conditions = data.frame(dose = 1, row.names = "c1"),
-                         closedForm = TRUE, reduceCQ = FALSE)
+                         reconstruct = TRUE, reduceCQ = FALSE)
   # every non-identifiable direction is in closed form
-  expect_true(all(vapply(r$nonIdentifiable,
-                         function(d) isTRUE(d$closedForm), logical(1))))
+  expect_true(all(vapply(r$symmetries,
+                         function(d) isTRUE(d$explicit), logical(1))))
   # the weighted-scaling direction couples exactly the inhibition strength and the
   # feedback synthesis rate, with the Hill exponent as the weight
   hill <- Filter(function(d) setequal(d$support, c("k_fb", "k_pf")),
-                 r$nonIdentifiable)
+                 r$symmetries)
   expect_length(hill, 1L)
-  expect_true(isTRUE(hill[[1]]$closedForm))
+  expect_true(isTRUE(hill[[1]]$explicit))
   # the Hill exponent is the weight, so it appears in the direction (in whichever
   # entry is not the normalised anchor)
-  expect_match(paste(unlist(hill[[1]]$vector), collapse = " "), "nh")
+  expect_match(paste(unlist(hill[[1]]$weights), collapse = " "), "nh")
 })
 
 test_that("implicit steady state finds non-scaling multi-condition directions", {
@@ -1265,11 +1334,11 @@ test_that("implicit steady state finds non-scaling multi-condition directions", 
   grid <- data.frame(k = c("k1", "k2"), row.names = c("c1", "c2"),
                      stringsAsFactors = FALSE)
   r <- symmetryDetection(f, g, method = "observability", equilibrate = TRUE,
-                         conditions = grid, reduceCQ = FALSE, closedForm = FALSE)
+                         conditions = grid, reduceCQ = FALSE, reconstruct = FALSE)
   expect_false(r$identifiable)
   expect_equal(r$dim, 6L)
   expect_equal(r$rank, 2L)
-  expect_length(r$nonIdentifiable, 4L)
+  expect_length(r$symmetries, 4L)
 })
 
 test_that("a per-condition trafo list matches the equivalent condition grid", {
@@ -1282,7 +1351,7 @@ test_that("a per-condition trafo list matches the equivalent condition grid", {
     reduceCQ = FALSE)
   r_traf <- symmetryDetection(f, g, method = "observability",
     trafo = list(c1 = eqnvec(p = "pa"), c2 = eqnvec(p = "pb")), reduceCQ = FALSE)
-  expect_equal(r_traf$conditions, 2L)          # the list alone sets the conditions
+  expect_equal(r_traf$info$conditions, 2L)          # the list alone sets the conditions
   expect_equal(r_traf$rank, r_grid$rank)
   expect_equal(r_traf$dim, r_grid$dim)
 
@@ -1309,14 +1378,14 @@ test_that("trafo = steadyStates() matches equilibrate (explicit vs implicit rout
   skip_if_not(is.character(ss) && identical(unname(ss[["x"]]), "b/a"))
 
   r_trafo <- symmetryDetection(eq, g, method = "observability", trafo = ss,
-                               closedForm = TRUE, reduceCQ = FALSE)
+                               reconstruct = TRUE, reduceCQ = FALSE)
   r_equil <- symmetryDetection(eq, g, method = "observability", equilibrate = TRUE,
-                               closedForm = TRUE, reduceCQ = FALSE)
+                               reconstruct = TRUE, reduceCQ = FALSE)
   expect_equal(r_trafo$rank, r_equil$rank)
   expect_equal(r_trafo$dim, r_equil$dim)
   expect_equal(r_trafo$identifiable, r_equil$identifiable)
   # same support set on both routes
-  supp <- function(r) sort(unique(unlist(lapply(r$nonIdentifiable, function(d) d$support))))
+  supp <- function(r) sort(unique(unlist(lapply(r$symmetries, function(d) d$support))))
   expect_equal(supp(r_trafo), supp(r_equil))
 })
 
@@ -1326,24 +1395,24 @@ test_that("scaling uses events (fixed weight) and conditions (lattice intersecti
 
   # baseline: the calibration scaling A, B, alpha
   base <- symmetryDetection(eq, g, method = "scaling", reduceCQ = FALSE)
-  expect_equal(base$count, 1L)
+  expect_equal(length(base$symmetries), 1L)
 
   # a known dose pins A's absolute value, so it can no longer scale (weight 0)
   dose <- addEvent(eventlist(), var = "A", time = 0, value = "2", method = "replace")
   pinned <- symmetryDetection(eq, g, method = "scaling", events = dose, reduceCQ = FALSE)
-  expect_equal(pinned$count, 0L)
+  expect_equal(length(pinned$symmetries), 0L)
 
   # multi-condition via a trafo list: a second condition that fixes alpha drops the
   # shared scaling (the intersection of the per-condition lattices)
   drop <- symmetryDetection(eq, g, method = "scaling", reduceCQ = FALSE,
                             trafo = list(c1 = eqnvec(k1 = "k1"), c2 = eqnvec(alpha = "1")))
-  expect_equal(drop$count, 0L)
+  expect_equal(length(drop$symmetries), 0L)
 
   # multi-condition where both conditions keep it: the scaling survives
   keep <- symmetryDetection(eq, g, method = "scaling", reduceCQ = FALSE,
                             conditions = data.frame(k1 = c("ka", "kb"),
                                                     row.names = c("c1", "c2")))
-  expect_equal(keep$count, 1L)
+  expect_equal(length(keep$symmetries), 1L)
 })
 
 test_that("the toric peel recovers a parameter-weighted (Hill) scaling over Q(nhill)", {
@@ -1358,12 +1427,12 @@ test_that("the toric peel recovers a parameter-weighted (Hill) scaling over Q(nh
   r <- symmetryDetection(
     eqnvec(p = "kpr/(1 + kinh*p^nhill) - dp*p + kin*u", u = "0"), eqnvec(y = "s*p"),
     method = "observability", equilibrate = TRUE, events = ev, conditions = cond,
-    closedForm = TRUE, reduceCQ = FALSE)
+    reconstruct = TRUE, reduceCQ = FALSE)
   hill <- Filter(function(d) isTRUE(d$type == "scaling") &&
-                   "kinh" %in% names(d$vector), r$nonIdentifiable)
+                   "kinh" %in% names(d$generator), r$symmetries)
   expect_length(hill, 1L)
-  expect_true(isTRUE(hill[[1]]$closedForm))
-  expect_true(.sym_expr_equal(hill[[1]]$vector[["kinh"]], "-nhill"))  # the exponent weight
+  expect_true(isTRUE(hill[[1]]$explicit))
+  expect_true(.sym_expr_equal(hill[[1]]$weights[["kinh"]], "-nhill"))  # the exponent weight
 })
 
 
@@ -1377,17 +1446,17 @@ test_that("both observability engines report the same canonical generator", {
   # generator, so the two engines must now agree exactly.
   gene <- eqnvec(m = "ktx - dm*m", p = "ktl*m - dp*p")
   mod <- symmetryDetection(gene, eqnvec(y = "p"), method = "observability",
-                           closedForm = TRUE)
+                           reconstruct = TRUE)
   sym <- symmetryDetection(gene, eqnvec(y = "p"), method = "observability",
                            symEngine = "symbolic")
-  expect_length(mod$nonIdentifiable, 1L)
-  expect_length(sym$nonIdentifiable, 1L)
-  dmod <- mod$nonIdentifiable[[1]]; dsym <- sym$nonIdentifiable[[1]]
+  expect_length(mod$symmetries, 1L)
+  expect_length(sym$symmetries, 1L)
+  dmod <- mod$symmetries[[1]]; dsym <- sym$symmetries[[1]]
   expect_equal(dmod$type, "scaling")
   expect_equal(dsym$type, "scaling")
   # identical canonical weights, hence an identical rendered generator line
-  expect_equal(dmod$vector[order(names(dmod$vector))],
-               dsym$vector[order(names(dsym$vector))])
+  expect_equal(dmod$weights[order(names(dmod$weights))],
+               dsym$weights[order(names(dsym$weights))])
   expect_identical(dMod:::.sym_direction_line(dmod), dMod:::.sym_direction_line(dsym))
 })
 
@@ -1399,12 +1468,12 @@ test_that("a pure constant shift is classified as a translation", {
   # down leaves the total unchanged -- a pure (constant) translation
   moi <- eqnvec(A = "-k1*A + k2*B", B = "k1*A - k2*B")
   r <- symmetryDetection(moi, eqnvec(y = "A + B"), method = "observability",
-                         closedForm = TRUE, reduceCQ = FALSE)
-  ab <- Filter(function(d) all(c("A", "B") %in% names(d$vector)), r$nonIdentifiable)
+                         reconstruct = TRUE, reduceCQ = FALSE)
+  ab <- Filter(function(d) all(c("A", "B") %in% names(d$generator)), r$symmetries)
   expect_gte(length(ab), 1L)
   expect_equal(ab[[1]]$type, "translation")
-  expect_true(.sym_expr_equal(ab[[1]]$vector[["A"]], "1"))
-  expect_true(.sym_expr_equal(ab[[1]]$vector[["B"]], "-1"))
+  expect_true(.sym_expr_equal(ab[[1]]$generator[["A"]], "1"))
+  expect_true(.sym_expr_equal(ab[[1]]$generator[["B"]], "-1"))
 })
 
 
@@ -1418,17 +1487,17 @@ test_that("method = 'translation' peels the exact additive lattice", {
   tr <- symmetryDetection(moi, eqnvec(y = "A + B"), method = "translation",
                           reduceCQ = FALSE)
   expect_equal(tr$method, "translation")
-  expect_length(tr$nonIdentifiable, 3L)
-  expect_true(all(vapply(tr$nonIdentifiable,
+  expect_length(tr$symmetries, 3L)
+  expect_true(all(vapply(tr$symmetries,
                          function(d) isTRUE(d$type == "translation"), logical(1))))
-  supp <- lapply(tr$nonIdentifiable, function(d) d$support)
+  supp <- lapply(tr$symmetries, function(d) d$support)
   expect_true(any(vapply(supp, function(s) setequal(s, c("A", "B")), logical(1))))
 
   # a pure scaling model has NO constant direction: its tangent w*z varies with the
   # sample point and drops out of the intersection, so the lattice is empty
   gene <- eqnvec(m = "ktx - dm*m", p = "ktl*m - dp*p")
   tg <- symmetryDetection(gene, eqnvec(y = "p"), method = "translation")
-  expect_length(tg$nonIdentifiable, 0L)
+  expect_length(tg$symmetries, 0L)
 })
 
 
@@ -1439,17 +1508,17 @@ test_that("certifyPoly flags a direction that is a polynomial Lie symmetry", {
   # the initial state is a genuine (affine) Lie point symmetry -> certified
   rot <- eqnvec(x1 = "-x2", x2 = "x1")
   r <- symmetryDetection(rot, eqnvec(y = "x1^2 + x2^2"), method = "observability",
-                         closedForm = TRUE, reduceCQ = FALSE,
+                         reconstruct = TRUE, reduceCQ = FALSE,
                          control = reconstControl(certifyPoly = TRUE))
-  aff <- Filter(function(d) d$type == "affine", r$nonIdentifiable)
+  aff <- Filter(function(d) d$type == "affine", r$symmetries)
   expect_gte(length(aff), 1L)
   expect_true(isTRUE(aff[[1]]$certified))
 
   # default (certifyPoly = FALSE) attaches no certificate
   r0 <- symmetryDetection(rot, eqnvec(y = "x1^2 + x2^2"), method = "observability",
-                          closedForm = TRUE, reduceCQ = FALSE)
-  aff0 <- Filter(function(d) d$type == "affine", r0$nonIdentifiable)
-  expect_true(length(aff0) >= 1L && is.null(aff0[[1]]$certified))
+                          reconstruct = TRUE, reduceCQ = FALSE)
+  aff0 <- Filter(function(d) d$type == "affine", r0$symmetries)
+  expect_true(length(aff0) >= 1L && !isTRUE(aff0[[1]]$certified))
 })
 
 
@@ -1469,8 +1538,8 @@ test_that("the symbolic engine handles multiple conditions and single-time event
   expect_equal(sym$rank, mod$rank)
   expect_equal(sym$dim, mod$dim)
   expect_true(sym$identifiable)
-  expect_equal(sym$conditions, 2L)
-  expect_false(any(vapply(sym$nonIdentifiable,
+  expect_equal(sym$info$conditions, 2L)
+  expect_false(any(vapply(sym$symmetries,
                           function(d) "u" %in% d$support, logical(1))))
 
   # a single switch value cannot separate k1 and k2 -> non-identifiable

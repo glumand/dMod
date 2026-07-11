@@ -8,7 +8,8 @@
   totals,
   states,
   parameters = character(0),
-  avoid = character(0)
+  avoid = character(0),
+  prefer = character(0)
 )
 }
 \arguments{
@@ -21,6 +22,9 @@
 \item{avoid}{Species to keep as states where possible (not eliminated),
 e.g. a moiety species that appears under a free exponent and so must
 stay a bare symbol. Honoured only when a total has another candidate.}
+
+\item{prefer}{Species to use as pivot when valid (from \code{freeInitial}), one
+per total; a name that is not a valid candidate for any total is ignored.}
 }
 \value{
 \code{list(C_mat, pivots, cq_sets)}. \code{pivots} is aligned to \code{totals}
@@ -31,6 +35,8 @@ Builds the linear CQ coefficient matrix \code{C} (rows = totals, columns =
 participating species) and picks one pivot species per total by Gaussian
 elimination, so that \code{C[, pivots]} is invertible even for overlapping
 totals. Tie-breaks prefer species not in \code{avoid}, then species not needed
-by later totals, then non-\code{parameters}, then alphabetical order.
+by later totals, then non-\code{parameters}, then alphabetical order. A species
+named in \code{prefer} is used as its total's pivot whenever it is a valid
+candidate, overriding the tie-break.
 }
 \keyword{internal}

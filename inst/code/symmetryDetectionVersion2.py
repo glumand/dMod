@@ -1,6 +1,7 @@
 # Structural identifiability of ODE models. Self-contained module driven from
-# R/symmetryDetection.R via reticulate. Three exact engines, selected by the
-# R-side `method` argument:
+# R/symmetryDetection.R via reticulate. Exact engines below carry these internal
+# tags; the R-side `method` maps onto them ("polynomial" -> "liesym", "translation"
+# -> "observability" restricted to the additive lattice):
 #
 #   "observability": local identifiability from the rank of the
 #     observability-identifiability matrix O = d/dz [g, L_f g, ...]. For a
@@ -48,6 +49,8 @@ _warned_symengine = False
 _PRIMES = [2147483647, 2147483629, 2147483587, 2147483579,
            2147483563, 2147483549, 2147483543, 2147483497]
 
+
+# ---- utilities: parsing, symbol tables, modular nullspace & rational reconstruction --
 
 def _select_backend(name):
     global _BACKEND, _warned_symengine
@@ -277,6 +280,8 @@ class Apoly:
 ###########################################################################
 #####################     infinitesimal ansatz     #######################
 ###########################################################################
+
+# ---- polynomial (liesym) Lie-symmetry engine: ansatz, determining system, verify -----
 
 def _sym(name):
     return spy.Symbol(name)
@@ -1150,6 +1155,8 @@ class _NotRational(Exception):
 _OP_CONST, _OP_ADD, _OP_MUL, _OP_INV = 0, 1, 2, 3
 
 
+# ---- modular observability: tape emission and steady-state solves --------------------
+
 def _is_rational_expr(e):
     """True if e is a rational function of its symbols (no transcendental
     function, no non-integer power)."""
@@ -1804,12 +1811,23 @@ def _compile_t0events(events, paramNames):
     return compiled
 
 
-def _ss_compile(model, stateNames, paramNames, forcings):
+def _ss_compile(model, stateNames, paramNames, forcings, heldStateNames=()):
     """Prime-independent compile of f = 0 for the modular steady-state solve,
     memoised in _ssModularCache. Inputs are the already-normalised model/state/param
     lists and the forcings set. Returns the cached tuple (paramSyms, solveStates,
-    polys, Jx, Jt, gens, JxTerms, JtTerms, polyBi, genericLinear, linTerms)."""
-    key = (tuple(model), tuple(stateNames), tuple(paramNames), tuple(sorted(forcings)))
+    polys, Jx, Jt, gens, JxTerms, JtTerms, polyBi, genericLinear, linTerms, pointPlan).
+
+    `heldStateNames` are conserved-moiety pivot states whose resting value is a FREE
+    coordinate (the held-variable parameterisation, reduceCQ = FALSE): the f = 0 system
+    is rank-deficient by one equation per moiety, so those states are fixed to their
+    supplied residue (they act as parameters for the point solve) and their own -- the
+    dependent -- equations are dropped, leaving a square reduced system in the remaining
+    states. `solveStates` and the full Jx/Jt (the df tangency snapshot) stay over ALL
+    non-forcing states, so the resting Jacobian keeps its (rank-deficient) columns and
+    the joint determining system leaves the pivot directions free in state coordinates.
+    `pointPlan` is None when nothing is held (the ordinary full solve)."""
+    key = (tuple(model), tuple(stateNames), tuple(paramNames), tuple(sorted(forcings)),
+           tuple(sorted(heldStateNames)))
     cached = _ssModularCache.get(key)
     if cached is not None:
         return cached
@@ -1838,15 +1856,33 @@ def _ss_compile(model, stateNames, paramNames, forcings):
                for th in paramSyms}
     polyBi = [_bipoly(pl, list(solveStates), list(paramSyms)) for pl in polys]
     genericLinear, linTerms = _compile_linear_plan(polys, solveStates, paramSyms)
+    # held-variable reduced point solve: drop the held (pivot) states' own equations
+    # and treat those states as extra parameters, giving a square system in the
+    # remaining states. The held states are a valid conserved-moiety pivot set (chosen
+    # in R via .cq_pivot_decomposition), so their equations are exactly the dependent
+    # rows of the rank-deficient f = 0 and dropping them leaves an independent system.
+    heldSet = set(heldStateNames)
+    pointPlan = None
+    if heldSet:
+        heldSyms = [s for s in solveStates if str(s) in heldSet]
+        pointStates = [s for s in solveStates if str(s) not in heldSet]
+        pointParams = list(paramSyms) + heldSyms
+        keepPolys = [polys[i] for i, s in enumerate(solveStates) if str(s) not in heldSet]
+        pointPolyBi = [_bipoly(pl, list(pointStates), list(pointParams)) for pl in keepPolys]
+        pointGenericLinear, pointLinTerms = _compile_linear_plan(
+            keepPolys, pointStates, pointParams)
+        pointPlan = (pointStates, pointParams, heldSyms, pointPolyBi,
+                     pointGenericLinear, pointLinTerms)
     cached = (paramSyms, solveStates, polys, Jx, Jt, gens, JxTerms, JtTerms,
-              polyBi, genericLinear, linTerms)
+              polyBi, genericLinear, linTerms, pointPlan)
     _ssModularCache[key] = cached
     return cached
 
 
 def solveSteadyStateModular(model, stateNames, paramNames, paramVals, prime,
                             forcings=None, backend='sympy', t0events=None,
-                            recast=None, lVals=None, jointMode=False):
+                            recast=None, lVals=None, jointMode=False,
+                            heldStates=None):
     """Numeric point on the interior component of f = 0 over GF(prime) with its
     implicit-function-theorem parameter sensitivities.
 
@@ -1862,33 +1898,62 @@ def solveSteadyStateModular(model, stateNames, paramNames, paramVals, prime,
     paramNames = _as_list(paramNames)
     p = int(prime)
 
-    cached = _ss_compile(model, stateNames, paramNames, forcings)
+    heldStates = {str(k): int(v) % p for k, v in (heldStates or {}).items()}
+    cached = _ss_compile(model, stateNames, paramNames, forcings,
+                         tuple(sorted(heldStates.keys())))
     (paramSyms, solveStates, polys, Jx, Jt, gens, JxTerms, JtTerms, polyBi,
-     genericLinear, linTerms) = cached
+     genericLinear, linTerms, pointPlan) = cached
 
     paramvals = [int(paramVals.get(str(th), 0)) % p for th in paramSyms]
 
-    # fast path: each state is a compiled rational function of the parameters,
-    # evaluated in integer arithmetic; a vanishing pivot denominator mod p (None)
-    # routes the point to the symbolic solve
-    sol = None
-    if genericLinear and not _SS_FORCE_SYMPY:
+    if pointPlan is not None:
+        # held-variable path: the pivot states are fixed to their supplied residue and
+        # act as parameters; solve the reduced (square) system for the rest, then
+        # assemble a value for every solveState (held -> residue, others -> solved).
+        (pointStates, pointParams, heldSyms, pointPolyBi,
+         pointGenericLinear, pointLinTerms) = pointPlan
+        ppvals = [(heldStates[str(th)] if str(th) in heldStates
+                   else int(paramVals.get(str(th), 0)) % p) for th in pointParams]
+        sub = None
+        if pointGenericLinear and not _SS_FORCE_SYMPY:
+            sub = {}
+            for nm, terms in pointLinTerms:
+                val = _eval_terms_guarded(terms, ppvals, p)
+                if val is None:
+                    sub = None
+                    break
+                sub[spy.Symbol(nm)] = spy.Integer(val)
+        if sub is None:
+            dps = [_eval_bipoly_dict(bip, ppvals, p) for bip in pointPolyBi]
+            sub, fail = _solve_states_fast(dps, list(pointStates), p)
+            if fail is not None:
+                return fail
         sol = {}
-        for nm, terms in linTerms:
-            val = _eval_terms_guarded(terms, paramvals, p)
-            if val is None:
-                sol = None
-                break
-            sol[spy.Symbol(nm)] = spy.Integer(val)
-    if sol is None:
-        if _SS_FORCE_SYMPY:
-            polysN = [_eval_bipoly(bip, list(solveStates), paramvals, p) for bip in polyBi]
-            sol, fail = _solve_states_modular(polysN, solveStates, p)
-        else:
-            dps = [_eval_bipoly_dict(bip, paramvals, p) for bip in polyBi]
-            sol, fail = _solve_states_fast(dps, list(solveStates), p)
-        if fail is not None:
-            return fail
+        for s in solveStates:
+            sol[s] = (spy.Integer(heldStates[str(s)]) if str(s) in heldStates
+                      else spy.Integer(int(sub[s]) % p))
+    else:
+        # fast path: each state is a compiled rational function of the parameters,
+        # evaluated in integer arithmetic; a vanishing pivot denominator mod p (None)
+        # routes the point to the symbolic solve
+        sol = None
+        if genericLinear and not _SS_FORCE_SYMPY:
+            sol = {}
+            for nm, terms in linTerms:
+                val = _eval_terms_guarded(terms, paramvals, p)
+                if val is None:
+                    sol = None
+                    break
+                sol[spy.Symbol(nm)] = spy.Integer(val)
+        if sol is None:
+            if _SS_FORCE_SYMPY:
+                polysN = [_eval_bipoly(bip, list(solveStates), paramvals, p) for bip in polyBi]
+                sol, fail = _solve_states_modular(polysN, solveStates, p)
+            else:
+                dps = [_eval_bipoly_dict(bip, paramvals, p) for bip in polyBi]
+                sol, fail = _solve_states_fast(dps, list(solveStates), p)
+            if fail is not None:
+                return fail
 
     nS = len(solveStates)
     valBy = {str(s): int(sol[s]) % p for s in solveStates}
@@ -1909,10 +1974,27 @@ def solveSteadyStateModular(model, stateNames, paramNames, paramVals, prime,
     # gen coordinate E as a param). Returned so R can stack these rows and run the
     # scaling peel over the enlarged coordinate set (dfStateCols / dfParamCols name
     # the columns).
-    dfJx = [list(row) for row in Jxeff]
-    dfJt = {nm: list(col) for nm, col in JtBy.items()}
-    dfStateCols = [str(sst) for sst in solveStates]
-    dfParamCols = [str(th) for th in paramSyms]
+    if pointPlan is not None:
+        # held-variable reduced tangency: keep only the non-pivot equations (rows) and
+        # the non-pivot state columns; the pivot state columns move to df PARAMETER
+        # columns (labelled by the pivot state name), because the pivot's resting value
+        # is a free parameter. This is exactly the tangency of the reduced steady-state
+        # system in (non-pivot states, params, pivot-values) coordinates, and folds the
+        # moiety freedom onto the pivot's initial-value parameter downstream in R.
+        heldIdx = [i for i, s in enumerate(solveStates) if str(s) in heldStates]
+        keepIdx = [i for i, s in enumerate(solveStates) if str(s) not in heldStates]
+        dfJx = [[Jxeff[i][j] for j in keepIdx] for i in keepIdx]
+        dfStateCols = [str(solveStates[j]) for j in keepIdx]
+        dfJt = {str(th): [JtBy[str(th)][i] for i in keepIdx] for th in paramSyms}
+        for hj in heldIdx:
+            dfJt[str(solveStates[hj])] = [Jxeff[i][hj] for i in keepIdx]
+        dfParamCols = [str(th) for th in paramSyms] + \
+                      [str(solveStates[hj]) for hj in heldIdx]
+    else:
+        dfJx = [list(row) for row in Jxeff]
+        dfJt = {nm: list(col) for nm, col in JtBy.items()}
+        dfStateCols = [str(sst) for sst in solveStates]
+        dfParamCols = [str(th) for th in paramSyms]
 
     if jointMode:
         # joint/implicit mode uses only the pre-event resting value (valBy) and the
@@ -2109,7 +2191,7 @@ def _forward_compile(model, stateNames, paramNames, forcings, solveRates):
     if c is not None:
         return c
     (paramSyms, solveStates, polys, Jx, Jt, gens0, JxTerms, JtTerms,
-     polyBi, genLin, linTerms) = _ss_compile(model, stateNames, paramNames, forcings)
+     polyBi, genLin, linTerms, _pp) = _ss_compile(model, stateNames, paramNames, forcings)
     solveSet = set(solveRates); rSyms = [spy.Symbol(r) for r in solveRates]
     rgens = [th for th in paramSyms if str(th) not in solveSet] + list(solveStates)
     rgenset = set(rgens)
@@ -2207,7 +2289,6 @@ def _apply_power_recast(pairs, S, perCond):
     companion L = log(base) per base. E' = n*E*base'/base, L' = base'/base when
     base is a state (0 when it is a parameter). E, L are appended to the state
     list; f_ss keeps only the real states (E is held generic in the solve)."""
-    Sset = set(S)
     recast = {}
     Lof = {}
     for (base, n) in pairs:
@@ -2269,12 +2350,14 @@ def recastBacksub(expr, eNames, lNames, bases, exps):
     return str(spy.cancel(e.subs(subs)))
 
 
+# ---- observability tape compiler (multi-condition, shared coordinate space) ----------
+
 def compileObservabilityTapeMulti(model, observation, conditionSubs, conditionIC0,
                                   fixed=None, parameters=None, backend='sympy',
                                   equilibrate=False, forcings=None,
                                   segEquilibrate=None, conditionEvents=None,
                                   conditionT0Events=None, jointSteadyState=False,
-                                  jointFixedStates=None):
+                                  jointFixedStates=None, heldStateParams=None):
     """Compile one observability tape per experimental condition over a shared
     coordinate space, for the multi-condition observability path.
 
@@ -2326,6 +2409,14 @@ def compileObservabilityTapeMulti(model, observation, conditionSubs, conditionIC
     obsVars, obsFunctions, _ = _read_equations(observation, parse)
     fixedNames = set(str(s) for s in
                      [local.get(nm, spy.Symbol(nm)) for nm in _as_list(fixed)])
+    # held-variable moiety parameterisation (equilibrate + reduceCQ = FALSE): each pivot
+    # state's resting value is a shared initial-value parameter (heldMap). In joint mode
+    # its initial condition is seeded from that parameter, not an identity free-state
+    # leaf, so the moiety freedom is carried by a shared, reported parameter (states are
+    # projected out here) instead of a per-condition state column.
+    heldStateParams = dict(heldStateParams or {})
+    heldMap = {str(k): spy.Symbol(str(v)) for k, v in heldStateParams.items()}
+    heldParamSyms = [spy.Symbol(str(v)) for v in heldStateParams.values()]
 
     isConst = [spy.sympify(e) == 0 for e in diffEquations]
     S = [variables[i] for i in range(len(variables)) if not isConst[i]]
@@ -2355,22 +2446,24 @@ def compileObservabilityTapeMulti(model, observation, conditionSubs, conditionIC
             ic_c[str(X)] = spy.sympify(e).subs(subsMap)
         perCond.append((f_c, g_c, ic_c, f_ss))
 
-    # power/Hill recast (equilibrate only): replace base^exp (exp a parameter) by
-    # a state E with E' = exp*E*base'/base and a companion L = log(base). Both are
-    # held generic in the f = 0 solve and excluded from z, so f stays rational and
-    # the log enters only through the generic L coordinate (sound by the algebraic
-    # independence of base, log(base) and base^exp).
+    # power/Hill recast: replace base^exp (exp a parameter) by a state E with
+    # E' = exp*E*base'/base and a companion L = log(base). E and L are appended as
+    # coordinates and tied to (base, exp) by an algebraic relation downstream, so f
+    # stays rational and the log enters only through the generic L coordinate (sound
+    # by the algebraic independence of base, log(base) and base^exp). This applies to
+    # BOTH the equilibrate path (E held generic in the f = 0 solve) and the transient
+    # path (E, L are free-initial-value leaves tied by the recast relation in R).
     nReal = nS
     powerRecast = []
     invSolveName = {}
-    if equilibrate:
-        pairs = _detect_power_atoms(perCond)
-        if pairs is None:
-            return {'ok': False, 'nonrational':
-                    ['unsupported power form: base must be a symbol and exponent c*param']}
-        if pairs:
-            S, perCond, powerRecast = _apply_power_recast(pairs, S, perCond)
-            nS = len(S)
+    pairs = _detect_power_atoms(perCond)
+    if pairs is None:
+        return {'ok': False, 'nonrational':
+                ['unsupported power form: base must be a symbol and exponent c*param']}
+    if pairs:
+        S, perCond, powerRecast = _apply_power_recast(pairs, S, perCond)
+        nS = len(S)
+        if equilibrate:
             # a base with a linear turnover term keeps its bare symbol in the
             # steady-state balance and is solved directly; a base without one has a
             # balance linear in E and is "inverted": E is solved, base and L stay
@@ -2393,6 +2486,11 @@ def compileObservabilityTapeMulti(model, observation, conditionSubs, conditionIC
                              'powers with no linear turnover term' % base]}
             invSolveName = {rc['base']: rc['E']
                             for rc in powerRecast if rc['inverted']}
+        else:
+            # transient path: no steady-state solve, so no base is "inverted"; each
+            # recast atom is a free-initial-value leaf tied to (base, exp) in R.
+            for rc in powerRecast:
+                rc['inverted'] = False
 
     nonrational = []
     for (f_c, g_c, ic_c, f_ss) in perCond:
@@ -2422,7 +2520,8 @@ def compileObservabilityTapeMulti(model, observation, conditionSubs, conditionIC
             if jointSteadyState:
                 jfs = set(jointFixedStates or [])
                 for X in S:
-                    if str(X) not in forcings and str(X) not in jfs:
+                    if (str(X) not in forcings and str(X) not in jfs
+                            and str(X) not in heldMap):
                         freeState[str(X)] = True
             continue  # equilibrate-seeded: no state is a free coordinate (unless joint)
         for X in S:
@@ -2446,6 +2545,7 @@ def compileObservabilityTapeMulti(model, observation, conditionSubs, conditionIC
         for e in vs:
             paramset |= set(e.free_symbols)
     paramset -= set(S)
+    paramset |= set(heldParamSyms)   # held-variable initial-value parameters
     params = sorted(paramset, key=spy.default_sort_key)
     # A free-exponent base that appears ONLY under the exponent (a Michaelis constant
     # Km in C^n/(Km^n+C^n)) was replaced by its recast atom E=Km^n and so dropped from
@@ -2496,7 +2596,12 @@ def compileObservabilityTapeMulti(model, observation, conditionSubs, conditionIC
             # kernel gives each state an independent dual column. The resting model
             # is kept so R can solve x* and read the df constraint rows [Jx|Jt].
             jfs = set(jointFixedStates or [])
-            icMap = {X: (X if (str(X) not in forcings and str(X) not in jfs)
+            # a held-variable pivot is seeded from its initial-value parameter (heldMap),
+            # so its dual column is that shared parameter rather than a per-condition
+            # free-state column; forcings and forced-zero states start at 0; every other
+            # state is its own identity free leaf.
+            icMap = {X: (heldMap[str(X)] if str(X) in heldMap
+                         else X if (str(X) not in forcings and str(X) not in jfs)
                          else spy.Integer(0)) for X in S}
             # steady state BEFORE the events: the t0 events (a dose at t0) are applied
             # to the state COORDINATE x_ss here, so the observability jet starts at
@@ -2630,17 +2735,34 @@ def compileObservabilityTapeMulti(model, observation, conditionSubs, conditionIC
         out['realStateNames'] = [invSolveName.get(str(X), str(X))
                                  for X in S[:nReal]]
         out['powerRecast'] = powerRecast
+        out['heldStateParams'] = heldStateParams
         if jointSteadyState:
             out['jointSteadyState'] = True
             # state z-columns (the free states that entered znames), for the R joint
             # branch to seed on-manifold and stack the df constraint rows
             out['zStateNames'] = zStateNames
+    elif powerRecast:
+        # transient path with a free power/Hill exponent: E = base^exp and L = log(base)
+        # are ordinary free-initial-value leaves (their own z-columns). R stacks the
+        # recast relation rows onto the observability codistribution and reports in the
+        # physical space (real states + parameters), with E, L as auxiliary coordinates.
+        out['recastTransient'] = True
+        out['stateNames'] = [str(X) for X in S]
+        out['paramNames'] = [str(s) for s in params]
+        out['forcings'] = sorted(forcings)
+        out['realStateNames'] = [str(X) for X in S[:nReal]]
+        out['powerRecast'] = powerRecast
+        # the recast atom coordinates (E and L), auxiliary to the physical report
+        out['recastAtomNames'] = ([rc['E'] for rc in powerRecast] +
+                                  sorted(set(rc['L'] for rc in powerRecast)))
     return out
 
 
 ###########################################################################
 #####################     scaling symmetries     ########################
 ###########################################################################
+
+# ---- scaling (toric) symmetries from the integer kernel ------------------------------
 
 def _poly_monomials(expr, zvars):
     """Numerator and denominator monomial-exponent lists of expr over zvars
@@ -2919,117 +3041,18 @@ def scalingSymmetriesMulti(perCondModel, perCondObs, inputs=None, fixed=None,
 #####################  pure-symbolic observability  ######################
 ###########################################################################
 
+# ---- pure-symbolic observability cross-check -----------------------------------------
+
 def _lie_deriv(h, states, rhs):
     """Lie derivative L_f h = sum_i (dh/dx_i) f_i along the flow (parameters are
     constants of motion, so they do not contribute)."""
     return sum(spy.diff(h, states[i]) * rhs[i] for i in range(len(states)))
 
 
-def observabilitySympy(model, observation, fixed=None, parameters=None,
-                       inputs=None, equilibrate=False, backend='sympy'):
-    """Pure-symbolic observability-identifiability, an INDEPENDENT cross-check of the
-    prime-kernel engine for SMALL models. The observability-identifiability matrix
-    O = d/dz [g, L_f g, L_f^2 g, ...] over z = (states, unknown parameters) is built
-    and rank/nullspace-reduced with sympy over the exact rational-function field --
-    NO finite fields and NO power/Hill recast (base^exp stays a symbolic atom, e.g.
-    C**nhill is differentiated as nhill*C**(nhill-1)). Because it is exact and
-    symbolic the Lie order is carried to the guaranteed saturation bound (# states),
-    so there is no premature-truncation risk and no separate saturation guard is
-    needed. With equilibrate=True the resting-manifold tangency rows Jf = df/dz are
-    appended (the implicit determining system: states stay coordinates, f = 0 enters
-    as df.xi = 0). Single condition; events/gaps are not handled here. Returns rank,
-    dim, the Lie order used and the non-identifiable directions (a nullspace basis)
-    with their support and exact symbolic entries."""
-    _select_backend(backend)
-    asL = lambda v: list(v) if isinstance(v, (list, tuple)) else ([] if v is None else [v])
-    model = [str(l) for l in asL(model)]           # reticulate passes a length-1 vector
-    observation = [str(l) for l in asL(observation)]  # as a scalar string; keep it a list
-    lines = list(model) + list(observation)
-    local, parse = _make_local_parse(lines)
-    stateNames = [_clean(l).split('=', 1)[0].strip() for l in model]
-    states = [local.get(nm, spy.Symbol(nm)) for nm in stateNames]
-    rhs = [spy.sympify(parse(_clean(l).split('=', 1)[1])) for l in model]
-    obs = [spy.sympify(parse(_clean(l).split('=', 1)[1])) for l in observation]
-    known = {local.get(nm, spy.Symbol(nm)) for nm in (asL(inputs) + asL(fixed))}
-    pset = set()
-    for e in rhs + obs:
-        pset |= spy.sympify(e).free_symbols
-    # declared parameters are coordinates too, even if they do not appear in f/g
-    # (a declared-but-absent parameter is then trivially non-identifiable), matching
-    # the modular engine
-    pset |= {local.get(nm, spy.Symbol(nm)) for nm in asL(parameters)}
-    pset -= set(states)
-    pset -= known
-    params = sorted(pset, key=spy.default_sort_key)
-    order = 0
-    if equilibrate:
-        # resting steady state: solve f = 0 for the states (needs a rational solution;
-        # reduceCQ upstream removes conserved moieties so the system is determined) and
-        # substitute x*(theta) into the observables. At rest the Lie jet vanishes, so
-        # identifiability is over the PARAMETERS through the resting observation g(x*).
-        # A non-rational steady state (e.g. a free Hill exponent) is not solvable this
-        # way -- that case needs the modular kernel's implicit (tangency) construction.
-        try:
-            sols = spy.solve([spy.together(fi) for fi in rhs], states, dict=True)
-        except Exception:
-            sols = []
-        if not sols:
-            return {'ok': False, 'rank': 0, 'dim': 0, 'lieOrder': 0,
-                    'nonIdentifiable': [], 'identifiable': False,
-                    'why': 'equilibrate: the steady state is not symbolically solvable '
-                           '(e.g. a free Hill exponent); use symEngine="modular"'}
-        Gobs = [spy.together(h.subs(sols[0])) for h in obs]
-        z = list(params)
-        nz = len(z)
-        znames = [str(s) for s in z]
-        if nz == 0:
-            return {'ok': True, 'rank': 0, 'dim': 0, 'lieOrder': 0,
-                    'nonIdentifiable': [], 'identifiable': True}
-        rows = [[spy.diff(h, zj) for zj in z] for h in Gobs]
-    else:
-        z = states + params
-        nz = len(z)
-        znames = [str(s) for s in z]
-        if nz == 0:
-            return {'ok': True, 'rank': 0, 'dim': 0, 'lieOrder': 0,
-                    'nonIdentifiable': [], 'identifiable': True}
-        rows = []
-        jet = list(obs)
-        prev = -1
-        flat = 0
-        # the extended (states + constant parameters) system has dimension nz, so its
-        # observability codistribution is spanned by the Lie derivatives up to order
-        # nz - 1; carry the jet to that guaranteed bound (early exit once the rank holds
-        # for two consecutive orders) -- exact, so no premature-truncation risk.
-        while True:
-            for h in jet:
-                rows.append([spy.diff(h, zj) for zj in z])
-            rank = spy.Matrix(rows).rank()
-            flat = flat + 1 if rank == prev else 0
-            if rank >= nz or (flat >= 2 and order >= 1) or order >= nz:
-                break
-            prev = rank
-            order += 1
-            jet = [spy.expand(_lie_deriv(h, states, rhs)) for h in jet]
-    M = spy.Matrix(rows)
-    rank = M.rank()
-    nonId = []
-    if rank < nz:
-        for vec in M.nullspace():
-            v = [spy.cancel(vec[i]) for i in range(nz)]
-            nz_i = [i for i in range(nz) if v[i] != 0]
-            nonId.append({'support': sorted(znames[i] for i in nz_i),
-                          'vector': {znames[i]: str(v[i]) for i in nz_i},
-                          'type': 'general', 'closedForm': True})
-    return {'ok': True, 'rank': int(rank), 'dim': int(nz), 'lieOrder': int(order),
-            'nonIdentifiable': nonId, 'identifiable': bool(rank >= nz)}
-
-
 def observabilitySympyMulti(model, observation, conditionSubs=None, conditionIC0=None,
                             fixed=None, parameters=None, inputs=None, backend='sympy'):
     """Multi-condition pure-symbolic observability-identifiability -- the exact
-    cross-check of the modular multi-condition engine, and the generalisation of
-    observabilitySympy() (which is the single-condition, no-substitution case).
+    cross-check of the modular multi-condition engine.
 
     Each condition substitutes its per-condition values `conditionSubs[k]` into f and
     g and seeds the observation jet at its own initial state `conditionIC0[k]`. A
@@ -3142,6 +3165,8 @@ def observabilitySympyMulti(model, observation, conditionSubs=None, conditionIC0
 ###########################################################################
 #####################     R entry point     ##############################
 ###########################################################################
+
+# ---- R-facing entry point and I/O ----------------------------------------------------
 
 def symmetryDetectiondMod(model, observation,
                           ansatz='uni', pMax=2, inputs=None, fixed=None,

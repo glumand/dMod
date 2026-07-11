@@ -33,7 +33,7 @@ egf_model <- function() {
   observables <- eqnvec(pMEK_obs = "scale_pMEK * pMEK",
                         pERK_obs = "scale_pERK * pERK")
   list(f = reactions, g = observables,
-       args = list(method = "observability", reduceCQ = FALSE, closedForm = TRUE))
+       args = list(method = "observability", reduceCQ = FALSE, reconstruct = TRUE))
 }
 
 smad_model <- function() {
@@ -120,7 +120,7 @@ smad_model <- function() {
   list(f = reactions, g = observables,
        args = list(method = "observability", events = events, trafo = cond.trafo,
                    forcings = c("bool_ActD","bool_CHX","bool_MG132","TGFb"),
-                   equilibrate = TRUE, reduceCQ = TRUE, closedForm = TRUE))
+                   equilibrate = TRUE, reduceCQ = TRUE, reconstruct = TRUE))
 }
 
 # ---- fingerprint (result identity, for regression) ------------------------
@@ -150,11 +150,11 @@ bench_run <- function() {
   coresVec <- as.integer(strsplit(Sys.getenv("DMOD_BENCH_CORES", "1,4"), ",")[[1]])
   runSmad  <- nzchar(Sys.getenv("DMOD_BENCH_SMAD"))
   results <- list()
-  cat("== EGF/EGFR -> MEK/ERK (Section 8, closedForm) ==\n")
+  cat("== EGF/EGFR -> MEK/ERK (Section 8, reconstruct) ==\n")
   egf <- egf_model()
   for (cc in coresVec) results[[length(results) + 1L]] <- bench_one("egf", egf, cc)
   if (runSmad) {
-    cat("== TGF-beta / SMAD (Section 10, equilibrate, closedForm) ==\n")
+    cat("== TGF-beta / SMAD (Section 10, equilibrate, reconstruct) ==\n")
     smad <- smad_model()
     for (cc in coresVec) results[[length(results) + 1L]] <- bench_one("smad", smad, cc)
   } else {

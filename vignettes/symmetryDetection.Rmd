@@ -13,6 +13,11 @@ header-includes:
   - \usepackage{bm}
   - \usepackage{booktabs}
   - \usepackage{fvextra}
+  # a Unicode-complete monospace font so the summary()/print() output renders its
+  # generators verbatim: the partial-derivative sign and subscripts (X_1 = c_i d/dz_i)
+  # are absent from the default Latin Modern Mono.
+  - \usepackage{fontspec}
+  - \setmonofont{DejaVu Sans Mono}[Scale=0.82]
   - \DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,breakanywhere,commandchars=\\\{\}}
 vignette: >
   %\VignetteIndexEntry{Structural identifiability in dMod}
@@ -88,7 +93,7 @@ lattices that cover the bulk of practical cases (`"scaling"`,
   combinations of states and parameters are unconstrained. It uses no
   ansatz and, for a rational model, is evaluated entirely in exact
   finite-field arithmetic, so it scales to large systems. With
-  `closedForm = TRUE` it returns each non-identifiable direction not only
+  `reconstruct = TRUE` it returns each non-identifiable direction not only
   by its support but as an exact rational function of the parameters
   (Section \ref{sec-closedform}).
 * `method = "polynomial"` searches for *continuous symmetries* of the model
@@ -371,7 +376,9 @@ $L_F^{\,k} g$. The sequence
 \end{equation}
 is the list of Taylor coefficients of the output $g\big(x(t), \theta\big)$
 at $t = 0$. It is everything the output curve can reveal about the unknowns
-near $t = 0$, and each entry is an explicit function of $z$.
+near $t = 0$, and each entry is an explicit function of $z$. Matching output
+Taylor coefficients to identify parameters is the classical power-series method of
+Pohjanpalo (1978), used numerically in tools such as SIAN (Hong et al., 2020).
 
 ## Identifiability as injectivity
 
@@ -407,7 +414,8 @@ directions in $z$ along which the output and all its derivatives are
 unchanged. These directions are exactly the values $\xi(z)$ of the
 infinitesimal generators of Section \ref{sec-sym} at the point $z$: the two methods
 describe the same object, one as a tangent vector at a point, the other as
-an explicit field.
+an explicit field. Recovering Lie-symmetry directions from this observability
+setting is the subject of Massonis and Villaverde (2020).
 
 ## The matrix on a small model
 
@@ -454,8 +462,9 @@ is $-u + u = 0$, and the $L_F^2 g$ row is $u\, k_d - u\, k_d = 0$; the higher
 derivatives add no new constraint because they too depend on the rates only
 through $K$, which is exactly why the Lie order saturates. The remaining
 coordinates $A_0$, $K$ and $k_d$ are identifiable. This direction
-\eqref{eq:toy-null} is what `closedForm = TRUE` returns, reconstructed exactly
-and reported as `k1 : -u, k2 : 1`; carrying $\mathcal{O}$ symbolically is
+\eqref{eq:toy-null} is what the method returns, as the exact constant direction
+`k1 : u, k2 : -1` (the same line \eqref{eq:toy-null} up to its overall sign,
+which the gauge fixes); carrying $\mathcal{O}$ symbolically is
 feasible here but not on a network of dozens of states, which is the subject of
 the next sections. Note also that $\xi$ depends on the input value $u$: holding
 $u$ at one generic value reports this trade-off, whereas measuring at two
@@ -536,8 +545,8 @@ guaranteed by $N = n + q - 1$, so the order need not be set by hand.
 Because the construction lives over a field built from $+, -, \times, \div$
 only, it is defined exactly for *rational* right-hand sides and observables;
 a non-rational input raises an error, the one exception being a power or Hill
-term $\mathrm{base}^{\,n}$ with a parameter exponent under `equilibrate = TRUE`,
-which is recast to a rational coordinate (Section \ref{sec-supply}). A logarithmic readout
+term $\mathrm{base}^{\,n}$ with a parameter exponent, which is recast to a
+rational coordinate (with or without `equilibrate`; Section \ref{sec-supply}). A logarithmic readout
 $\log_{10}(h) + \mathrm{offset}$, common in dMod models, carries the same
 information as the rational observable $\mathrm{scale}\cdot h$: a monotone
 transformation has the same level sets, and the additive offset is itself
@@ -551,7 +560,7 @@ at several deterministic generic points and over several primes and takes the
 maximal rank; agreement certifies it, since a non-generic coincidence at
 every point and prime has probability zero. The support of each null vector,
 the set of states and parameters with a nonzero entry, names the unknowns
-that take part in the non-identifiability. With `closedForm = TRUE` the
+that take part in the non-identifiability. With `reconstruct = TRUE` the
 directions are returned not merely by support but as exact rational functions
 of the parameters, by the reconstruction of Section \ref{sec-closedform}.
 
@@ -584,7 +593,7 @@ evaluation point are the fields of `scalingControl()`, passed as
 ## Closed-form directions by multi-point reconstruction {#sec-closedform}
 
 The rank verdict needs $\mathcal{O}$ at a single point. The *functional*
-form of a non-identifiable direction needs more, and `closedForm = TRUE`
+form of a non-identifiable direction needs more, and `reconstruct = TRUE`
 recovers it by sampling. Over the field of rational functions
 $\mathbb{Q}(z)$ the null space of $\mathcal{O}$ has a basis whose entries are
 themselves rational functions of $z$; evaluating $\mathcal{O}$ at one point
@@ -609,7 +618,7 @@ conditions the scalings are those common to every condition, the kernel of the
 stacked monomial-exponent conditions, so a scaling is obtained exactly whether the
 analysis runs on one condition or many. Such a scaling is reported by its
 integer toric weights $c_i$ (the generator $z_i \mapsto \lambda^{c_i} z_i$),
-exactly and regardless of `closedForm`; only the non-scaling residue is sampled.
+exactly and regardless of `reconstruct`; only the non-scaling residue is sampled.
 Second, each *entry* of a residual direction is probed for its *relevant*
 variables by perturbing each coordinate of the evaluation point in turn and
 keeping those that move that entry; the entry is then reconstructed over that
@@ -652,8 +661,9 @@ a single entry couples many variables. The wide entries that occur in practice
 are the conserved-moiety cofactors, a sum over many species divided by a single
 rate, $-(x_1+\dots+x_k)/r$. Such an entry is a *Laurent polynomial*, and on the
 geometric schedule $u^{(k)} = (\beta_1^{k},\dots,\beta_n^{k})$ its values form a
-linear-recurrence sequence, so it is recovered by Ben-Or-Tiwari interpolation:
-the Berlekamp-Massey algorithm gives the number of terms and a locator
+linear-recurrence sequence, so it is recovered by Ben-Or-Tiwari interpolation
+(Ben-Or and Tiwari, 1988): the Berlekamp-Massey algorithm gives the number of
+terms and a locator
 polynomial whose roots are the monomial values $\prod_j \beta_j^{e_j}$, the
 exponents are read back from those values, and a transposed-Vandermonde solve
 gives the coefficients. The work is set by the number of terms, not by
@@ -675,7 +685,7 @@ reconstructed and falls back to its support.
 against an unlucky evaluation or a non-generic pivot pattern, every reconstructed
 direction is re-evaluated at a fifth prime, disjoint from the four used to build
 it, and checked against the null vector there. A direction that fails this check
-is reported by its support with `closedForm = FALSE` rather than as a wrong
+is reported by its support with `reconstruct = FALSE` rather than as a wrong
 closed form, so the closed forms that are returned are certified.
 
 **Why primes: lifting $\mathrm{GF}(p)$ back to $\mathbb{Q}$.** Each sample of
@@ -736,7 +746,7 @@ recovers any coefficient with numerator and denominator up to about $2^{61}$.
 remaindering and the reconstruction, is exact integer or finite-field
 arithmetic; no floating-point number enters and no rounding threshold is
 chosen. A direction whose relevant set or whose minimal degree exceeds a cap
-is returned with its support and `closedForm = FALSE` rather than a guess, so
+is returned with its support and `reconstruct = FALSE` rather than a guess, so
 the call never stalls on expression swell. Those caps, together with the
 saturation and gap-order bounds, are the fields of `reconstControl()`, passed as
 `symmetryDetection(..., control = reconstControl(...))`; raising them recovers
@@ -828,7 +838,7 @@ the same machinery: nothing symbolic enters the linear algebra, $\Delta t$ only
 labels which coefficient layer a row came from.
 
 The gap order is raised, alongside the Lie order, until the rank stops growing
-(`gapOrderUsed`); truncating early drops rows, which only enlarges
+(`info$gapOrderUsed`); truncating early drops rows, which only enlarges
 $\ker\mathcal{O}$, so the rank is a **sound conservative lower bound** at every
 order and the **exact generic-timing rank** at saturation, just as for the Lie
 order. The transcendence is confined to the analytic flow; over the field it is an
@@ -879,11 +889,11 @@ saturation guard is precisely the check on that stopping rule, so the three
 together cover the count (guard), the exact directions (integer kernel) and the
 reconstructed directions (fresh-prime certification).
 
-`summary()` prints the verdict as its final line, for instance
+`summary()` prints the guard in the computation block, for instance
 
 ```
-Schwartz-Zippel saturation guard: PASSED (rank 233 stable through Lie order 18
-  (6 orders beyond the reported saturation)).
+saturation guard: PASSED (rank 233 stable through Lie order 18
+  (6 orders beyond the reported saturation))
 ```
 
 The rank quoted there is *not* the identifiability rank of the header line, and the
@@ -966,8 +976,9 @@ f_{\mathrm{ss}}(x_0, \theta) = 0,
 \label{eq:ssfield}
 \end{equation}
 the resting right-hand side with all forcings held at zero and no events. This
-binds $x_0$ to $\theta$ and can only make the model more identifiable. The
-`"polynomial"` method imposes the binding as one more commutation condition
+binds $x_0$ to $\theta$ and can only make the model more identifiable (the role of
+the initial conditions in identifiability is classical; Saccomani et al., 2003).
+The `"polynomial"` method imposes the binding as one more commutation condition
 $[F_{\mathrm{ss}}, X] = 0$ alongside $[F, X] = 0$ and $X(g) = 0$; being an extra
 constraint it can only shrink the symmetry set. The `"observability"` method
 binds \eqref{eq:ssfield} through the initial condition, and there are two ways to
@@ -1027,32 +1038,59 @@ the local jet starts from the stimulated state. State initial conditions given i
 
 ## Free Hill and power exponents {#sec-hill}
 
-A rate with a free exponent, a Hill term $\mathrm{base}^{\,n}/(K^{\,n} +
-\mathrm{base}^{\,n})$ or a power $\mathrm{base}^{\,n}$ with $n$ a parameter, is not
-rational, so it would normally be rejected. Under `equilibrate` it is handled by a
-recast. The term $\mathrm{base}^{\,n}$ becomes a new coordinate $E =
-\mathrm{base}^{\,n}$ with a companion $L = \log(\mathrm{base})$, carrying the
-derivations
+A rate with a free exponent -- a Hill term $\mathrm{base}^{\,n}/(K^{\,n} +
+\mathrm{base}^{\,n})$ or a power $\mathrm{base}^{\,n}$ with $n$ a parameter -- is
+not rational, so it would normally be rejected. It is handled instead by a recast,
+which needs no `equilibrate` and is an instance of recasting nonlinear systems in
+power-law form (Savageau and Voit, 1987). The term $\mathrm{base}^{\,n}$ becomes a
+new coordinate $E = \mathrm{base}^{\,n}$ with a companion $L = \log(\mathrm{base})$,
+carrying the derivations
 \begin{equation}
-\dot E = n\,E\,\frac{\dot{\mathrm{base}}}{\mathrm{base}}, \quad
-\dot L = \frac{\dot{\mathrm{base}}}{\mathrm{base}}, \quad
-\frac{\partial E}{\partial\,\mathrm{base}} = n\,\frac{E}{\mathrm{base}}, \quad
-\frac{\partial E}{\partial n} = E\,L, \quad
-\frac{\partial L}{\partial\,\mathrm{base}} = \frac{1}{\mathrm{base}}.
+\begin{aligned}
+\dot E &= n\,E\,\frac{\dot{\mathrm{base}}}{\mathrm{base}}, &\quad
+\dot L &= \frac{\dot{\mathrm{base}}}{\mathrm{base}}, &\quad
+\frac{\partial L}{\partial\,\mathrm{base}} &= \frac{1}{\mathrm{base}}, \\[4pt]
+\frac{\partial E}{\partial\,\mathrm{base}} &= n\,\frac{E}{\mathrm{base}}, &\quad
+\frac{\partial E}{\partial n} &= E\,L .
+\end{aligned}
 \end{equation}
-With $\mathrm{base}^{\,n}\to E$ the field $f$ is rational, so \eqref{eq:ssfield} is
-solved with $E$ held at a generic value, an isolated low-degree system, and the
-chain rule of $E$ folds into the steady-state Jacobian so the
-implicit-function sensitivities $\partial x_0/\partial\theta$ pick up $n$. The
-logarithm is never evaluated: $\mathrm{base}$, $\log(\mathrm{base})$ and
-$\mathrm{base}^{\,n}$ are algebraically independent, so giving $L$ an independent
-generic residue yields the structural rank by the same Schwartz-Zippel argument as
-Section \ref{sec-finitefield}. The exponent $n$ enters the observability matrix
-through $\partial E/\partial n = E\,L$ and is assessed like any other parameter,
-and the verification gate of Section \ref{sec-closedform} certifies the verdict at
-a fresh prime.
+With $\mathrm{base}^{\,n}\to E$ the field $f$ is rational and the exponent $n$
+enters the observability matrix through $\partial E/\partial n = E\,L$, so it is
+assessed like any other parameter. The logarithm is never evaluated:
+$\mathrm{base}$, $\log(\mathrm{base})$ and $\mathrm{base}^{\,n}$ are algebraically
+independent, so giving $L$ an independent generic residue yields the structural
+rank by the same Schwartz-Zippel argument as Section \ref{sec-finitefield}, and the
+verification gate of Section \ref{sec-closedform} certifies the verdict at a fresh
+prime.
 
-With `closedForm`, $E$ and $L$ are sampled as coordinates of the reconstruction
+Where the coordinates $E$ and $L$ come from depends on whether the model is
+equilibrated. *Without* `equilibrate` the base carries a free initial value, so
+$E$ and $L$ are two further free-initial-value coordinates, tied to
+$(\mathrm{base}, n)$ by $E = \mathrm{base}^{\,n}$, and the transient itself resolves
+the exponent. *With* `equilibrate` the base is a solved steady-state coordinate;
+\eqref{eq:ssfield} is then solved with $E$ held at a generic value, an isolated
+low-degree system, and the chain rule of $E$ folds into the steady-state Jacobian
+so the implicit-function sensitivities $\partial x_0/\partial\theta$ pick up $n$.
+As a first, minimal case, a self-inhibited producer with a free Hill exponent,
+observed on an unknown scale and analysed *without* a steady state, has its
+exponent identified and returns a single weighted scaling:
+
+```{r hill-transient, eval = haveSympy}
+f <- eqnvec(p = "kpr / (1 + kinh*p^nhill) - dp*p")     # free Hill exponent nhill
+res <- symmetryDetection(f, eqnvec(y = "s*p"), method = "observability",
+                         reconstruct = TRUE, reduceCQ = FALSE)
+c(rank = res$rank, dim = res$dim,
+  nhill_identifiable = !("nhill" %in% res$symmetries[[1]]$support))
+res$symmetries[[1]]$generator
+```
+
+Rank $5$ of $6$: the Hill exponent `nhill` is identifiable, and the lone direction
+is the weighted scaling $\xi_{kinh} = nhill\cdot kinh$, $\xi_{kpr} = -kpr$,
+$\xi_p = -p$, $\xi_s = s$ -- rational in `nhill`, with no $\log$ term, since here
+the exponent is pinned rather than freed. The recast has done its work with the
+base left as an ordinary free-initial-value coordinate.
+
+With `reconstruct`, $E$ and $L$ are sampled as coordinates of the reconstruction
 alongside the parameters and back-substituted $E\to\mathrm{base}^{\,n}$,
 $L\to\log(\mathrm{base})$, so a direction that genuinely involves the exponent
 carries an explicit $\log$ factor, as the example below exhibits. A
@@ -1074,7 +1112,7 @@ res <- symmetryDetection(hill, eqnvec(xobs = "scale * x"),
                          method = "observability", equilibrate = TRUE,
                          reduceCQ = FALSE)
 c(identifiable = res$identifiable, dim = res$dim,
-  n_confounded = "n" %in% unlist(lapply(res$nonIdentifiable, function(d) d$support)))
+  n_confounded = "n" %in% unlist(lapply(res$symmetries, function(d) d$support)))
 
 # the explicit direction that frees n, exhibited with the symbolic engine (which
 # carries base^n as an atom, so a free exponent is native). It needs the steady
@@ -1083,21 +1121,25 @@ ss <- eqnvec(FB = "k_pr_FB/d_FB",
              x  = "k_pr_x*K^n/(d_x*(K^n + (k_pr_FB/d_FB)^n))")
 sres <- symmetryDetection(hill, eqnvec(xobs = "scale * x"),
                           method = "observability", symEngine = "symbolic", trafo = ss)
-Filter(function(d) "n" %in% d$support, sres$nonIdentifiable)[[1]]$vector
+Filter(function(d) "n" %in% d$support, sres$symmetries)[[1]]$generator
 ```
 
-The exponent direction is $\xi_n = 1$ with
-$\xi_K = \big(K\log(k_{pr\_FB}/d_{FB}) - K\log K\big)/n
-      = (K/n)\,\log\!\big((k_{pr\_FB}/d_{FB})\,/\,K\big)$: the free exponent $n$ and
-the Michaelis constant $K$ cannot be told apart (the resting feedback level
-$k_{pr\_FB}/d_{FB}$ is the other base), and the $\log(\mathrm{base})$ factor predicted
-above appears explicitly. A companion case is a feedback whose free exponent is itself
+The exponent direction has $\xi_n = 1$ and
+\begin{equation*}
+\xi_K = \frac{K\log(k_{pr\_FB}/d_{FB}) - K\log K}{n}
+      = \frac{K}{n}\,\log\!\frac{k_{pr\_FB}/d_{FB}}{K},
+\end{equation*}
+so the free exponent $n$ and the Michaelis constant $K$ cannot be told apart (the
+resting feedback level $k_{pr\_FB}/d_{FB}$ is the other base), and the
+$\log(\mathrm{base})$ factor predicted above appears explicitly. A companion case is a feedback whose free exponent is itself
 identifiable while its inhibition strength confounds with the regulator's synthesis
 rate. That direction is a scaling weighted by the exponent, $\xi_{k_{fb}} = -n\,k_{fb}$
 traded against $\xi_{k_{pf}} = k_{pf}$ (the invariant is $k_{fb}\,k_{pf}^{\,n}$),
 recovered in closed form from its minimal support in log coordinates rather than by
-sampling the recast exponent. Entered linearly instead, as in the SMAD model of
-Section \ref{sec-examples}, the same confounder is an ordinary integer scaling.
+sampling the recast exponent. Entered linearly, as several feedbacks are in the
+SMAD model of Section \ref{sec-examples}, the same confounder is an ordinary integer
+scaling; entered through a Hill term, as the receptor feedbacks there are, it keeps
+the exponent in its weight.
 
 A feedback produced from the observed species makes this concrete. Only `x` is
 measured; a dose renders the exponent `n` identifiable, and the inhibition strength
@@ -1111,9 +1153,9 @@ res <- symmetryDetection(loop, eqnvec(xobs = "s*x"), method = "observability",
   events = addEvent(eventlist(), var = "u", time = 0, value = "dose",
                     method = "replace"),
   conditions = data.frame(dose = 1, row.names = "c1"),
-  closedForm = TRUE, reduceCQ = FALSE)
+  reconstruct = TRUE, reduceCQ = FALSE)
 Filter(function(d) setequal(d$support, c("k_fb", "k_pf")),
-       res$nonIdentifiable)[[1]]$vector
+       res$symmetries)[[1]]$generator
 ```
 
 The confounder comes back as $\xi_{k_{fb}} = -n\,k_{fb}$ against
@@ -1146,7 +1188,7 @@ same algebraic independence holds with $E$ now solved, so the structural rank
 follows as before. A $\log$ survives in a closed-form direction only when a symmetry
 moves a state along the free-exponent power; the pure production $\dot x = k_{pr} -
 d_p\,x^{\,q} + k_{in}u$ with $y = s\,x$ instead has the rational scaling direction
-$\xi_{d_p} = (q-1)\,d_p$, $\xi_s = s$, restoring rationality with no $\log$. A base
+$\xi_{d_p} = (1-q)\,d_p$, $\xi_s = -s$, restoring rationality with no $\log$. A base
 carrying two independent free-exponent powers and no turnover term has no rational
 handle and is reported as non-rational.
 
@@ -1181,23 +1223,25 @@ no steady state need be solved by hand.
 
 ```{r genex-oim, eval = haveSympy}
 res <- symmetryDetection(eq, g, method = "observability",
-                         equilibrate = TRUE, closedForm = TRUE)
+                         equilibrate = TRUE, reconstruct = TRUE)
 summary(res)
 ```
 
 At rest the protein sits at $\mathrm{scale}\cdot TF\,ksyn\,ktrl/kdeg^2$, so only
-that one product is observed: the matrix has rank $1$ of $5$ and four directions
-are free, returned in closed form. Three are dynamics scalings, obtained exactly as
-integer weights: $TF$ against $ksyn$ and against $ktrl$ (transcription and
-translation trade with the input strength) and the gain $scale$ against the
-level. The fourth, $TF$ against $kdeg^2$ (the degradation enters the steady state
-squared), is induced by the steady-state constraint rather than the dynamics, so
-it is reconstructed as a rational direction instead. Handing the steady state in
-explicitly with `trafo = steadyStates(eq)` gives the identical verdict;
-`equilibrate` reproduces it without the closed form, recomputing the modular
-steady state and its sensitivities at each point and prime. The last line of the
-summary is the saturation guard of Section \ref{sec-verify}, confirming that the
-rank has stopped growing so the four directions are neither too many nor too few.
+that one product is observed: the matrix has rank $1$ of $5$, leaving four free
+directions. All four are exact integer scalings, peeled from the stacked kernel
+and printed as their toric weights. Three trade the numerator factors of that
+product — $ksyn$ against $ktrl$, $TF$ against $ksyn$, and the gain $scale$ against
+the translation level. The fourth couples $TF$, $ktrl$ and $kdeg$ with equal
+weight: it is induced by the steady-state constraint, where the degradation enters
+squared, so scaling $kdeg$ up is offset by scaling the input and the translation
+rate up (the $kdeg^2$ in the denominator absorbs the two numerator factors).
+Handing the steady state in explicitly with `trafo = steadyStates(eq)` gives the
+identical verdict; `equilibrate` reproduces it, recomputing the modular steady
+state and its sensitivities at each point and prime. The summary's computation
+block ends with the saturation guard of Section \ref{sec-verify}, confirming that
+the rank has stopped growing so the four directions are neither too many nor too
+few.
 
 ## Acting on a result: reparametrisation
 
@@ -1215,7 +1259,7 @@ direction:
 ```{r genex-fix, eval = haveSympy}
 res2 <- symmetryDetection(eq, g, method = "observability",
                           equilibrate = TRUE, fixed = "scale",
-                          closedForm = TRUE)
+                          reconstruct = TRUE)
 c(rank = res2$rank, dim = res2$dim)
 ```
 
@@ -1255,12 +1299,13 @@ coefficient, and the direction is returned in closed form.
 ```{r toy-input, eval = haveSympy}
 f   <- eqnvec(A = "k1 + u*k2 - kdeg*A")
 toy <- symmetryDetection(f, eqnvec(y = "A"), method = "observability",
-                         closedForm = TRUE, fixed = "u")
-Filter(function(d) d$type != "scaling", toy$nonIdentifiable)
+                         reconstruct = TRUE, fixed = "u")
+Filter(function(d) d$type != "scaling", toy$symmetries)
 ```
 
-The direction is `k1 = -u`, `k2 = 1`: a unit change in `k2` is compensated by
-`-u` in `k1`, exactly the input-weighted slope. The constant `u` never enters
+The direction is the constant `k1 : u`, `k2 : -1` (the input-weighted slope
+\eqref{eq:toy-null}, reported up to sign): a unit change in `k2` is compensated by
+`-u` in `k1`. The constant `u` never enters
 $z$; it appears only as the coefficient of the trade-off. When such an input
 takes several known values across conditions, stacking those conditions
 separates `k1` and `k2` outright, and `u`, now a constant of each condition,
@@ -1364,21 +1409,22 @@ symmetryDetection(f, g, method = "observability", events = dose,
                                           row.names = "stim"))$identifiable
 
 # an unknown dose magnitude: the readout scale confounds with the amounts
-res <- symmetryDetection(f, g, method = "observability", closedForm = TRUE,
+res <- symmetryDetection(f, g, method = "observability", reconstruct = TRUE,
                          events = dose,
                          conditions = data.frame(row.names = "stim"))
-res$nonIdentifiable[[1]]$vector
+res$symmetries[[1]]$generator
 ```
 
-The reconstructed entries are `b : -b/s` and `dose : -dose/s`, the same direction
-as \eqref{eq:ss-null} after normalising the readout component to one
-($\xi/s$). They are genuine rational functions of the unknowns, recovered by the
-multi-point reconstruction of Section \ref{sec-closedform}: the per-entry fit returns the
-numerator and denominator, and each coefficient is lifted from its residues
-modulo several primes by the Chinese-remaindering step worked through for
-$-\tfrac{1}{3}$ there (here the coefficients are simply $\pm 1$). Pre-equilibrated
-states, a dose set by an event, and several conditions stacked is the standard
-pattern, and it scales unchanged to large signalling models.
+The reported direction is the exact integer scaling $b:1,\ \mathrm{dose}:1,\ s:-1$
+(printed as `b : b`, `dose : dose`, `s : -s`): the same direction as
+\eqref{eq:ss-null} up to sign, scaling the amounts up while scaling the readout
+gain down. It is peeled from the integer kernel, so no rational reconstruction is
+needed. A genuinely rational, non-scaling direction — the kind the multi-point
+reconstruction of Section \ref{sec-closedform} lifts through the
+Chinese-remaindering step worked through there for $-\tfrac{1}{3}$ — appears in
+the partially observed cascade below. Pre-equilibrated states, a dose set by an
+event, and several conditions stacked is the standard pattern, and it scales
+unchanged to large signalling models.
 
 The same resting state can be imposed without writing it down. Here $f = b - ax$
 rests at $x^* = b/a$, but in general the steady state need not be a rational
@@ -1391,7 +1437,7 @@ matches the explicit `trafo = eqnvec(x = "b/a")`:
 # rank 1 of 3: only the resting product s*b/a is seen, exactly as with the
 # explicit steady state trafo = eqnvec(x = "b/a")
 res <- symmetryDetection(f, g, method = "observability",
-                         equilibrate = TRUE, closedForm = TRUE)
+                         equilibrate = TRUE, reconstruct = TRUE)
 c(identifiable = res$identifiable, rank = res$rank, dim = res$dim)
 
 # a genuinely irrational steady state x* = sqrt(b/a): no rational form exists,
@@ -1424,7 +1470,7 @@ ev0 <- eventlist() |>
   addEvent(var = "stim", time = 0, value = "1", method = "replace")
 r0 <- symmetryDetection(f, g, method = "observability", equilibrate = TRUE,
                         events = ev0, forcings = c("inh", "stim"))
-"kinh" %in% unlist(lapply(r0$nonIdentifiable, function(d) d$support))   # TRUE
+"kinh" %in% unlist(lapply(r0$symmetries, function(d) d$support))   # TRUE
 
 # inhibitor applied 30 units before the stimulus: the gap is propagated exactly
 ev30 <- eventlist() |>
@@ -1432,12 +1478,12 @@ ev30 <- eventlist() |>
   addEvent(var = "stim", time = 0,   value = "1", method = "replace")
 r30 <- symmetryDetection(f, g, method = "observability", equilibrate = TRUE,
                          events = ev30, forcings = c("inh", "stim"))
-c(gapOrder = r30$gapOrderUsed,
-  kinhIdentifiable = !("kinh" %in% unlist(lapply(r30$nonIdentifiable,
+c(gapOrder = r30$info$gapOrderUsed,
+  kinhIdentifiable = !("kinh" %in% unlist(lapply(r30$symmetries,
                                                  function(d) d$support))))
 ```
 
-The second run reports a non-zero `gapOrderUsed` (the gap series carries
+The second run reports a non-zero `info$gapOrderUsed` (the gap series carries
 $k_{\mathrm{inh}}$) and a higher rank than the first.
 
 ## An enzyme assay and its hidden symmetries
@@ -1492,21 +1538,22 @@ extracts them from the integer kernel and reports them as exact toric weights:
 f <- eqnvec(S = "-kcat*Etot*S/(Km + S)")   # quasi-steady-state turnover
 g <- eqnvec(y = "s*S")                      # readout of unknown gain s
 
-res <- symmetryDetection(f, g, method = "observability", closedForm = TRUE)
+res <- symmetryDetection(f, g, method = "observability", reconstruct = TRUE)
 summary(res)
 ```
 
-The two directions are the turnover--enzyme and readout-units confounders, each
-matching the hand calculation. They are returned as integer toric weights (each
-direction carries `type = "scaling"`); the dedicated `"scaling"` engine returns
-the same two.
+The engine returns two integer scalings spanning the same rank-$2$ lattice (each
+carries `type = "scaling"`). The printed basis may combine the two hand-derived
+confounders — a null space has no canonical basis — but the invariants it fixes
+are exactly $sS$, $sK_m$ and $sV_{\max}$, so the verdict is the same. The
+dedicated `"scaling"` engine returns the same lattice.
 
 The verdict and the involved symbols come from modular rank computations at
 generic points, not from a symbolic determining system, so `"observability"`
 also applies to networks with dozens of states and conserved moieties. There the
 closed-form reconstruction is attempted only for directions that couple few
 unknowns; one that couples too many is returned with its support and
-`closedForm = FALSE`.
+`reconstruct = FALSE`.
 
 ## Two rates on a curve
 
@@ -1542,15 +1589,15 @@ a hyperbola, not a line: any $(k_{tx}, k_{tl})$ on it produces exactly the same
 protein trajectory (only their product, which sets the steady state
 $p_\infty = k_{tx} k_{tl}/(d_m d_p)$, is identifiable). The orbit is curved, but
 its generator is a plain scaling: the integer toric weights
-$(k_{tx}\!:1,\; k_{tl}\!:-1,\; m\!:1)$, which is exactly the single direction the
-method returns:
+$(k_{tx}\!:1,\; k_{tl}\!:-1,\; m\!:1)$, which is, up to its overall sign, the
+single direction the method returns:
 
 ```{r gene, eval = haveSympy}
 f <- eqnvec(m = "ktx - dm*m", p = "ktl*m - dp*p")   # mRNA hidden, protein seen
 res <- symmetryDetection(f, eqnvec(y = "p"), method = "observability",
-                         closedForm = TRUE)
+                         reconstruct = TRUE)
 res$rank                                  # 5 of 6: one direction
-res$nonIdentifiable[[1]]$vector
+res$symmetries[[1]]$generator
 ```
 
 The opposite weights $k_{tx}\!:1$, $k_{tl}\!:-1$ trace the hyperbola
@@ -1593,14 +1640,14 @@ rather than through the moiety totals, which makes them easier to read:
 
 ```{r egf-run, eval = haveSympy}
 egf <- symmetryDetection(reactions, observables, method = "observability",
-                         reduceCQ = FALSE, closedForm = TRUE)
+                         reduceCQ = FALSE, reconstruct = TRUE)
 summary(egf)
 ```
 
 Rank $11$ of $15$: four directions, three scalings and one genuinely rational
 (non-scaling) confounder. Each is forced by the partial observation. Every
 direction is printed as its differential generator $\sum_i \xi_i\, \partial_{z_i}$
-with its symmetry class (`scaling`, `affine`, ...) in brackets.
+with its symmetry class (`scaling`, `polynomial`, ...) in brackets.
 
 * **Receptor-module units**
   $(EGF\!:\!1,\, EGFR\!:\!1,\, EGF\_EGFR\!:\!1,\, k_{bind}\!:\!-1,\, k_{phosMEK}\!:\!-1)$.
@@ -1620,7 +1667,7 @@ with its symmetry class (`scaling`, `affine`, ...) in brackets.
   $(ERK\!:\!1,\, pERK\!:\!1,\, scale_{pERK}\!:\!-1)$. The same calibration
   trade-off at the foot of the cascade; nothing lies downstream of ERK, so no
   rate compensates.
-* **The binding equilibrium** (general). Only $EGF$, $EGFR$ and $k_{unbind}$
+* **The binding equilibrium** (polynomial). Only $EGF$, $EGFR$ and $k_{unbind}$
   move, with the active complex $EGF\_EGFR$ and $k_{bind}$ held fixed. Because the
   cascade reads the receptor module only through that complex, the dissociation
   rate and the split between free ligand and free receptor cannot be told apart:
@@ -1633,11 +1680,13 @@ Section \ref{sec-flow}. For a scaling the integration \eqref{eq:scaling-flow} is
 immediate. The receptor-module direction integrates, with $\lambda = e^\varepsilon$,
 to
 \begin{equation}
-EGF \mapsto \lambda\,EGF,\quad
-EGFR \mapsto \lambda\,EGFR,\quad
-EGF\_EGFR \mapsto \lambda\,EGF\_EGFR,\quad
-k_{bind} \mapsto \lambda^{-1} k_{bind},\quad
-k_{phosMEK} \mapsto \lambda^{-1} k_{phosMEK},
+\begin{aligned}
+EGF &\mapsto \lambda\,EGF, &\quad
+EGFR &\mapsto \lambda\,EGFR, &\quad
+EGF\_EGFR &\mapsto \lambda\,EGF\_EGFR, \\
+k_{bind} &\mapsto \lambda^{-1} k_{bind}, &\quad
+k_{phosMEK} &\mapsto \lambda^{-1} k_{phosMEK},
+\end{aligned}
 \end{equation}
 every other coordinate fixed. Substituting into $k_{bind}\,EGF\,EGFR$ and
 $k_{phosMEK}\,EGF\_EGFR\,MEK$ returns both fluxes to their values, so the output is
@@ -1671,13 +1720,15 @@ form for a scaling and as a well-defined flow otherwise.
 ## A signalling network at scale
 
 The same analysis runs on a model far larger than a symbolic determining system
-can handle. The example is a two-receptor TGF$\beta$/SMAD signalling model with
-$26$ dynamic states and three conserved SMAD moieties: receptor mRNA
-transcription under transcriptional feedback, translation and degradation,
-ligand binding to each receptor and to the preformed receptor complex, receptor
-internalisation, the active signalling complex, SMAD2 and SMAD3 phosphorylation
-modulated by feedback, the trimeric SMAD2--SMAD3--SMAD4 complex, and three
-feedback genes (`FB2`, `FB3`, `FB4`). The reaction list is
+can handle, and it exercises every ingredient at once: many conditions, event
+gaps, a modularly solved steady state, and free Hill exponents. The example is a
+two-receptor TGF$\beta$/SMAD signalling model with $26$ dynamic states and three
+conserved SMAD moieties: receptor mRNA transcription under Hill-type
+transcriptional feedback (a free exponent on each feedback species), translation
+and degradation, ligand binding to each receptor and to the preformed receptor
+complex, receptor internalisation, the active signalling complex, SMAD2 and SMAD3
+phosphorylation modulated by feedback, the trimeric SMAD2--SMAD3--SMAD4 complex,
+and three feedback genes (`FB2`, `FB3`, `FB4`). The reaction list is
 
 ```{r smad-model, eval = haveSympy}
 addRC <- function(eq, from, to, rate, ...)
@@ -1690,11 +1741,11 @@ reactions <- eqnlist() |>
   addRC("", "bool_CHX", "0") |>
   addRC("", "bool_MG132", "0") |>
   addRE("", "TGFb", "0") |>
-  addRC("", "R1mRNA",  "k_pr_R1mRNA * (1 + k_inh_R1mRNA_FB3 * FB3) * (1 - bool_ActD)") |>
-  addRC("", "R2mRNA",  "k_pr_R2mRNA / (1 + k_inh_R2mRNA_FB4 * FB4) * (1 - bool_ActD)") |>
-  addRC("", "FB2mRNA", "k_pr_FB2mRNA * C3 * (1 - bool_ActD)") |>
-  addRC("", "FB3mRNA", "k_pr_FB3mRNA * C3 * (1 - bool_ActD)") |>
-  addRC("", "FB4mRNA", "k_pr_FB4mRNA * C3 * (1 - bool_ActD)") |>
+  addRC("", "R1mRNA",  "k_pr_R1mRNA * (1 + k_inh_R1mRNA_FB3 * FB3^nhill_R1) * (1 - bool_ActD)") |>
+  addRC("", "R2mRNA",  "k_pr_R2mRNA / (1 + k_inh_R2mRNA_FB4 * FB4^nhill_R2) * (1 - bool_ActD)") |>
+  addRC("", "FB2mRNA", "k_pr_FB2mRNA * C3^nhill_FB2mRNA / (Km_FB2mRNA^nhill_FB2mRNA + C3^nhill_FB2mRNA) * (1 - bool_ActD)") |>
+  addRC("", "FB3mRNA", "k_pr_FB3mRNA * C3^nhill_FB3mRNA / (Km_FB3mRNA^nhill_FB3mRNA + C3^nhill_FB3mRNA) * (1 - bool_ActD)") |>
+  addRC("", "FB4mRNA", "k_pr_FB4mRNA * C3^nhill_FB4mRNA / (Km_FB4mRNA^nhill_FB4mRNA + C3^nhill_FB4mRNA) * (1 - bool_ActD)") |>
   addRC("R1mRNA", "", "k_dg_R1mRNA * R1mRNA") |>
   addRC("R2mRNA", "", "k_dg_R2mRNA * R2mRNA") |>
   addRC("FB2mRNA", "", "k_dg_FB2 * FB2mRNA") |>
@@ -1756,22 +1807,25 @@ reactions <- customTotals(reactions, list(totalSMAD2 = "Smad2 + pSmad2 + C3",
                                           totalSMAD4 = "Smad4 + C3"))
 ```
 
-The readouts are the phospho- and total-SMAD levels, the SMAD4
-co-immunoprecipitation and the two receptor mRNAs. They are measured on
-$\log_{10}$ scale, which has the same level sets as $\mathrm{scale}\cdot h$ and
-is supplied in that rational form. The experiment toggles transcription
-(actinomycin D), translation (cycloheximide) and the proteasome (MG132), or
-knocks a receptor down; each perturbation is one condition.
+The readouts are the two receptor levels, the phospho- and total-SMAD levels, the
+SMAD4 co-immunoprecipitation, the two receptor mRNAs and the ligand. In the
+experiment they are measured on $\log_{10}$ scale, which has the same level sets as
+$\mathrm{scale}\cdot h$, so they are supplied in that rational form. The experiment
+toggles transcription (actinomycin D), translation (cycloheximide) and the
+proteasome (MG132), or knocks a receptor down; each perturbation is one condition.
 
 ```{r smad-setup, eval = haveSympy}
 observables <- eqnvec(
+  R1_obs          = "scale_R1 * R1",
+  R2_obs          = "scale_R2 * R2",
   pSmad2_obs      = "scale_pSmad2 * (pSmad2 + C3)",
   pSmad3_obs      = "scale_pSmad3 * (pSmad3 + C3)",
   TSmad2_obs      = "scale_TSmad2 * (Smad2 + pSmad2 + C3)",
   TSmad3_obs      = "scale_TSmad3 * (Smad3 + pSmad3 + C3)",
   Smad4_CoIP_obs  = "scale_CoIP * C3",
   TGFBR1_mRNA_obs = "scale_R1mRNA * R1mRNA",
-  TGFBR2_mRNA_obs = "scale_R2mRNA * R2mRNA")
+  TGFBR2_mRNA_obs = "scale_R2mRNA * R2mRNA",
+  TGFb_obs        = "scale_TGFb * TGFb")
 
 events <- eventlist() |>
   addEvent(var = "TGFb",       time = 0,   value = "init_TGFb",      method = "replace") |>
@@ -1779,6 +1833,8 @@ events <- eventlist() |>
   addEvent(var = "bool_MG132", time = -30, value = "var_bool_MG132", method = "replace") |>
   addEvent(var = "bool_ActD",  time = -30, value = "var_bool_ActD",  method = "replace")
 
+# one condition per perturbation; each row bakes the switch values and the TGFb
+# dose, and the receptor knockdowns rename a synthesis rate
 cond.grid <- data.frame(
   Pertubation = c("Ctrl", "ActD", "CHX", "MG132", "R1Knd", "R2Knd"),
   init_TGFb = 1, stringsAsFactors = FALSE)
@@ -1790,53 +1846,76 @@ cond.grid$k_pr_R1mRNA <- ifelse(cond.grid$Pertubation == "R1Knd",
 cond.grid$k_pr_R2mRNA <- ifelse(cond.grid$Pertubation == "R2Knd",
                                 "k_pr_R2mRNA_R2Knd", "k_pr_R2mRNA")
 rownames(cond.grid) <- cond.grid$Pertubation
+cond.grid$Pertubation <- NULL
+
+# broadcast an identity trafo over the grid and insert each row's columns, giving
+# one eqnvec per condition (a numeric bake for the switches/dose, a rename per knockdown)
+cond.trafo <- eqnvec() |>
+  define("x~x", x = getParameters(reactions, events)) |>
+  branch(table = cond.grid, apply = "insert")
 ```
 
 The boolean switches and the ligand are the externally driven inputs, declared
-with `forcings`. `equilibrate = TRUE` imposes the pre-stimulus resting state with
-all forcings at zero and no events, solved exactly over a finite field; the
-receptor-ligand complexes then fall out as zero on their own, so nothing needs to
-be declared `fixed`. The TGF$\beta$ dose at $t = 0$ is applied as an event on top
-of that resting state, and the switch events at $t = -30$ enter the post-stimulus
-dynamics per condition; the analysis starts at the earliest event time on its own.
-The `cores` argument runs the stacked conditions in parallel.
+with `forcings`. The conditions enter as a per-condition `trafo` list, built by
+broadcasting an identity map over the grid and inserting each row's covariates
+with `branch()`; this is the general route when a perturbation renames a rate
+(the receptor knockdowns) as well as fixing a switch. `equilibrate = TRUE` imposes
+the pre-stimulus resting state with all forcings at zero and no events, solved
+exactly over a finite field; the receptor-ligand complexes then fall out as zero
+on their own, so nothing needs to be declared `fixed`, and the free Hill exponents
+are recast to rational coordinates (Section \ref{sec-hill}) so the finite-field
+solve still applies. The TGF$\beta$ dose at $t = 0$ is applied as an event on top
+of that resting state, and the switch events at $t = -30$ open a second analytic
+segment propagated exactly across the gap (Section \ref{sec-segments}); the
+analysis starts at the earliest event time on its own. `cores` runs the
+steady-state solves of the stacked conditions in parallel.
 
-```{r smad-run, eval = haveSympy}
+```{r smad-run, eval = haveSympy, warning = FALSE}
 smad <- symmetryDetection(
   reactions, observables, method = "observability",
-  events   = events, conditions = cond.grid,
+  events = events, trafo = cond.trafo,
   forcings = c("bool_ActD", "bool_CHX", "bool_MG132", "TGFb"),
-  equilibrate = TRUE, reduceCQ = TRUE, cores = 2)
+  equilibrate = TRUE, reduceCQ = TRUE, reconstruct = TRUE, cores = 4)
 
 summary(smad)
 ```
 
-Six conditions are stacked and the analysis reaches rank $54$ of $63$, leaving
-nine non-identifiable directions. All nine are scalings, obtained exactly from the
-stacked integer kernel, so each carries its closed-form integer weights, printed
-above; the symbols in each weight are the factors it couples. They fall into
-three groups, each a product that the data fix while its factors stay free.
+Six conditions, each split into two analytic segments by the pre-stimulus switch
+events, are stacked, and the analysis reaches rank $65$ of $74$, leaving nine
+non-identifiable directions. All nine are scalings, obtained exactly from the
+stacked integer kernel, so each carries its integer weights, printed above; the
+symbols in each weight are the factors it couples. Every free Hill exponent is
+identifiable -- two survive only inside a weight. The nine fall into five groups,
+each a product the data fix while its factors stay free.
 
-* **Feedback strength against feedback abundance** (six directions). Each
-  feedback species enters the equations it regulates only as a product
-  `k_inh * FB`, for instance `k_inh_R1mRNA_FB3 * FB3` in the receptor-1 mRNA
-  rate, or the three `k_inh_pSmad*_FB* * FB2` terms in phosphorylation. The
-  abundance of an unmeasured regulator and the strength of its action are
-  therefore confounded: `FB3` against `k_inh_R1mRNA_FB3` and its synthesis
-  `k_pr_FB3` (and the same with `FB3mRNA`), and likewise for `FB2` and `FB4`.
-* **Receptor mRNA against its measurement scale** (two directions). `R1mRNA`
-  with `scale_R1mRNA`, `k_pr_R1` and the synthesis rates `k_pr_R1mRNA`,
-  `k_pr_R1mRNA_R1Knd`; symmetrically for receptor 2.
-* **SMAD pool against the readout gains** (one direction). The SMAD amounts and
-  totals trade against `scale_pSmad2/3`, `scale_TSmad2/3` and `scale_CoIP`, the
-  calibration confounder of the total- and phospho-SMAD assays.
+* **Receptor mRNA synthesis against its readout gain** (two directions). For each
+  receptor the mRNA synthesis rates (`k_pr_R1mRNA` and its knockdown variant
+  `k_pr_R1mRNA_R1Knd`) and the protein synthesis rate `k_pr_R1` trade against the
+  mRNA readout gain `scale_R1mRNA`; symmetrically for receptor 2.
+* **Feedback protein against feedback mRNA** (three directions). Each feedback
+  gene's protein synthesis `k_pr_FB*` trades against its mRNA synthesis
+  `k_pr_FB*mRNA`, the unobserved intermediate mRNA absorbing the difference.
+* **Linear feedback strength against feedback abundance** (one direction). `FB2`
+  enters the phosphorylation and complex-degradation terms *linearly*
+  (`k_inh_pSmad2_FB1`, `k_inh_pSmad2_FB2`, `k_inh_pSmad3_FB2`,
+  `k_dg_R1_R2_TGFb_FB1`), so those action strengths confound with FB2's synthesis
+  `k_pr_FB2` as an ordinary integer scaling.
+* **Hill feedback strength, exponent-weighted** (two directions). The receptor
+  mRNA feedbacks enter through `k_inh_R1mRNA_FB3 * FB3^nhill_R1`; the inhibition
+  strength trades against the feedback synthesis `k_pr_FB3` with the free Hill
+  exponent in the weight, $\xi_{k_{inh}} = -nhill_{R1}\,k_{inh}$ (and the same for
+  receptor 2). The exponents `nhill_R1`, `nhill_R2` are themselves identifiable.
+* **SMAD pool against the readout gains** (one direction). The conserved SMAD
+  totals and the feedback Michaelis constants `Km_FB*mRNA` trade against the SMAD
+  readout gains (`scale_pSmad2/3`, `scale_TSmad2/3`, `scale_CoIP`) and the
+  complex-formation rate `k_form_S4Coip` (with weight $2$).
 
-The boolean switches are constants of each condition and appear in none of the
-directions. Each group is removed by the reparametrisation shown earlier: fix a
-feedback species' translation rate (`k_pr_FB*`) so the inhibition constant
-absorbs its abundance, provide an absolute receptor-mRNA measurement (or fix
-`scale_R1mRNA`, `scale_R2mRNA`), and fix the readout gains against an absolute
-SMAD calibration.
+The boolean switches and the known TGF$\beta$ dose are constants of each condition
+and appear in none of the directions. Each group is removed by the
+reparametrisation shown earlier: fix a feedback gene's protein synthesis so the
+mRNA synthesis absorbs it, provide an absolute receptor-mRNA measurement (or fix
+`scale_R1mRNA`, `scale_R2mRNA`), and fix the readout gains against an absolute SMAD
+calibration.
 
 
 # Scope and limitations {#sec-scope}
@@ -1865,9 +1944,31 @@ SMAD calibration.
 
 # References
 
+Ben-Or, M., and Tiwari, P. (1988). A deterministic algorithm for sparse
+multivariate polynomial interpolation. In *Proceedings of the 20th Annual ACM
+Symposium on Theory of Computing (STOC)*, 301--309.
+
+Hong, H., Ovchinnikov, A., Pogudin, G., and Yap, C. (2020). Global
+identifiability of differential models. *Communications on Pure and Applied
+Mathematics* 73, 1831--1879.
+
+Massonis, G., and Villaverde, A. F. (2020). Finding and breaking Lie symmetries:
+implications for structural identifiability and observability in biological
+modelling. *Symmetry* 12, 469.
+
 Merkt, B., Timmer, J., and Kaschek, D. (2015). Higher-order Lie symmetries
 in identifiability and predictability analysis of dynamic models.
 *Physical Review E* 92, 012920.
+
+Pohjanpalo, H. (1978). System identifiability based on the power series
+expansion of the solution. *Mathematical Biosciences* 41, 21--33.
+
+Saccomani, M. P., Audoly, S., and D'Angiò, L. (2003). Parameter identifiability
+of nonlinear systems: the role of initial conditions. *Automatica* 39, 619--632.
+
+Savageau, M. A., and Voit, E. O. (1987). Recasting nonlinear differential
+equations as S-systems: a canonical nonlinear form. *Mathematical Biosciences*
+87, 83--115.
 
 Sedoglavic, A. (2002). A probabilistic algorithm to test local algebraic
 observability in polynomial time. *Journal of Symbolic Computation* 33,

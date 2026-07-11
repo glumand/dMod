@@ -17,33 +17,53 @@ setwd(tempdir())
 reactions <- eqnlist() |>
   addReaction("A", "B", "k1 * A") |>
   addReaction("B", "A", "k2 * B") |>
-  customTotals(list(totalAB = "A+B"))
+  customTotals(list(totC = "A+B"))
 
 g <- eqnvec(Aobs = "alpha * A")
 
-summary(symmetryDetection(reactions, g, method = "observability",
-                          reduceCQ = TRUE, closedForm = TRUE))
-summary(symmetryDetection(reactions, g, method = "polynomial", reduceCQ = FALSE,
-                          polynomial = polynomialControl(ansatz = "uni", pMax = 1L)))
-summary(symmetryDetection(reactions, g, method = "scaling", reduceCQ = FALSE))
+out <- symmetryDetection(reactions, g, method = "observability",
+                         reduceCQ = FALSE, reconstruct = TRUE)
+
+out <- symmetryDetection(reactions, g, method = "observability",
+                         reduceCQ = TRUE, reconstruct = TRUE)
+
+# Assigning the result still shows it: symmetryDetection() prints its report on
+# return (silence it with verbose = FALSE or options(dMod.sym.verbose = FALSE)).
+# The two views of an `out`:
+print(out)     # terse: just the verdict and the generators, grouped by type
+summary(out)   # adds the computation block (engine, Lie order, saturation guard)
+
+out <- symmetryDetection(reactions, g, method = "polynomial", reduceCQ = FALSE,
+                         polynomial = polynomialControl(ansatz = "multi", pMax = 2L))
+out <- symmetryDetection(reactions, g, method = "scaling", reduceCQ = FALSE)
+
 # symEngine = "symbolic": an independent pure-sympy cross-check of the default
 # "modular" (GF(p) + CRT) engine, for the small models here.
-summary(symmetryDetection(reactions, g, method = "observability",
-                          reduceCQ = TRUE, symEngine = "symbolic"))
+out <- symmetryDetection(reactions, g, method = "observability",
+                         reduceCQ = TRUE, symEngine = "symbolic")
 
 
 ## 2. A closed-form, non-monomial direction ----------------------------------
 #
-# With closedForm = TRUE every non-identifiable direction is returned as an exact
+# With reconstruct = TRUE every non-identifiable direction is returned as an exact
 # rational function of the unknowns, reconstructed over a finite field. The same
 # A <-> B model has, besides the calibration scaling, a conserved-quantity
 # direction whose B-component is the rational function -(A + B)/k2.
 
-res <- symmetryDetection(reactions, g, method = "observability", equilibrate = TRUE,
-                         closedForm = TRUE)
-summary(res)
+out <- symmetryDetection(reactions, g, method = "observability", equilibrate = TRUE,
+                         reconstruct = TRUE)   # auto-printed on assignment
+
 # symEngine = "symbolic" does not solve steady states itself: pass an explicit
 # resting state via `trafo` (from steadyStates()) instead of equilibrate = TRUE.
+# With a conserved moiety the supplied steady state already parameterises the moiety,
+# so reduceCQ = FALSE -- reducing it again would eliminate a moiety species and
+# discard the given relation (and is auto-forced to FALSE with a warning otherwise),
+# so the model would relax instead of resting. This reproduces the equilibrate verdict.
+
+mysteadies <- steadyStates(reactions)
+
+out <- symmetryDetection(reactions, g, method = "observability", trafo = as.eqnvec(mysteadies), reduceCQ = FALSE,
+                         reconstruct = TRUE, symEngine = "symbolic")   # auto-printed on assignment
 
 
 ## 3. An enzyme assay and its hidden symmetries -------------------------------
@@ -57,11 +77,11 @@ summary(res)
 f <- eqnvec(S = "-kcat*Etot*S/(Km + S)")
 g.enz <- eqnvec(y = "s*S")
 
-enz <- symmetryDetection(f, g.enz, method = "observability", closedForm = TRUE)
-summary(enz)                                          # kcat*Etot and the s-units
-summary(symmetryDetection(f, g.enz, method = "scaling"))   # the same two
+out <- symmetryDetection(f, g.enz, method = "observability", reconstruct = TRUE)
+# kcat*Etot and the s-units, auto-printed; the scaling engine finds the same two
+out <- symmetryDetection(f, g.enz, method = "scaling")
 
-
+out <- symmetryDetection(f, g.enz, method = "polynomial")
 ## 4. Two rates confined to a nonlinear curve --------------------------------
 #
 # Gene expression observed only at the protein level: transcription ktx and
@@ -73,13 +93,11 @@ summary(symmetryDetection(f, g.enz, method = "scaling"))   # the same two
 # the tangent of that curve.
 
 gene <- eqnvec(m = "ktx - dm*m", p = "ktl*m - dp*p")   # mRNA hidden
-curve <- symmetryDetection(gene, eqnvec(y = "p"), method = "observability",
-                           closedForm = TRUE)
-
-summary(curve)
+out <- symmetryDetection(gene, eqnvec(y = "p"), method = "observability",
+                         reconstruct = TRUE)            # auto-printed
 # the same curve from the independent pure-symbolic engine
-summary(symmetryDetection(gene, eqnvec(y = "p"), method = "observability",
-                          symEngine = "symbolic"))
+out <- symmetryDetection(gene, eqnvec(y = "p"), method = "observability",
+                         symEngine = "symbolic")
 ## 5. Stacking conditions resolves a switch-gated rate ------------------------
 #
 # The rate k1 + u*k2 is gated by a switch u. A single switch value cannot
@@ -92,14 +110,13 @@ events <- addEvent(eventlist(), var = "u", time = -1, value = "var_u",
                    method = "replace")
 cond.grid <- data.frame(var_u = c(0, 1), row.names = c("ctrl", "stim"))
 
-multi <- symmetryDetection(fu, eqnvec(y = "A"), method = "observability",
-                           events = events, conditions = cond.grid)
-
-summary(multi)
+out <- symmetryDetection(fu, eqnvec(y = "A"), method = "observability",
+                         events = events, conditions = cond.grid)
+summary(out)   # the computation block reports the conditions and segments stacked
 # the pure-symbolic engine stacks conditions too -- an independent cross-check of
 # the multi-condition verdict for small models
-summary(symmetryDetection(fu, eqnvec(y = "A"), method = "observability",
-                          events = events, conditions = cond.grid, symEngine = "symbolic"))
+out <- symmetryDetection(fu, eqnvec(y = "A"), method = "observability",
+                         events = events, conditions = cond.grid, symEngine = "symbolic")
 
 
 ## 6. Pre-equilibration: a steady-state initial condition ---------------------
@@ -114,21 +131,19 @@ fss <- eqnvec(x = "b - a*x")    # turnover; resting steady state x* = b/a
 gss <- eqnvec(y = "s*x")        # scaled readout
 
 # explicit steady state: only the resting product s*b/a is seen (rank 1 of 3)
-summary(symmetryDetection(fss, gss, method = "observability",
-                          trafo = eqnvec(x = "b/a"), closedForm = TRUE))
+out <- symmetryDetection(fss, gss, method = "observability",
+                         trafo = eqnvec(x = "b/a"), reconstruct = TRUE)
 
 # the same verdict with no closed form supplied (the modular solver recovers b/a)
-summary(symmetryDetection(fss, gss, method = "observability",
-                          equilibrate = TRUE, closedForm = TRUE))
+out <- symmetryDetection(fss, gss, method = "observability",
+                         equilibrate = TRUE, reconstruct = TRUE)
 
 # a known dose pins the scale and makes (a, b, s) identifiable
 dose <- addEvent(eventlist(), var = "x", time = 0, value = "dose",
                  method = "replace")
-
-res <- symmetryDetection(fss, gss, method = "observability", events = dose, 
-                         conditions = data.frame(dose = 2, row.names = "stim"))$identifiable
-
-summary(res)
+out <- symmetryDetection(fss, gss, method = "observability", events = dose,
+                         conditions = data.frame(dose = 2, row.names = "stim"))
+out$identifiable   # TRUE -- the object's fields are there for programmatic use
 ## 7. Free Hill and power exponents -------------------------------------------
 #
 # A rate with a free exponent (a Hill term, or a bare power base^n with n a
@@ -149,20 +164,18 @@ hill <- eqnlist() |>
   addReaction("FB", "0",  "d_FB * FB")                   |>
   addReaction("0",  "x",  "k_pr_x * K^n / (K^n + FB^n)") |>
   addReaction("x",  "0",  "d_x * x")
-res <- symmetryDetection(hill, eqnvec(xobs = "scale * x"),
-                         method = "observability", equilibrate = TRUE,
-                         closedForm = TRUE)
-
-summary(res)
+out <- symmetryDetection(hill, eqnvec(xobs = "scale * x"),
+                         method = "observability", reconstruct = TRUE)
+summary(out)   # the n-direction carries an explicit log(base) factor
 
 # a bare power with no turnover term: x* = ((kpr + kin*u)/dp)^(1/q) is a
 # fractional root, the inverted recast keeps q identifiable, and the direction is
 # the rational scaling xi_dp = (q - 1)*dp, xi_s = s (no log)
 ev <- addEvent(eventlist(), var = "u", time = -1, value = "1", method = "replace")
-symmetryDetection(eqnvec(x = "kpr - dp*x^q + kin*u", u = "0"), eqnvec(y = "s*x"),
-                  method = "observability", equilibrate = TRUE, forcings = "u",
-                  events = ev, conditions = data.frame(var = 1, row.names = "stim"),
-                  closedForm = TRUE) |> summary()
+out <- symmetryDetection(eqnvec(x = "kpr - dp*x^q + kin*u", u = "0"), eqnvec(y = "s*x"),
+                         method = "observability", equilibrate = TRUE, forcings = "u",
+                         events = ev, conditions = data.frame(var = 1, row.names = "stim"),
+                         reconstruct = TRUE)
 
 
 ## 8. EGF/EGFR into a MEK/ERK cascade, partially observed --------------------
@@ -192,9 +205,8 @@ reactions <- customTotals(reactions, list(
 observables <- eqnvec(pMEK_obs = "scale_pMEK * pMEK",
                       pERK_obs = "scale_pERK * pERK")
 
-egf <- symmetryDetection(reactions, observables, method = "observability",
-                         reduceCQ = FALSE, closedForm = TRUE)
-summary(egf)
+out <- symmetryDetection(reactions, observables, method = "observability",
+                         reduceCQ = FALSE, reconstruct = TRUE)   # auto-printed
 # rank 11 / 15: two readout-gain scalings (each scale trades against its kinase
 # total and the downstream rate), one receptor-pool scaling, and one non-monomial
 # direction in the EGF/EGFR binding constants, all returned as exact rational
@@ -218,18 +230,15 @@ f <- eqnvec(R = "kpr - kdg*R + kon*u*R", u = "0")
 gR <- eqnvec(y = "scale*R")
 ev <- addEvent(eventlist(), var = "u", time = 0, value = "init_u", method = "replace")
 cg <- data.frame(init_u = 1, row.names = "Ctrl")
-one <- symmetryDetection(f, gR, method = "observability", equilibrate = TRUE,
-                         events = ev, conditions = cg, forcings = "u")
-
-summary(one)
+out <- symmetryDetection(f, gR, method = "observability", equilibrate = TRUE,
+                         events = ev, conditions = cg, forcings = "u")   # one segment
 
 # a later event (a washout of u at t = 60) opens a second segment whose relaxation
 # is propagated exactly across the gap and stacked on top
 ev2 <- ev |> addEvent(var = "u", time = 60, value = "0", method = "replace")
-two <- symmetryDetection(f, gR, method = "observability", equilibrate = TRUE,
+out <- symmetryDetection(f, gR, method = "observability", equilibrate = TRUE,
                          events = ev2, conditions = cg, forcings = "u")
-
-summary(two)
+summary(out)   # the computation block now reports 2 segments and the gap order
 
 # Exact propagation identifies a transient-channel parameter. The inhibition
 # strength kinh affects only the inhibitor-relaxed state at the stimulus onset.
@@ -241,13 +250,60 @@ g2 <- eqnvec(y = "s*x")
 ev3 <- eventlist() |>
   addEvent(var = "inh",  time = -30, value = "1", method = "replace") |>
   addEvent(var = "stim", time = 0,   value = "1", method = "replace")
-rmes30 <- symmetryDetection(f2, g2, method = "observability", equilibrate = TRUE,
-                            events = ev3, forcings = c("inh", "stim"))
-
-summary(rmes30)
+out <- symmetryDetection(f2, g2, method = "observability", equilibrate = TRUE,
+                         events = ev3, forcings = c("inh", "stim"))   # auto-printed
 
 
-## 10. A real-world signalling network at scale ------------------------------
+## 10. Do you really need the segments? Coupling vs. a condition -------------
+#
+# The segments are not a mere convenience for `conditions`. A later segment is
+# seeded by the state PROPAGATED across the gap from the earlier segment -- it is
+# one coupled trajectory -- whereas a `conditions` row is an independent experiment
+# that re-equilibrates to its own rest state. So when a parameter reaches the
+# readout ONLY through that propagated state, no set of conditions can reproduce
+# the segments: they are load-bearing.
+#
+# Here kinh enters only while the inhibitor is on. The readout is gated by a switch
+# obsw (0 before t = 0, 1 after), so the inhibitor pre-window (-30..0) is UNOBSERVED;
+# after t = 0 the inhibitor is off, so kinh no longer appears in the vector field.
+# kinh can therefore be seen only through the propagated initial value of the
+# observed segment.
+fcpl <- eqnvec(x = "kpr/(1 + kinh*inh) - kdeg*x", inh = "0", obsw = "0")
+gcpl <- eqnvec(y = "s * obsw * x")
+
+# COUPLED: the unobserved inhibitor pulse feeds the observed relaxation by exact
+# propagation across the gap. kinh and kdeg are pinned; only the readout gain
+# (kpr, s) stays free. The identifiability rides on the gap order (gap order >= 1).
+ev.coupled <- eventlist() |>
+  addEvent(var = "inh",  time = -30, value = "1", method = "replace") |>
+  addEvent(var = "inh",  time = 0,   value = "0", method = "replace") |>
+  addEvent(var = "obsw", time = 0,   value = "1", method = "replace")
+out <- symmetryDetection(fcpl, gcpl, method = "observability", equilibrate = TRUE,
+                         events = ev.coupled, forcings = "inh", reconstruct = TRUE)
+summary(out)   # rank 4/5: 2 segments, gap order 1; only the (kpr, s) gain remains
+
+# THE CONDITION VIEW (negative control): drop the pre-window. The observed segment
+# now starts at rest -- exactly what an independent `conditions` row sees, since a
+# condition re-equilibrates and cannot start from the propagated inhibited state.
+# The memory of kinh is gone, so kinh no longer enters the model at all.
+ev.cond <- addEvent(eventlist(), var = "obsw", time = 0, value = "1", method = "replace")
+out <- symmetryDetection(fcpl, gcpl, method = "observability", equilibrate = TRUE,
+                         events = ev.cond, forcings = "inh", reconstruct = TRUE)
+# kinh absent from the result: without the coupled pulse the segment cannot recover it.
+
+# The same lesson, minimally, on the f2 model just above: SPLITTING the inhibitor
+# (t = -30) and the stimulus (t = 0) across two segments identifies kinh (the block
+# above), but COLLAPSING both events onto t = 0 -- one local expansion, no gap --
+# loses it: a [kinh, kstim] confound reappears.
+ev.collapsed <- eventlist() |>
+  addEvent(var = "inh",  time = 0, value = "1", method = "replace") |>
+  addEvent(var = "stim", time = 0, value = "1", method = "replace")
+out <- symmetryDetection(f2, g2, method = "observability", equilibrate = TRUE,
+                         events = ev.collapsed, forcings = c("inh", "stim"),
+                         reconstruct = TRUE)   # gains a [kinh, kstim] direction the split lacked
+
+
+## 11. A real-world signalling network at scale ------------------------------
 #
 # A two-receptor TGF-beta / SMAD signalling model: 26 dynamic states and three
 # conserved SMAD moieties, far beyond a symbolic determining system. Receptor mRNA
@@ -353,15 +409,15 @@ cond.trafo <- eqnvec() |>
   branch(table = cond.grid, apply = "insert")
 
 # switches and ligand are forcings; equilibrate imposes the resting state, the TGFb
-# dose on top, and the perturbations enter through the trafo list. cores.GLp (or
-# cores) parallelises the steady-state solves and the chain-kernel batch; raise it
-# towards the number of physical cores.
-outsmad <- symmetryDetection(
+# dose on top, and the perturbations enter through the trafo list. `cores` parallelises
+# the steady-state solves and the chain-kernel batch; raise it towards the number of
+# physical cores.
+out <- symmetryDetection(
   reactions, observables, method = "observability",
   events = events, trafo = cond.trafo,
   forcings = c("bool_ActD","bool_CHX","bool_MG132","TGFb"),
-  equilibrate = TRUE, reduceCQ = TRUE, closedForm = TRUE,
-  cores.GLp = 6)
+  equilibrate = TRUE, reduceCQ = TRUE, reconstruct = TRUE,
+  cores = 20)
 
 # rank 65 / 74: nine non-identifiable directions, all scalings recovered exactly from
 # the integer kernel. They are the two receptor mRNA/protein synthesis scalings (each
@@ -372,4 +428,4 @@ outsmad <- symmetryDetection(
 # one wide SMAD-pool scaling trading the conserved totals and feedback Km's against the
 # readout gains and the complex-formation rate. The known TGFb dose (init_TGFb) is
 # baked in by the trafo grid, not a symmetry.
-summary(outsmad)
+summary(out)

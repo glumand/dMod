@@ -93,8 +93,8 @@ non-identifiability. \code{FALSE} by default; it is comparatively expensive.}
 direction's own classified degree.}
 
 \item{timeout}{Wall-clock budget in seconds for the closed-form reconstruction
-(\code{closedForm = TRUE}). When it is exceeded, the directions still being
-reconstructed are returned support-only (\code{closedForm = FALSE}) with a
+(\code{reconstruct = TRUE}). When it is exceeded, the directions still being
+reconstructed are returned support-only (\code{reconstruct = FALSE}) with a
 \code{reason}, so a hard general (non-scaling) direction aborts cleanly instead of
 running unbounded. \code{Inf} (the default) imposes no limit and reproduces the
 previous behaviour exactly.}
