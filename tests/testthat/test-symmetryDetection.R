@@ -1106,7 +1106,7 @@ test_that("log-coordinate gauge reconstructs a parameter-weighted scaling", {
     as.numeric(point0), pool, 100L, 1L, fakeKcall, spy, NULL,
     lg$residueFns[[1]], reconstControl())
   e <- dir$entry
-  expect_true(isTRUE(e$explicit))
+  expect_true(isTRUE(e$closedForm))
   e$vector <- dMod:::.sym_logcoord_backsub(e$vector, spy)
 
   # back-transformed entries are the sparse c*z form (the b entry couples only n)

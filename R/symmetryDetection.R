@@ -2188,12 +2188,12 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
 # ---- parallel steady-state solve pool (PSOCK workers) --------------------------------
 
 # Worker-side steady-state solve for the parallel warm pool. Runs in a fresh
-# PSOCK process that has imported the Python engine into `.sym_worker_sd` (a
-# worker global set at cluster creation); every argument is plain serialisable
+# PSOCK process that has imported the Python engine into the worker option
+# `dMod.sym.worker_sd` (set at cluster creation); every argument is plain serialisable
 # data, so no R closure or Python handle crosses the process boundary. Returns the
 # solve list (valBy, dfJx/dfJt for the joint constraint) or NULL on any failure.
 .sym_solve_worker <- function(job, cargs) {
-  sd <- tryCatch(get(".sym_worker_sd", envir = globalenv()), error = function(e) NULL)
+  sd <- getOption("dMod.sym.worker_sd")
   if (is.null(sd)) return(NULL)
   tryCatch(sd$solveSteadyStateModular(
     model = job$model, stateNames = cargs$stateNames,
@@ -2236,9 +2236,10 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
       }
       sysmod <- reticulate::import("sys", convert = TRUE)
       if (!(codeDir %in% sysmod$path)) sysmod$path <- c(codeDir, sysmod$path)
-      assign(".sym_worker_sd",
-             reticulate::import("symmetryDetectionVersion2", convert = TRUE),
-             envir = globalenv())
+      # stash the engine handle in the worker process' options (persists across
+      # parLapply tasks on the same PSOCK node) rather than its global env
+      options(dMod.sym.worker_sd =
+                reticulate::import("symmetryDetectionVersion2", convert = TRUE))
       TRUE
     }, error = function(e) conditionMessage(e))
   }
@@ -2591,7 +2592,7 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
         if (!length(jobs)) return(invisible())
         # reparent the worker to the global env so it serialises self-contained (the
         # Python-only workers have no dMod namespace to resolve it against); its body
-        # uses only base ops and the worker-global .sym_worker_sd handle
+        # uses only base ops and the worker option dMod.sym.worker_sd handle
         worker <- .sym_solve_worker
         environment(worker) <- globalenv()
         res <- tryCatch(parallel::parLapply(cl, jobs, worker, cargs = solveConst),
@@ -2821,7 +2822,9 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
       Ecol = colOfN(rc$E), baseCol = colOfN(rc$base), expCol = colOfN(rc$exp),
       Lcol = colOfN(rc$L), Eslot = slotOfL(rc$E), baseSlot = slotOfL(rc$base),
       expSlot = slotOfL(rc$exp), Lslot = slotOfL(rc$L)))
-    kcall4 <- function(point, p, Nt, Mtot = 0L) {
+    # solveFn is unused here (kept only to match the joint-branch kcall4 signature
+    # so the static check does not flag mismatched local definitions)
+    kcall4 <- function(point, p, Nt, Mtot = 0L, solveFn = jointSolveCond) {
       pt <- as.integer(point)
       o <- if (hasGaps)
         symObsNullChain(lapply(chainGroups, function(idx) tapes[idx]), nLeaves,
@@ -2855,7 +2858,8 @@ scalingControl <- function(backend = c("symengine", "sympy")) {
            rank = as.integer(rr$rank), dim = nz)
     }
   } else {
-    kcall4 <- function(point, p, Nt, Mtot = 0L) {
+    # solveFn unused here; kept to match the joint-branch kcall4 signature (above)
+    kcall4 <- function(point, p, Nt, Mtot = 0L, solveFn = jointSolveCond) {
       pt <- as.integer(point)
       if (hasGaps)
         symObsNullChain(lapply(chainGroups, function(idx) tapes[idx]), nLeaves,
