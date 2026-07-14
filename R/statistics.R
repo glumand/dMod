@@ -723,11 +723,44 @@ vcov <- function(fit, parupper = NULL, parlower = NULL) {
   # 
   # vcov__[!is_fixed__, !is_fixed__] <- subvcov__
   
-  return(vcov__) 
-  
+  return(vcov__)
+
 }
 
 
+# Wrap objfun so that its FIRST call for this fit slot also prints the
+# sensitivity matrix (d(prediction)/d(parameter), i.e. attr(<prediction>,
+# "deriv")) -- one array per condition, [time, observable, parameter] --
+# then behaves identically to objfun for that call and every call after.
+#
+# Must not add an extra evaluation: some objfun implementations are
+# call-count sensitive (e.g. mstrust's own retry logic, exercised by
+# make_flaky_obj() in test-mstrust.R, which fails its first N calls on
+# purpose). trust()'s actual first evaluation has to be the one that gets
+# printed, so this proxies straight through to objfun and only inspects
+# its return value -- it never calls objfun a second time.
+.mstrust_sensitivity_wrapper <- function(objfun, i) {
+  printed <- FALSE
+  function(...) {
+    out <- objfun(...)
+    if (!printed) {
+      printed <<- TRUE
+      env        <- attr(out, "env")
+      prediction <- if (!is.null(env)) env$prediction else NULL
+      cat("\n===== Fit", i, ": sensitivity matrix at initial evaluation =====\n")
+      if (is.null(prediction)) {
+        cat("(not available -- objfun did not attach a prediction with sensitivities)\n")
+      } else {
+        for (cond in names(prediction)) {
+          S <- attr(prediction[[cond]], "deriv")
+          cat("-- condition:", cond, "--\n")
+          if (is.null(S)) cat("(no sensitivities attached for this condition)\n") else print(S)
+        }
+      }
+    }
+    out
+  }
+}
 
 
 #' Non-Linear Optimization, multi start
@@ -783,7 +816,7 @@ vcov <- function(fit, parupper = NULL, parlower = NULL) {
 #'   4. [as.parframe()] for formatting the output to a handy table
 #'   
 #' @author Wolfgang Mader, \email{Wolfgang.Mader@@fdm.uni-freiburg.de}
-#'  
+#'
 #' @export
 #' @import parallel
 mstrust <- function(objfun, center, studyname, rinit = .1, rmax = 10, fits = 20, cores = 1, optmethod = "trust",
@@ -947,6 +980,8 @@ mstrust <- function(objfun, center, studyname, rinit = .1, rmax = 10, fits = 20,
         argstrust$parinit <- center + do.call(samplefun, argssample)
       }
     }
+
+    argstrust$objfun <- .mstrust_sensitivity_wrapper(objfun, i)
 
     # Check if traceFile is requested. In that case combine tracefile, with logfolder and fit number
     if (!is.null(argstrust[["traceFile"]])) {

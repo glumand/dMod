@@ -8,18 +8,64 @@
 ## dependencies from DESCRIPTION Imports/Remotes), later runs reuse it.
 ## ---------------------------------------------------------------------------
 
-repo_root <- {
+# Locate the repo root robustly across invocation styles. `--file=` only
+# appears in commandArgs() for `Rscript scripts/example_toy_fit.R`; `ofile`
+# only appears for source()'d scripts; neither is set when e.g. code is
+# pasted into a console or run by a tool that starts R elsewhere -- in that
+# case getwd() can be anything (was seen resolving to R's own tempdir()).
+# So don't trust any single starting point: whatever we land on, walk
+# upward looking for the actual DESCRIPTION file (same pattern
+# tests/testthat/setup.R uses for PEtabTests/BenchmarkModels discovery).
+.dmod_find_repo_root <- function(start) {
+  here <- normalizePath(start, mustWork = FALSE, winslash = "/")
+  for (i in seq_len(8)) {
+    desc <- file.path(here, "DESCRIPTION")
+    if (file.exists(desc)) {
+      # read.dcf(...)[1, 1] keeps the field name as a "names" attribute,
+      # which makes identical() below spuriously FALSE against a plain
+      # string -- unname() it.
+      pkg <- tryCatch(unname(read.dcf(desc, "Package")[1, 1]), error = function(e) NA_character_)
+      if (identical(pkg, "dMod")) return(here)
+    }
+    parent <- dirname(here)
+    if (parent == here) break
+    here <- parent
+  }
+  NA_character_
+}
+
+# KNOWN_REPO_ROOT: this checkout's actual location. Auto-detection below
+# covers Rscript/source() invocation, but pasting this script's contents
+# directly into an interactive console leaves no file-based signal at all
+# (no --file=, no ofile) -- only getwd(), which can be anywhere (e.g. an
+# R session's own tempdir()). Rather than fail in that case, fall back to
+# this fixed path. Edit it if this checkout ever moves.
+KNOWN_REPO_ROOT <- "/home/mio/Phd/dMod"
+
+repo_root <- local({
   full <- commandArgs(trailingOnly = FALSE)
   hit  <- grep("^--file=", full, value = TRUE)
-  script_path <- if (length(hit)) sub("^--file=", "", hit[1]) else NA_character_
-  if (is.na(script_path)) normalizePath(getwd(), winslash = "/", mustWork = TRUE)
-  else normalizePath(file.path(dirname(script_path), ".."), winslash = "/", mustWork = TRUE)
-}
+  ofile <- if (!is.null(sys.frames()) && length(sys.frames()) >= 1L) sys.frame(1)$ofile else NULL
+  candidates <- c(
+    if (length(hit)) dirname(sub("^--file=", "", hit[1])),
+    if (!is.null(ofile)) dirname(ofile),
+    getwd(),
+    KNOWN_REPO_ROOT
+  )
+  for (cand in candidates) {
+    if (is.null(cand) || is.na(cand)) next
+    found <- .dmod_find_repo_root(cand)
+    if (!is.na(found)) return(found)
+  }
+  stop("Could not locate the dMod repo root (no DESCRIPTION with Package: dMod found ",
+       "walking up from any of: ", paste(candidates, collapse = ", "), "). ",
+       "Run this script from inside the dMod checkout, or edit KNOWN_REPO_ROOT above.")
+})
 
 repo_lib <- file.path(repo_root, ".Rlib")
 dir.create(repo_lib, showWarnings = FALSE, recursive = TRUE)
 
-desc_version <- read.dcf(file.path(repo_root, "DESCRIPTION"), "Version")[1, 1]
+desc_version <- unname(read.dcf(file.path(repo_root, "DESCRIPTION"), "Version")[1, 1])
 installed_version <- tryCatch(as.character(packageVersion("dMod", lib.loc = repo_lib)),
                                error = function(e) NA_character_)
 if (!identical(installed_version, desc_version)) {
