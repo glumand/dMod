@@ -10,10 +10,91 @@
 #include <iomanip>
 #include <string>
 #include <algorithm>
+#include <unordered_map>
+#include <stdexcept>
 
 using namespace Rcpp;
 using dmod::trust_internal::eigen_sym_local;
 using dmod::trust_internal::trust_sub;
+
+namespace {
+
+// objfun (an R objfn closure such as normL2()'s) is free to return its
+// gradient/hessian with names in whatever order its own internals settled
+// on (e.g. normL2's par_names_global, built from deriv dimnames -- which
+// need not match the order the caller's parinit happened to be typed in).
+// trust_impl otherwise treats grad_full[i]/H_full[i,j] as belonging to
+// parnames[i]/parnames[j] purely by position, so a silent name/position
+// mismatch here scrambles the whole trust-region model (wrong descent
+// direction, persistent rho mismatch) while still taking real steps in the
+// correctly-labelled full parameter vector. Align by name defensively.
+
+std::unordered_map<std::string, int> name_index_map(const CharacterVector& names) {
+  std::unordered_map<std::string, int> m;
+  m.reserve(names.size());
+  for (int i = 0; i < names.size(); ++i) m[as<std::string>(names[i])] = i;
+  return m;
+}
+
+// Reorder a gradient vector to match target_names order. Falls back to
+// positional use only if the vector carries no names at all.
+std::vector<double> align_grad(const NumericVector& v, const CharacterVector& target_names) {
+  const int K = target_names.size();
+  std::vector<double> out(K);
+  if (!v.hasAttribute("names")) {
+    if (v.size() != K)
+      throw std::runtime_error("trust: objfun gradient length does not match parinit and has no names to align by.");
+    std::copy(v.begin(), v.end(), out.begin());
+    return out;
+  }
+  CharacterVector vn = v.names();
+  auto idx = name_index_map(vn);
+  for (int i = 0; i < K; ++i) {
+    std::string nm = as<std::string>(target_names[i]);
+    auto it = idx.find(nm);
+    if (it == idx.end())
+      throw std::runtime_error("trust: objfun gradient is missing parameter '" + nm + "'.");
+    out[i] = v[it->second];
+  }
+  return out;
+}
+
+// Reorder a Hessian matrix (both rows and columns) to match target_names
+// order. Falls back to positional use only if it carries no dimnames.
+std::vector<double> align_hess(const NumericMatrix& H, const CharacterVector& target_names) {
+  const int K = target_names.size();
+  std::vector<double> out((std::size_t) K * K);
+  RObject dn = H.attr("dimnames");
+  if (dn.isNULL()) {
+    if (H.nrow() != K || H.ncol() != K)
+      throw std::runtime_error("trust: objfun hessian dim does not match parinit and has no dimnames to align by.");
+    for (int j = 0; j < K; ++j)
+      for (int i = 0; i < K; ++i)
+        out[i + (std::size_t) j * K] = H(i, j);
+    return out;
+  }
+  List dnl(dn);
+  CharacterVector rn = dnl[0];
+  CharacterVector cn = dnl[1];
+  auto ridx = name_index_map(rn);
+  auto cidx = name_index_map(cn);
+  std::vector<int> ri(K), ci(K);
+  for (int i = 0; i < K; ++i) {
+    std::string nm = as<std::string>(target_names[i]);
+    auto itr = ridx.find(nm);
+    auto itc = cidx.find(nm);
+    if (itr == ridx.end() || itc == cidx.end())
+      throw std::runtime_error("trust: objfun hessian is missing parameter '" + nm + "'.");
+    ri[i] = itr->second;
+    ci[i] = itc->second;
+  }
+  for (int j = 0; j < K; ++j)
+    for (int i = 0; i < K; ++i)
+      out[i + (std::size_t) j * K] = H(ri[i], ci[j]);
+  return out;
+}
+
+}  // namespace
 
 
 // [[Rcpp::export]]
@@ -104,11 +185,10 @@ List trust_impl(Function objfun,
   NumericMatrix Hmat0   = as<NumericMatrix>(out_init["hessian"]);
   if (!std::isfinite(val)) stop("parinit not feasible: value is not finite");
 
-  std::vector<double> grad_full(grad0.begin(), grad0.end());
-  std::vector<double> H_full((std::size_t) K * K);
-  for (int j = 0; j < K; ++j)
-    for (int i = 0; i < K; ++i)
-      H_full[i + (std::size_t) j * K] = Hmat0(i, j);
+  // Align to parnames order by name -- objfun's own internal parameter
+  // order need not match parinit's (see comment on align_grad/align_hess).
+  std::vector<double> grad_full = align_grad(grad0, parnames);
+  std::vector<double> H_full    = align_hess(Hmat0, parnames);
 
   int neval = 1;  // evaluation counter (incl. initial)
 
@@ -257,19 +337,18 @@ List trust_impl(Function objfun,
     x_try.names() = parnames;
     List out_try;
     bool eval_ok = true;
+    double val_try = std::numeric_limits<double>::infinity();
+    std::vector<double> grad_try_aligned, H_try_aligned;
     try {
       out_try = as<List>(objfun(x_try));
+      val_try = as<double>(out_try["value"]);
+      if (!std::isfinite(val_try)) throw std::runtime_error("value not finite");
+      NumericVector grad_try_raw = as<NumericVector>(out_try["gradient"]);
+      NumericMatrix Htry_mat_raw = as<NumericMatrix>(out_try["hessian"]);
+      grad_try_aligned = align_grad(grad_try_raw, parnames);
+      H_try_aligned    = align_hess(Htry_mat_raw, parnames);
     } catch (...) {
       eval_ok = false;
-    }
-    double val_try = std::numeric_limits<double>::infinity();
-    NumericVector grad_try;
-    NumericMatrix Htry_mat;
-    if (eval_ok) {
-      val_try  = as<double>(out_try["value"]);
-      grad_try = as<NumericVector>(out_try["gradient"]);
-      Htry_mat = as<NumericMatrix>(out_try["hessian"]);
-      if (!std::isfinite(val_try)) eval_ok = false;
     }
     neval++;
     if (printIter) {
@@ -317,10 +396,8 @@ List trust_impl(Function objfun,
     if (accept && eval_ok) {
       for (int i = 0; i < K; ++i) theta[i] = theta_try[i];
       val = val_try;
-      grad_full.assign(grad_try.begin(), grad_try.end());
-      for (int j = 0; j < K; ++j)
-        for (int i = 0; i < K; ++i)
-          H_full[i + (std::size_t) j * K] = Htry_mat(i, j);
+      grad_full = grad_try_aligned;
+      H_full    = H_try_aligned;
     }
 
     // ---- Blather record (post-step) ----

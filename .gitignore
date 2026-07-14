@@ -3,6 +3,10 @@
 .Rhistory
 .RData
 
+# Local library built by scripts/example_toy_fit.R (isolates it from
+# whatever dMod is installed in the default R library)
+/.Rlib/
+
 # Editor and OS
 *.swp
 .DS_Store
