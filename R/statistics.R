@@ -728,10 +728,15 @@ vcov <- function(fit, parupper = NULL, parlower = NULL) {
 }
 
 
-# Wrap objfun so that its FIRST call for this fit slot also prints the
-# sensitivity matrix (d(prediction)/d(parameter), i.e. attr(<prediction>,
-# "deriv")) -- one array per condition, [time, observable, parameter] --
-# then behaves identically to objfun for that call and every call after.
+# Wrap objfun so that its FIRST call for this fit slot also prints a
+# practical-identifiability summary of the sensitivity matrix
+# (d(prediction)/d(parameter), i.e. attr(<prediction>, "deriv")) at that
+# evaluation: singular values of the flattened Jacobian and its condition
+# number (largest / smallest singular value) -- one summary per condition.
+# A large condition number flags near-collinear parameter directions (poor
+# practical identifiability); a singular value of ~0 flags a direction the
+# data cannot see at all. Then behaves identically to objfun for that call
+# and every call after.
 #
 # Must not add an extra evaluation: some objfun implementations are
 # call-count sensitive (e.g. mstrust's own retry logic, exercised by
@@ -747,14 +752,25 @@ vcov <- function(fit, parupper = NULL, parlower = NULL) {
       printed <<- TRUE
       env        <- attr(out, "env")
       prediction <- if (!is.null(env)) env$prediction else NULL
-      cat("\n===== Fit", i, ": sensitivity matrix at initial evaluation =====\n")
+      cat("\n===== Fit", i, ": sensitivity singular values at initial evaluation =====\n")
       if (is.null(prediction)) {
         cat("(not available -- objfun did not attach a prediction with sensitivities)\n")
       } else {
         for (cond in names(prediction)) {
           S <- attr(prediction[[cond]], "deriv")
           cat("-- condition:", cond, "--\n")
-          if (is.null(S)) cat("(no sensitivities attached for this condition)\n") else print(S)
+          if (is.null(S)) {
+            cat("(no sensitivities attached for this condition)\n")
+          } else {
+            # [time, observable, parameter] -> [time*observable, parameter];
+            # array storage is column-major, so this reshape is exact.
+            J <- S
+            dim(J) <- c(dim(S)[1] * dim(S)[2], dim(S)[3])
+            colnames(J) <- dimnames(S)[[3]]
+            sv <- sort(svd(J, nu = 0, nv = 0)$d, decreasing = TRUE)
+            cat("singular values:", paste(signif(sv, 6), collapse = ", "), "\n")
+            cat("condition number (max/min):", signif(max(sv) / min(sv), 6), "\n")
+          }
         }
       }
     }
