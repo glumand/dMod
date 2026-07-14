@@ -182,3 +182,4 @@ cat("pouter_init names :", names(pouter_init), "\n")
 cat("obj() gradient names:", names(o0$gradient), "\n")
 cat("(trust_kernel.cpp now aligns these by name before use; previously it\n")
 cat(" assumed they lined up positionally, which they don't here.)\n")
+
