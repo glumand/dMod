@@ -93,7 +93,7 @@ setwd(tempdir())
 ##     dB/dt =  k1*A - k2*B
 
 f <- NULL
-f <- addReaction(f, from = "A", to = "B", rate = "k1*A",
+f <- addReaction(f, from = "A", to = "B", rate = "k1*q1*A",
                   description = "conversion of A to B")
 f <- addReaction(f, from = "B", to = "",  rate = "k2*B",
                   description = "degradation of B")
@@ -114,7 +114,7 @@ trafo <- repar("x~exp(x)", x = innerpars, trafo)  # log-transform k1, k2, A0
 p <- P(trafo, condition = "sim", compile = TRUE, modelname = "toyTrafo")
 
 ## --- 4. "True" parameters and simulated data -------------------------------
-true_pars_inner <- c(k1 = 0.8, k2 = 0.3, A = 5)
+true_pars_inner <- c(k1 = 0.8, q1 = 1.2, k2 = 0.3, A = 5)
 pouter_true <- log(true_pars_inner)
 
 times <- seq(0, 12, by = 1)
