@@ -163,7 +163,7 @@ p <- P(trafo, condition = "sim", compile = TRUE, modelname = "sloppyTrafo")
 ## individually from a single noisy readout of D. w1 = w2 = w3 puts the
 ## oscillator's relaxation matrix at a balanced point where the complex
 ## eigenvalue pair (and hence the ringing) is most pronounced.
-true_pars_inner <- c(k1 = 1.2, k2 = 0.9, k3 = 0.15, k4 = 0.12, A = 4, scale = 2.5,
+true_pars_inner <- c(k1 = 1.2, k2 = 0.9, k3 = 0.15, k4 = 0.14, A = 4, scale = 2.5,
                      w1 = 1.0, w2 = 1.0, w3 = 1.0)
 pouter_true <- log(true_pars_inner)
 
@@ -172,20 +172,19 @@ pouter_true <- log(true_pars_inner)
 ## (2*pi/Im(eigenvalue) ~ 2*pi/0.866 ~ 7.25 time units at w1=w2=w3=1) for the
 ## aliasing that produces genuine local optima. Both observables are
 ## evaluated on their union, then each keeps only its own time subset.
-times_D <- seq(0, 40, by = 2)
+times_D <- seq(0, 40, by = 6)
 times_E <- seq(0, 40, by = 3.5)
 times_common <- sort(unique(c(times_D, times_E)))
 
 prediction_true <- as.data.frame((g * x * p)(times_common, pouter_true))
 
-sigma_D <- 0.2
-sigma_E <- 0.07
+sigma_D <- 1.1
+sigma_E <- 0.1
 simD <- subset(prediction_true, name == "obsD" & time %in% times_D)
 simE <- subset(prediction_true, name == "obsE" & time %in% times_E)
 simD$value <- simD$value + rnorm(nrow(simD), sd = sigma_D); simD$sigma <- sigma_D
 simE$value <- simE$value + rnorm(nrow(simE), sd = sigma_E); simE$sigma <- sigma_E
 sim <- rbind(simD, simE)
-
 data <- as.datalist(sim, split.by = "condition")
 
 ## --- 4. Objective function --------------------------------------------------
@@ -229,11 +228,11 @@ prd <- Reduce("*", list(g, x, p))
 plotCombined(prd(times_common, best), data)
 plotPrediction(prd(mytimes, best))
 
-waterfall <-  plotValues(pf)
+waterfall <-  plotValues(pf[1:600], tol=0.01)
 waterfall
 cat("=== mstrust() best of", nrow(pf), "starts ===\n")
 cat("Best objective value:", pf$value[1], "\n\n")
-
+ 
 ## --- 7. Part B: practical non-identifiability among near-optimal fits ------
 ## Fits within a chi-square(df=1) deviance of the best one are all
 ## statistically indistinguishable. Looking at how much each PARAMETER

@@ -1,0 +1,204 @@
+\documentclass[11pt]{article}
+\usepackage[margin=2.7cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{parskip}
+\usepackage{xcolor}
+\usepackage{listings}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  columns=fullflexible,
+  breaklines=true,
+  frame=single,
+  language=R
+}
+
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\file}[1]{\textcolor{black!60}{\texttt{#1}}}
+
+\title{FIM- and L2-Based \code{constraintL2()} Regularization\\[2pt]
+\large Current calculation, as implemented}
+\author{}
+\date{Reference: \file{scripts/fim\_l2\_constraintL2.R}, Part 8 (lines 302--342)}
+
+\begin{document}
+\maketitle
+\vspace{-1.5em}
+
+This note writes down, step by step, the calculation that currently produces
+\code{obj\_fim} and \code{obj\_l2} in \file{fim\_l2\_constraintL2.R}. It is a
+transcription of the code, not a proposal for changing it; every quantity
+below is annotated with the exact line(s) that compute it.
+
+\section{Setup and notation}
+
+Let $p \in \mathbb{R}^n$ denote the outer (log-parametrized) parameter vector,
+$n = 28$ in this model. Let
+\[
+  \mathrm{best} \in \mathbb{R}^n
+\]
+be the parameter vector returned by the \emph{single-start} \code{trust()}
+fit of Part 5 (\file{line 258--264}: \code{myfit <- trust(obj, pouter\_init, \ldots); best <- myfit\$argument}).
+Note that this is \emph{not} the later multistart winner \code{best\_ms}
+(\file{line 288}) --- everything in Part 8 is centered on and evaluated at
+this earlier, single-fit \code{best}.
+
+Let $\mathrm{obj}$ be the unregularized objective \code{obj <- normL2(data, g*x*p)}
+(\file{line 251}): the weighted least-squares negative log-likelihood of the
+simulated data under the model.
+
+\subsection*{The reference curvature $H$}
+
+\begin{equation}
+  H \;=\; \nabla^2_p\, \mathrm{obj}(p)\big|_{p = \mathrm{best}}
+  \qquad\text{(\file{lines 267--268}: \code{o\_best <- obj(best); H <- o\_best\$hessian})}
+\end{equation}
+
+Because \code{obj(best)} is called with the default \code{deriv2 = FALSE},
+$H$ is \emph{not} the exact second derivative of the objective. It is the
+Gauss--Newton approximation
+\begin{equation}
+  H \;=\; S^\top W S,
+  \qquad
+  S = \frac{\partial(\text{observable})}{\partial p}\Big|_{p=\mathrm{best}}
+  \ \text{(data rows only)},
+  \qquad
+  W = \mathrm{diag}\!\left(1/\sigma_{\text{data}}^2\right),
+\end{equation}
+i.e.\ exactly the classical Fisher information matrix built from the model
+sensitivities and the assumed measurement noise $\sigma_{\text{data}} = 0.015$
+(\file{line 245}). The exact Hessian would add a residual-curvature
+correction term that only appears when \code{deriv2 = TRUE} is requested;
+that term is not part of the current calculation.
+
+\section{Eigendecomposition and calibration constants}
+
+\begin{equation}
+  H = V\, \mathrm{diag}(s)\, V^\top,
+  \qquad
+  \file{line 310: \code{eig <- eigen(H, symmetric = TRUE); s <- eig\$values}}
+\end{equation}
+where $V$'s columns are the orthonormal eigenvectors (the model's
+stiff/sloppy directions) and $s = (s_1,\ldots,s_n)$ the corresponding
+curvatures.
+
+A numerical-zero mask identifies the practically non-identifiable directions
+(\file{lines 270--271}, computed earlier against the same $H$):
+\begin{equation}
+  \texttt{zero\_tol} = 10^{-6}\cdot\max_i|s_i|,
+  \qquad
+  \texttt{is\_zero}_i = \mathbb{1}\!\left[\,|s_i| < \texttt{zero\_tol}\,\right].
+\end{equation}
+
+Two calibration constants are derived from the spectrum (\file{lines
+312--313}):
+\begin{align}
+  \texttt{eps\_reg} &= \min\big\{\, |s_i| : \texttt{is\_zero}_i = 0 \,\big\}
+  && \text{(smallest strictly-nonzero curvature; a floor)} \\
+  \texttt{strength} &= 0.1
+  && \text{(fixed scalar, currently hard-coded)}
+\end{align}
+
+\section{FIM-anisotropic precision $\to$ \code{sigma\_fim}}
+
+A per-eigendirection weight is assigned, \emph{inverted} relative to the
+likelihood's own curvature --- small $s_i$ (sloppy) gets a large weight,
+large $s_i$ (stiff) gets a small weight (\file{line 318}):
+\begin{equation}
+  w^{\mathrm{fim}}_i \;=\; \frac{\texttt{strength}}{s_i + \texttt{eps\_reg}},
+  \qquad i = 1,\ldots,n.
+\end{equation}
+
+These weights are rotated back into parameter space to form a full,
+generally non-diagonal precision matrix (\file{lines 319--320}):
+\begin{equation}
+  \mathrm{Prec}_{\mathrm{fim}} \;=\; V\, \mathrm{diag}(w^{\mathrm{fim}})\, V^\top,
+  \qquad \text{symmetrized: } \mathrm{Prec}_{\mathrm{fim}} \leftarrow
+  \tfrac{1}{2}\!\left(\mathrm{Prec}_{\mathrm{fim}} + \mathrm{Prec}_{\mathrm{fim}}^\top\right).
+\end{equation}
+
+\subsection*{Bridging to a diagonal penalty}
+
+\code{constraintL2(mu, sigma)} only implements a diagonal penalty
+$\sum_i (p_i-\mu_i)^2/\sigma_i^2$, so $\mathrm{Prec}_{\mathrm{fim}}$ cannot be
+passed in directly. The diagonal of $\mathrm{Prec}_{\mathrm{fim}}$ is used
+instead (\file{lines 328--329}):
+\begin{equation}
+  \texttt{diag\_fim}_i \;=\; \big[\mathrm{Prec}_{\mathrm{fim}}\big]_{ii}
+  \;=\; \sum_{k} V_{ik}^2\, w^{\mathrm{fim}}_k,
+  \qquad
+  \sigma^{\mathrm{fim}}_i \;=\; \frac{1}{\sqrt{\max(\texttt{diag\_fim}_i,\ \varepsilon_{\mathrm{mach}})}}.
+\end{equation}
+
+\textbf{Why the diagonal, specifically:} for the full quadratic form
+$d^\top \mathrm{Prec}_{\mathrm{fim}}\, d$ with $d = p-\mathrm{best}$, the
+second derivative with respect to a single $p_i$, holding every other
+parameter fixed, is exactly $2\,[\mathrm{Prec}_{\mathrm{fim}}]_{ii}$.
+\code{constraintL2}'s diagonal penalty gives $2/(\sigma_i^{\mathrm{fim}})^2$
+for that same derivative. Setting
+$\sigma^{\mathrm{fim}}_i = 1/\sqrt{[\mathrm{Prec}_{\mathrm{fim}}]_{ii}}$
+therefore matches the FIM penalty's exact \emph{per-parameter} curvature at
+$\mathrm{best}$ --- while necessarily discarding the off-diagonal
+(cross-parameter) terms $[\mathrm{Prec}_{\mathrm{fim}}]_{ij}$, $i\neq j$, that
+made the original penalty direction-aware \emph{across} parameters, not just
+within each one.
+
+\section{Isotropic L2 precision $\to$ \code{sigma\_l2}}
+
+The same weight formula is used, but with a single scalar curvature ---
+the median of the spectrum --- standing in for the whole eigenstructure
+(\file{lines 334--335}):
+\begin{equation}
+  w^{\mathrm{iso}} \;=\; \frac{\texttt{strength}}{\mathrm{median}(s) + \texttt{eps\_reg}},
+  \qquad
+  \sigma^{\mathrm{l2}}_i \;=\; \frac{1}{\sqrt{w^{\mathrm{iso}}}}
+  \quad\text{for every } i=1,\ldots,n.
+\end{equation}
+
+Because this target precision is already a scalar multiple of the identity,
+$\mathrm{Prec}_{\mathrm{l2}} = w^{\mathrm{iso}}\, I$, the diagonal-only
+\code{constraintL2} form reproduces it \emph{exactly} (not merely
+approximately) --- there is no off-diagonal structure to lose in the first
+place.
+
+\section{The two regularized objectives}
+
+\code{constraintL2(mu, sigma)} implements the penalty
+\begin{equation}
+  R(p;\ \mu,\sigma) \;=\; \sum_{i=1}^n \frac{(p_i - \mu_i)^2}{\sigma_i^2}.
+\end{equation}
+
+The two regularized objectives are then (\file{lines 341--342}):
+\begin{align}
+  \mathrm{obj}_{\mathrm{fim}}(p) &= \mathrm{obj}(p) \;+\; \sum_{i=1}^n \frac{(p_i - \mathrm{best}_i)^2}{(\sigma^{\mathrm{fim}}_i)^2}
+  &&\text{\code{obj\_fim <- obj + constraintL2(mu = best, sigma = sigma\_fim)}} \\[4pt]
+  \mathrm{obj}_{\mathrm{l2}}(p) &= \mathrm{obj}(p) \;+\; w^{\mathrm{iso}} \sum_{i=1}^n (p_i - \mathrm{best}_i)^2
+  &&\text{\code{obj\_l2 <- obj + constraintL2(mu = best, sigma = sigma\_l2)}}
+\end{align}
+where \code{+} on two \code{objfn}s sums value, gradient, and Hessian
+(\code{"+.fn"}, \file{R/classes.R}).
+
+\section{Summary: what each construction preserves and loses}
+
+\begin{center}
+\begin{tabular}{@{}p{3.3cm}p{5.2cm}p{5.4cm}@{}}
+\toprule
+ & \textbf{FIM-anisotropic} & \textbf{Isotropic L2} \\
+\midrule
+Curvature input & full spectrum $s_1,\ldots,s_n$ and eigenvectors $V$ & one scalar, $\mathrm{median}(s)$ \\
+Resulting $\sigma$ & one per parameter, $\sigma^{\mathrm{fim}}_i$, direction-informed via $V$ & one shared value $\sigma^{\mathrm{l2}}$ for all $n$ parameters \\
+Relation to $\mathrm{Prec}_{\mathrm{fim}}$ & exact on the diagonal only; off-diagonal (cross-parameter) coupling dropped & exact -- $\mathrm{Prec}_{\mathrm{l2}}$ was already diagonal ($=w^{\mathrm{iso}}I$) \\
+Effect on stiff directions & weight $w^{\mathrm{fim}}_i \propto 1/s_i$ vanishes as $s_i$ grows -- largely untouched & same absolute pull as everywhere else -- can distort well-identified parameters \\
+Effect on sloppy directions & weight $w^{\mathrm{fim}}_i \propto \texttt{strength}/\texttt{eps\_reg}$ near the floor -- strong, targeted pull & only as strong as the single global $w^{\mathrm{iso}}$ allows \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\vspace{0.7em}
+\noindent\textit{Note:} \code{strength = 0.1} is currently a fixed constant
+applied identically to both constructions, with no calibration procedure
+implemented in the script.
+
+\end{document}
