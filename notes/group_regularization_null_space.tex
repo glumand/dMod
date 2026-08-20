@@ -1,0 +1,363 @@
+\documentclass[11pt]{article}
+\usepackage[margin=2.7cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{parskip}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta}
+
+\definecolor{stiffcol}{HTML}{146B64}
+\definecolor{sloppycol}{HTML}{93611C}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  columns=fullflexible,
+  breaklines=true,
+  frame=single,
+  language=R,
+  commentstyle=\color{gray},
+}
+
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\file}[1]{\textcolor{black!60}{\texttt{#1}}}
+\newcommand{\stiff}[1]{\textcolor{stiffcol}{\textbf{#1}}}
+\newcommand{\slop}[1]{\textcolor{sloppycol}{\textbf{#1}}}
+
+\title{Regularizing Groups, Not Parameters\\[2pt]
+\large FIM Null-Space Penalties for Structurally Non-Identifiable Parameter Groups}
+\author{}
+\date{Companion to \file{notes/fim\_l2\_regularization\_calculations.tex}\\
+Reference implementation: \file{scripts/fim\_l2\_constraintL2.R}}
+
+\begin{document}
+\maketitle
+\vspace{-1.5em}
+
+\section{The core idea}
+
+Near a fit $p^*$, the objective looks like a bowl. If a group of parameters is
+structurally non-identifiable, that bowl is not round: it is a long, flat
+valley in some direction and steep in every other. The valley direction is,
+in general, \emph{not} the axis of any single raw parameter -- it is a mix of
+several. Figure~\ref{fig:valley} sketches this for two parameters $p_1, p_2$.
+
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[scale=1.35]
+  \draw[dashed, gray!50] (-2.4,0) -- (2.4,0) node[right, gray] {\scriptsize $p_1$};
+  \draw[dashed, gray!50] (0,-1.7) -- (0,1.7) node[above, gray] {\scriptsize $p_2$};
+  \foreach \a/\b in {0.55/0.2, 0.9/0.33, 1.25/0.46, 1.6/0.59} {
+    \draw[gray!65, thin, rotate around={45:(0,0)}] (0,0) ellipse ({\a} and {\b});
+  }
+  \draw[<->, thick, sloppycol, line width=1.1pt] (-1.15,-1.15) -- (1.15,1.15);
+  \node[sloppycol, right] at (1.15,1.05) {\scriptsize\textbf{sloppy / null}};
+  \draw[<->, thick, stiffcol, line width=1.1pt] (-0.42,0.42) -- (0.42,-0.42);
+  \node[stiffcol, above right] at (0.30,0.42) {\scriptsize\textbf{stiff}};
+  \fill (0,0) circle (1.1pt);
+  \node[below left] at (0,0) {\scriptsize $p^*$};
+\end{tikzpicture}
+\caption{Contours of the objective near a fit $p^*$. The \slop{amber} and
+\stiff{teal} axes are the valley's own directions, not the raw $p_1,p_2$ axes
+(grey, dashed). A penalty built directly from $p_1$ and $p_2$ individually
+cannot avoid mixing both.}
+\label{fig:valley}
+\end{figure}
+
+The rest of this note builds a penalty aligned with the amber axis and
+nothing else. First we need a way to \emph{find} that axis numerically --
+that is what the Fisher Information Matrix (FIM) gives us.
+
+\section{Setup: the local quadratic model}
+
+Expand the objective around a reference point $p^*$ (typically your best fit
+so far). To second order, with the first-order term vanishing at a fit,
+\begin{equation}
+  \mathrm{obj}(p) \;\approx\; \mathrm{obj}(p^*) \;+\; \tfrac{1}{2}\,(p-p^*)^\top H\,(p-p^*),
+\end{equation}
+where $H$ is the Gauss--Newton Hessian -- the same quantity
+\file{fim\_l2\_constraintL2.R} already computes as \code{o\_best\$hessian},
+i.e.\ $H = S^\top W S$ with $S$ the sensitivities and $W$ the inverse-variance
+weights. This \emph{is} the Fisher Information Matrix.
+
+\subsection*{Why expand around a point at all?}
+
+This step is not a formality separate from ``just take the Hessian'' -- it is what makes
+$H$ well defined in the first place. dMod's objective is built from ODE solutions and is
+generally nonlinear in $p$; there is no single, global ``Hessian of the model'' the way
+there would be for an actually-quadratic objective. What exists is $H = \nabla^2
+\mathrm{obj}(p^*)$, the curvature \emph{at one specific point} -- evaluate it somewhere
+else and you get a different matrix, different eigenvectors, possibly a different flat
+direction.
+
+Two consequences follow directly from this:
+\begin{itemize}
+  \item $p^*$ is not just where $H$ happens to live -- it is also the point the penalty
+  in Section~4 is centered on, $R(p) = \lambda(p-p^*)^\top P(p-p^*)$. The penalty acts on
+  the \emph{displacement} $p-p^*$, and $p^*$ is the only point that displacement can
+  meaningfully be measured from, since it is exactly where the curvature was measured.
+  \item Everything built from $H$ -- the stiff/sloppy split, $V_{\mathrm{null}}$, the
+  projector $P$ -- is therefore a \emph{local} description, accurate only near $p^*$
+  (cf.\ ``Local, not global'' in Section~8). In the worked example below, the valley
+  happens to be exactly straight everywhere, because the toy model depends on $u+v$
+  globally and not just locally, which is why $H$ there is exact rather than a local
+  approximation; for a generic nonlinear model this need not hold, and
+  $V_{\mathrm{null}}$ found at $p^*$ should be treated as trustworthy only in a
+  neighborhood of $p^*$.
+\end{itemize}
+
+Diagonalize it (\code{eig <- eigen(H, symmetric = TRUE)}):
+\begin{equation}
+  H \;=\; V\,\mathrm{diag}(s_1,\ldots,s_n)\,V^\top .
+\end{equation}
+$V$ is orthogonal -- its columns $v_1,\ldots,v_n$ are the curvature's own
+axes, each perpendicular to every other. $s_i$ is how sharply the objective
+curves along $v_i$: large $s_i$ means that direction is pinned down tightly
+by the data (stiff); $s_i$ near zero means the data barely constrains it at
+all (sloppy) -- moving along $v_i$ changes the objective almost not at all,
+exactly what a structural non-identifiability looks like numerically.
+
+\section{Splitting the space}
+
+Sort the eigenvalues by size and threshold them -- you already do exactly
+this:
+\begin{equation}
+  \texttt{is\_zero}_i \;=\; \mathbb{1}\big[\,|s_i| < 10^{-6}\cdot\max_j |s_j|\,\big].
+\end{equation}
+This splits the eigenbasis into two groups of columns:
+\begin{itemize}
+  \item $V_{\mathrm{stiff}}$ -- eigenvectors with non-negligible curvature: directions the data actually pins down.
+  \item $V_{\mathrm{null}}$ -- eigenvectors with (numerically) zero curvature: directions the data says nothing about, i.e.\ the non-identifiable group, expressed in its own natural coordinates rather than yours.
+\end{itemize}
+$V_{\mathrm{null}}$ is a set of \emph{directions} in parameter space,
+generally a mix of several raw parameters (the amber axis in
+Figure~\ref{fig:valley}), \emph{not} a subset of parameter names the way
+\code{mu} in \code{constraintL2(mu, sigma)} is.
+
+\section{The null-space penalty}
+
+Build the matrix that projects any vector onto $V_{\mathrm{null}}$'s span:
+\begin{equation}
+  P \;=\; V_{\mathrm{null}}\,V_{\mathrm{null}}^\top .
+\end{equation}
+Because the columns of $V_{\mathrm{null}}$ are orthonormal, $P$ is symmetric
+and \emph{idempotent}, $PP = P$ (projecting twice does nothing a single
+projection didn't already do). Penalize only the component of $p$ that lands
+inside that projection:
+\begin{equation}
+  R(p) \;=\; \lambda\,(p-p^*)^\top P\,(p-p^*) \;=\; \lambda\,\big\lVert V_{\mathrm{null}}^\top (p-p^*) \big\rVert^2 .
+\end{equation}
+The right-hand form is the more intuitive one: $z = V_{\mathrm{null}}^\top
+(p-p^*)$ is just $p-p^*$ re-expressed in the sloppy eigenbasis, and $R =
+\lambda\lVert z\rVert^2$ is an ordinary, isotropic L2 penalty -- but applied
+to $z$, not to $p$. It is the same trick as regularizing ``only some
+parameters,'' except the coordinates being regularized are a
+rotated/projected combination discovered from the FIM, not a subset of names
+picked by hand.
+
+\subsection*{Value, gradient, Hessian}
+
+Because $R$ is exactly quadratic, all three are closed-form and exact -- no
+chain rule, no \code{deriv2} needed:
+\begin{equation}
+  \nabla R \;=\; 2\lambda P\,(p-p^*), \qquad \nabla^2 R \;=\; 2\lambda P \quad\text{(constant, independent of $p$).}
+\end{equation}
+
+\subsection*{Why the identified combination is untouched}
+
+Take any displacement $\delta$ that lies purely in the stiff subspace,
+$\delta = V_{\mathrm{stiff}}\,c$ for some coefficients $c$. Since $V$'s
+columns are mutually orthogonal by construction, $V_{\mathrm{null}}^\top
+V_{\mathrm{stiff}} = 0$, so
+\begin{equation}
+  P\delta \;=\; V_{\mathrm{null}}\big(V_{\mathrm{null}}^\top V_{\mathrm{stiff}}\big)c \;=\; 0
+  \qquad\text{exactly, not approximately -- for any $c$.}
+\end{equation}
+$R$ and its gradient are \emph{identically} zero for any move confined to the
+identified directions. This is the property a per-parameter
+\code{constraintL2} prior cannot offer: unless a sloppy eigenvector happens
+to line up with one raw parameter axis, no choice of diagonal $\sigma_i$ can
+null out a direction exactly -- it can only make the leakage smaller.
+
+\section{Worked example}
+
+Take the multiplicative symmetry discussed earlier: a model where only the
+product $k_1 k_2$ is identifiable, not $k_1$ and $k_2$ separately. Working in
+dMod's usual log-parametrization, $u = \log k_1$, $v = \log k_2$, the data
+only ever sees $u+v$. Near the fit, with data-curvature constant $c$ along
+$u+v$, the objective's curvature is
+\begin{equation}
+  H \;=\; c\begin{pmatrix}1&1\\1&1\end{pmatrix}, \qquad c = 4.
+\end{equation}
+This $H$ is exactly singular -- not just small in one direction, genuinely
+zero -- which makes the eigendecomposition easy to do by hand.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}lll@{}}
+\toprule
+eigenvalue $s$ & eigenvector $v$ & reading \\
+\midrule
+$8$ & $(1,\,1)/\sqrt{2}$ & \stiff{stiff} -- the identified direction, $u+v$ \\
+$0$ & $(1,\,-1)/\sqrt{2}$ & \slop{sloppy} -- the null direction, $u-v$ \\
+\bottomrule
+\end{tabular}
+\caption{Eigendecomposition of $H$.}
+\end{table}
+
+So $V_{\mathrm{null}} = (1,-1)/\sqrt{2}$, and the projector is
+\begin{equation}
+  P \;=\; V_{\mathrm{null}}V_{\mathrm{null}}^\top \;=\; \begin{pmatrix}0.5 & -0.5\\ -0.5 & 0.5\end{pmatrix}.
+\end{equation}
+Writing $\delta = (\delta_u,\delta_v) = (u-u^*,\,v-v^*)$, the penalty reduces
+to a single term:
+\begin{equation}
+  R(u,v) \;=\; \tfrac{1}{2}\lambda\,(\delta_u - \delta_v)^2,
+\end{equation}
+which depends \emph{only} on the gap $\delta_u - \delta_v$ -- i.e.\ only on
+how far the current gauge has drifted from the reference gauge -- never on
+$\delta_u+\delta_v$, the quantity the data actually fits.
+
+\section{Naive vs.\ projector, side by side}
+
+Compare the gradients of the two penalties directly. ``Naive'' is
+\code{constraintL2(mu = c(u=u*, v=v*), sigma = c(}$\sigma,\sigma$\code{))},
+i.e.\ $R_{\mathrm{naive}} = (\delta_u^2+\delta_v^2)/\sigma^2$. The number
+that matters is $\partial R/\partial u + \partial R/\partial v$ -- the net
+push along the stiff direction $(1,1)$, i.e.\ against the identified
+combination:
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{}lccl@{}}
+\toprule
+ & $\partial R/\partial u$ & $\partial R/\partial v$ & sum (pull on $u+v$) \\
+\midrule
+naive, diagonal & $2\delta_u/\sigma^2$ & $2\delta_v/\sigma^2$ &
+  $2(\delta_u+\delta_v)/\sigma^2$ -- \textbf{nonzero} unless $\delta_u=-\delta_v$ \\
+projector & $\lambda(\delta_u-\delta_v)$ & $-\lambda(\delta_u-\delta_v)$ &
+  \stiff{$0$ -- always, for every $\delta$} \\
+\bottomrule
+\end{tabular}
+\caption{Net pull on the identified combination $u+v$.}
+\end{table}
+
+The naive penalty's sum is zero only on the razor's edge where
+$\delta_u=-\delta_v$ exactly -- everywhere else it quietly drags the fit's
+best-supported quantity, $u+v$, toward $u^*+v^*$ too, competing with the data
+even though the data already had an opinion there. The projector's sum is
+zero identically -- it has no opinion about $u+v$ at all, by construction.
+
+\begin{figure}[h]
+\centering
+\begin{minipage}{0.46\textwidth}
+\centering
+\begin{tikzpicture}[scale=1.05]
+  \draw[dashed, gray!50] (-1.3,0) -- (1.3,0);
+  \draw[dashed, gray!50] (0,-1.1) -- (0,1.1);
+  \foreach \ang in {0,45,90,135,180,225,270,315} {
+    \draw[-{Stealth[length=2mm]}, gray!70, line width=0.9pt]
+      (0,0) -- (\ang:0.85);
+  }
+  \fill (0,0) circle (1pt);
+\end{tikzpicture}
+
+\footnotesize Naive: equal pull regardless of what the\\data already knows.
+\end{minipage}
+\hfill
+\begin{minipage}{0.46\textwidth}
+\centering
+\begin{tikzpicture}[scale=1.05]
+  \draw[dashed, gray!50] (-1.3,0) -- (1.3,0);
+  \draw[dashed, gray!50] (0,-1.1) -- (0,1.1);
+  \draw[<->, sloppycol, -{Stealth[length=2.2mm]}, line width=1.2pt] (-0.6,-0.6) -- (0.6,0.6);
+  \node[stiffcol] at (0.68,-0.35) {\scriptsize $0$};
+  \node[stiffcol] at (-0.68,0.35) {\scriptsize $0$};
+  \fill (0,0) circle (1pt);
+\end{tikzpicture}
+
+\footnotesize Projector: pull confined to $V_{\mathrm{null}}$;\\the stiff direction reads exactly $0$.
+\end{minipage}
+\caption{Naive isotropic pull (left) vs.\ null-space projector pull (right).}
+\end{figure}
+
+\section{From formula to code}
+
+\code{constraintL2()} cannot express this directly -- it only builds a
+diagonal penalty in the raw parameter names (\file{R/objClass.R}, around line
+433). $P$ is generally dense, so the penalty needs its own small
+\code{objfn}, built the same way \code{constraintL2} is: return an
+\code{objlist} with exact value, gradient and Hessian, and let \code{+} fold
+it into the rest of the objective.
+
+\begin{lstlisting}
+# H, eig, s, is_zero, best already computed in fim_l2_constraintL2.R, Part 8
+V_null <- eig$vectors[, is_zero, drop = FALSE]   # n x m, m = # non-identifiable directions
+P      <- V_null %*% t(V_null)                   # n x n projector, symmetric, P %*% P == P
+
+groupL2 <- function(P, p0, lambda = 0.1) {
+  force(P); force(p0); force(lambda)
+  function(..., fixed = NULL, deriv = TRUE, deriv2 = FALSE,
+           conditions = NULL, env = NULL) {
+    p     <- list(...)[[1]]
+    delta <- p[names(p0)] - p0
+    Pd    <- as.numeric(P %*% delta)
+
+    value <- lambda * sum(delta * Pd)              # R(p) = lambda * delta' P delta
+    grad  <- setNames(2 * lambda * Pd, names(p0))   # exact, no deriv2 needed
+    hess  <- 2 * lambda * P
+    dimnames(hess) <- list(names(p0), names(p0))
+
+    out <- objlist(value = value, gradient = grad, hessian = hess)
+    attr(out, "prior") <- value
+    attr(out, "env")   <- env
+    out
+  }
+}
+
+prior_group <- groupL2(P, best, lambda = 0.1)
+class(prior_group) <- c("objfn", "fn")
+attr(prior_group, "parameters") <- names(best)
+
+obj_group <- obj + prior_group   # "+.fn" sums value / gradient / hessian, as usual
+\end{lstlisting}
+
+If \code{best} sits behind a \code{trafo}/\code{P()} reparameterization,
+apply this at the same (outer) parameter level $H$ was computed at -- the
+same level \code{constraintL2} already operates on -- so no extra chain rule
+is required.
+
+\section{Practical notes}
+
+\paragraph{Local, not global.} $H$ is a snapshot at $p^*$. If the true
+symmetry is curved in your raw parameters (it usually is not, once you are
+already in log-space -- multiplicative symmetries become straight lines
+exactly like the worked example), $V_{\mathrm{null}}$ is only accurate near
+$p^*$; re-evaluate $H$ if the fit moves far from where it was computed.
+
+\paragraph{Relation to your \code{sigma\_fim} construction.} The existing
+anisotropic recipe uses a \emph{soft}, reciprocal weight $w_i =
+\texttt{strength}/(s_i+\texttt{eps\_reg})$ for every eigendirection, then
+keeps only the diagonal of $V\,\mathrm{diag}(w)\,V^\top$ -- every direction
+gets \emph{some} pull, and cross-parameter structure is discarded when
+collapsing to a diagonal $\sigma$. The projector above is the same
+construction pushed to its limit: a \emph{hard} 0/1 weight (\code{is\_zero})
+instead of a soft reciprocal one, and the full dense $P$ kept intact instead
+of flattened to a diagonal. The result is a strict either/or: a direction is
+either fully exempt or fully regularized, and the ``how strongly'' knob
+($\lambda$) is decoupled from ``which directions'' (the mask) -- whereas
+today those two questions are answered by the same number,
+\code{strength / (s\_i + eps\_reg)}.
+
+\paragraph{If you know the symmetry analytically.} When
+\code{symmetryDetection()} (\file{R/symmetryDetection.R}) can name the
+symmetry generator in closed form, that is strictly better than any
+numerical $V_{\mathrm{null}}$: reparametrize via \code{repar()} into
+(identified combination, gauge coordinate) directly, and
+\code{constraintL2()} the gauge coordinate alone. $z = V_{\mathrm{null}}^\top
+(p-p^*)$ above is exactly a numerical stand-in for that gauge coordinate,
+useful precisely when deriving it by hand is not practical.
+
+\end{document}
