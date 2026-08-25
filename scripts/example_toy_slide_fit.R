@@ -105,11 +105,12 @@ set.seed(11)
 setwd(tempdir())
 
 ## --- 0. Waterfall diagnostics: condition number at first vs. last step ----
-## mstrust() already prints a per-fit "practical identifiability" summary at
-## each fit's FIRST evaluation -- singular values of the flattened
-## prediction Jacobian d(prediction)/d(parameter) and their condition number
-## (max/min) -- see .mstrust_sensitivity_wrapper() in R/statistics.R. That's
-## printed only, not returned, so it can't be attached to a parframe.
+## mstrust_fim() already prints a per-fit "practical identifiability"
+## summary at each fit's FIRST evaluation -- singular values of the
+## flattened prediction Jacobian d(prediction)/d(parameter) and their
+## condition number (max/min) -- see .mstrust_sensitivity_wrapper() in
+## R/statistics.R (plain mstrust() does not print this). That's printed
+## only, not returned, so it can't be attached to a parframe.
 ## sensitivityConditionNumber() below recomputes the same number for an
 ## arbitrary parameter vector, letting us capture it both BEFORE
 ## optimization (at each fit's starting point) and AFTER (at its converged
@@ -225,10 +226,10 @@ obj_wrong <- normL2(data, g_wrong * x_wrong * p_wrong)
 init_wrong <- log(c(kAC = 0.5, k3 = 0.2, A = 5)) + rnorm(3, sd = 0.3)
 
 ## Precompute the 600 random starting points as a parframe (msParframe(), a
-## reproducible-random-starts helper) instead of letting mstrust() sample
-## them internally -- passed as `center`, mstrust() then uses each row's
+## reproducible-random-starts helper) instead of letting mstrust_fim() sample
+## them internally -- passed as `center`, mstrust_fim() then uses each row's
 ## parameters directly as that fit's parinit (no further randomization; see
-## the `is.parframe(center)` branch in mstrust()/R/statistics.R), so
+## the `is.parframe(center)` branch in mstrust_fim()/R/statistics.R), so
 ## cond_start_wrong[i], computed from starts_wrong row i BEFORE fitting,
 ## lines up index-for-index with fit i.
 n_fits_wrong <- 600
@@ -236,7 +237,7 @@ starts_wrong <- msParframe(init_wrong, n = n_fits_wrong, seed = 21, sd = 0.3)
 cond_start_wrong <- vapply(seq_len(n_fits_wrong), function(i)
   sensitivityConditionNumber(obj_wrong, as.parvec(starts_wrong, i)), numeric(1))
 
-fits_wrong <- mstrust(obj_wrong, starts_wrong, studyname = "toySlideWrongFit", rinit = 1, rmax = 10,
+fits_wrong <- mstrust_fim(obj_wrong, starts_wrong, studyname = "toySlideWrongFit", rinit = 1, rmax = 10,
                        cores = 1, iterlim = 300)
 pf_wrong <- as.parframe(fits_wrong)
 best_wrong <- as.parvec(pf_wrong, 1)
@@ -281,7 +282,7 @@ init_true <- pouter_true + rnorm(4, sd = 0.3)
 parupper <- c(k1 = 6, k2 = 4, k3 = 4, A = 4)
 parlower <- c(k1 = -4, k2 = -4, k3 = -4, A = -4)
 
-fits_true <- mstrust(obj_true, init_true, studyname = "toySlideTrueFit", rinit = 1, rmax = 10,
+fits_true <- mstrust_fim(obj_true, init_true, studyname = "toySlideTrueFit", rinit = 1, rmax = 10,
                       fits = 20, cores = 1, iterlim = 300,
                       parupper = parupper, parlower = parlower)
 pf_true <- as.parframe(fits_true)
@@ -359,9 +360,9 @@ data_d <- as.datalist(sim_d, split.by = "condition")
 obj_wrong_d <- normL2(data_d, g_wrong * x_wrong * p_wrong)
 obj_true_d  <- normL2(data_d, g_true * x_true * p_true)
 
-fits_wrong_d <- mstrust(obj_wrong_d, init_wrong, studyname = "toySlideWrongFitD", rinit = 1, rmax = 10,
+fits_wrong_d <- mstrust_fim(obj_wrong_d, init_wrong, studyname = "toySlideWrongFitD", rinit = 1, rmax = 10,
                          fits = 20, cores = 1, iterlim = 300)
-fits_true_d  <- mstrust(obj_true_d, log(true_pars_d) + rnorm(4, sd = 0.3), studyname = "toySlideTrueFitD",
+fits_true_d  <- mstrust_fim(obj_true_d, log(true_pars_d) + rnorm(4, sd = 0.3), studyname = "toySlideTrueFitD",
                          rinit = 1, rmax = 10, fits = 20, cores = 1, iterlim = 300)
 pf_wrong_d <- as.parframe(fits_wrong_d)
 pf_true_d  <- as.parframe(fits_true_d)

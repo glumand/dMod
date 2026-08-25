@@ -129,12 +129,13 @@ setwd(tempdir())
 
 ## --- 0. Waterfall diagnostics: condition number at first vs. last step ----
 ## Same helpers as scripts/example_toy_slide_fit.R (see that file for the
-## full derivation): mstrust() already prints a per-fit "practical
+## full derivation): mstrust_fim() already prints a per-fit "practical
 ## identifiability" summary at each fit's FIRST evaluation -- singular
 ## values of the flattened prediction Jacobian d(prediction)/d(parameter)
 ## and their condition number (max/min) -- see
-## .mstrust_sensitivity_wrapper() in R/statistics.R. That's printed only,
-## not returned, so it can't be attached to a parframe.
+## .mstrust_sensitivity_wrapper() in R/statistics.R (plain mstrust() does
+## not print this). That's printed only, not returned, so it can't be
+## attached to a parframe.
 ## sensitivityConditionNumber() below recomputes the same number for an
 ## arbitrary parameter vector, letting us capture it both BEFORE
 ## optimization (at each fit's starting point) and AFTER (at its converged
@@ -408,10 +409,10 @@ cat("Only", sum(!is_zero), "of", length(ev),
 ## non-identifiability story. plotValues() below shows the resulting spread.
 ##
 ## Starting points are precomputed as a parframe (msParframe(), a
-## reproducible-random-starts helper) instead of letting mstrust() sample
-## them internally -- passed as `center`, mstrust() then uses each row's
+## reproducible-random-starts helper) instead of letting mstrust_fim() sample
+## them internally -- passed as `center`, mstrust_fim() then uses each row's
 ## parameters directly as that fit's parinit (no further randomization; see
-## the `is.parframe(center)` branch in mstrust()/R/statistics.R), so
+## the `is.parframe(center)` branch in mstrust_fim()/R/statistics.R), so
 ## cond_start[i], computed from starts row i BEFORE fitting, lines up
 ## index-for-index with fit i.
 cat("=== Part C: multistart run (", n_cores, "cores ) ===\n")
@@ -428,7 +429,7 @@ sv_start <- lapply(seq_len(n_fits), function(i)
 cond_start <- vapply(sv_start, function(sv) max(sv) / min(sv), numeric(1))
 min_sv_start <- vapply(sv_start, min, numeric(1))
 
-fits <- mstrust(obj, starts, studyname = "toyMapkFit", rinit = 1, rmax = 10,
+fits <- mstrust_fim(obj, starts, studyname = "toyMapkFit", rinit = 1, rmax = 10,
                  cores = n_cores, iterlim = 600)
 pf <- as.parframe(fits)
 best_ms <- as.parvec(pf, 1)

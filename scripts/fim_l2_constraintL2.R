@@ -292,7 +292,7 @@ sv_start <- lapply(seq_len(n_fits), function(i)
 cond_start <- vapply(sv_start, function(sv) max(sv) / min(sv), numeric(1))
 min_sv_start <- vapply(sv_start, min, numeric(1))
 
-fits <- mstrust(obj, starts, studyname = "toyMapkFitCL2", rinit = 1, rmax = 10,
+fits <- mstrust_fim(obj, starts, studyname = "toyMapkFitCL2", rinit = 1, rmax = 10,
                  cores = n_cores, iterlim = 600)
 pf <- as.parframe(fits)
 best_ms <- as.parvec(pf, 1)
@@ -355,7 +355,7 @@ obj_l2  <- obj + constraintL2(mu = best, sigma = sigma_l2)
 ## Identical to example_toy_mapk_fim_fit.R's fitAndPlotRegularized().
 fitAndPlotRegularized <- function(obj_reg, label, file_stub) {
   cat("=== ", label, ": multistart run (", n_cores, "cores ) ===\n")
-  fits_reg <- mstrust(obj_reg, starts, studyname = paste0("toyMapkFitCL2_", file_stub),
+  fits_reg <- mstrust_fim(obj_reg, starts, studyname = paste0("toyMapkFitCL2_", file_stub),
                        rinit = 1, rmax = 10, cores = n_cores, iterlim = 600)
   pf_reg <- as.parframe(fits_reg)
 

@@ -997,8 +997,6 @@ mstrust <- function(objfun, center, studyname, rinit = .1, rmax = 10, fits = 20,
       }
     }
 
-    argstrust$objfun <- .mstrust_sensitivity_wrapper(objfun, i)
-
     # Check if traceFile is requested. In that case combine tracefile, with logfolder and fit number
     if (!is.null(argstrust[["traceFile"]])) {
       digits <- floor(log10(fits))
@@ -1152,7 +1150,355 @@ mstrust <- function(objfun, center, studyname, rinit = .1, rmax = 10, fits = 20,
   if (stats) {
     cat(msg)
   }
-  
+
+  return(m_parlist)
+}
+
+#' Non-Linear Optimization, multi start, with per-fit FIM diagnostics
+#'
+#' @description Identical to [mstrust()], except that each fit slot's
+#'   *first* `objfun` evaluation also prints a practical-identifiability
+#'   summary of the sensitivity matrix (the Jacobian d(prediction)/d(parameter),
+#'   i.e. `attr(<prediction>, "deriv")`, which underlies the Fisher
+#'   Information Matrix): the singular values of the flattened
+#'   `[time*observable, parameter]` Jacobian and its condition number
+#'   (largest / smallest singular value), one summary per condition. A
+#'   large condition number flags near-collinear parameter directions
+#'   (poor practical identifiability); a singular value of ~0 flags a
+#'   direction the data cannot see at all.
+#'
+#' @inheritParams mstrust
+#'
+#' @details See [mstrust()] for the optimisation behaviour, which is
+#'   unchanged. The diagnostic wrapper proxies straight through to `objfun`
+#'   and only inspects its return value on the first call per fit slot; it
+#'   never evaluates `objfun` an extra time, so call-count-sensitive
+#'   objective functions (e.g. relying on retry logic) are unaffected.
+#'
+#' @return A parlist holding errored and converged fits.
+#'
+#' @seealso [mstrust()], which this wraps without the FIM diagnostics.
+#'
+#' @export
+#' @import parallel
+mstrust_fim <- function(objfun, center, studyname, rinit = .1, rmax = 10, fits = 20, cores = 1, optmethod = "trust",
+                    samplefun = "rnorm", resultPath = ".", stats = FALSE, output = FALSE, cautiousMode = FALSE, start1stfromCenter = FALSE,
+                    retry = TRUE, nTries = 10L,
+                    ...) {
+
+  narrowing <- NULL
+
+
+  # Check if on Windows
+  cores <- sanitizeCores(cores)
+
+
+  # Argument parsing, sorting, and enhancing
+  # Gather all function arguments
+  varargslist <- list(...)
+
+  argslist <- list(
+    objfun = objfun, center = center, studyname = studyname,
+    rinit = rinit, rmax = rmax, fits = fits,
+    cores = cores, optmethod = optmethod, samplefun = samplefun,
+    resultPath = resultPath, stats = stats, output = output,
+    cautiousMode = cautiousMode, retry = retry, nTries = nTries)
+  argslist <- c(argslist, varargslist)
+
+  # Add extra arguments
+  argslist$n <- length(center) # How many inital values do we need?
+
+  # Determine target function for each function argument.
+  # First, define argument names used locally in mstrust_fim().
+  # Second, check what trust() and samplefun() accept and check for name clashes.
+  # Third, whatever is unused is passed to the objective function objfun().
+  nameslocal <- c("studyname", "center", "fits", "cores", "optmethod", "samplefun",
+                  "resultPath", "stats", "narrowing", "output",
+                  "retry", "nTries")
+  namestrust <- intersect(names(formals(trust)), names(argslist))
+  namessample <- intersect(names(formals(samplefun)), names(argslist))
+  if (length(intersect(namestrust, namessample) != 0)) {
+    stop("Argument names of trust() and ", samplefun, "() clash.")
+  }
+
+  # Default optimizer
+  namesobj <- setdiff(names(argslist), c(namestrust, namessample, nameslocal))
+
+  # Assemble argument lists common to all calls in mclapply
+  # Sample function
+  argssample <- structure(vector("list", length = length(namessample)), names = namessample)
+  for (name in namessample) {
+    argssample[[name]] <- argslist[[name]]
+  }
+
+  # Objective function
+  argsobj <- structure(vector("list", length = length(namesobj)), names = namesobj)
+  for (name in namesobj) {
+    argsobj[[name]] <- argslist[[name]]
+  }
+
+  # Trust optimizer, except for initial values
+  argstrust <- structure(vector("list", length = length(namestrust)), names = namestrust)
+  for (name in namestrust) {
+    argstrust[[name]] <- argslist[[name]]
+  }
+
+  # Assemble and create output filenames, folders and files
+  m_timeStamp <- paste0(format(Sys.time(), "%d-%m-%Y-%H%M%S"))
+
+  # Folders
+  resultFolderBase <- file.path(argslist$resultPath, argslist$studyname)
+  m_trial <- paste0("trial-", length(dir(resultFolderBase, pattern = "trial*")) + 1)
+  resultFolder <- file.path(resultFolderBase, paste0(m_trial, "-", m_timeStamp))
+
+  interResultFolder <- file.path(resultFolder, "interRes")
+  dir.create(path = interResultFolder, showWarnings = FALSE, recursive = TRUE)
+
+  # Files
+  fileNameLog <- paste0("mstrust.log")
+  fileNameParList <- paste0("parameterList.Rda")
+  fileLog <- file.path(resultFolder, fileNameLog)
+  fileParList <- file.path(resultFolder, fileNameParList)
+
+
+
+  # Apply trust optimizer in parallel
+  # The error checking leverages that mclappy runs each job in a try().
+  logfile <- file(fileLog, open = "w")
+
+  # Parameter assignment information
+  if (is.null(narrowing) || narrowing[1] == 1) {
+    msg <- paste0("Parameter assignment information\n",
+                  strpad("mstrust_fim", 12),                    ": ", paste0(nameslocal, collapse = ", "), "\n",
+                  strpad("trust", 12),                          ": ", paste0(namestrust, collapse = ", "), "\n",
+                  strpad(as.character(argslist$samplefun), 12), ": ", paste0(namessample, collapse = ", "), "\n\n")
+    #strpad(as.character(argslist$objfun), 12),    ": ", paste0(namesobj, collapse = ", "), "\n\n")
+    writeLines(msg, logfile)
+    flush(logfile)
+  }
+
+  # Write narrowing status information to file
+  if (!is.null(narrowing)) {
+    msg <- paste0("--> Narrowing, run ", narrowing[1], " of ", narrowing[2], "\n",
+                  "--> " , fits, " fits to run\n")
+    writeLines(msg, logfile)
+    flush(logfile)
+  }
+
+  if(is.parframe(center)) {
+    fits <- nrow(center)
+  }
+
+
+  cores <- min(fits, cores)
+  if (cores > 1) {
+
+    # Start cluster if on windows
+    if (Sys.info()[['sysname']] == "Windows") {
+
+      cluster <- parallel::makeCluster(cores)
+      doParallel::registerDoParallel(cluster)
+      parallel::clusterCall(cl = cluster, function(x) .libPaths(x), .libPaths())
+
+      varlist <- ls()
+      # Exclude things like "missing argument"
+      varlist <- c("objfun", "center", "argstrust",
+                   "samplefun", "argssample", "argsobj",
+                   "output", "interResultFolder", "logfile")
+      parallel::clusterExport(cluster, envir = environment(), varlist = varlist)
+
+    } else {
+
+      doParallel::registerDoParallel(cores = cores)
+
+    }
+
+    "%mydo%" <- foreach::"%dopar%"
+
+  } else {
+
+    "%mydo%" <- foreach::"%do%"
+
+  }
+
+
+  loaded_packages <- .packages()
+  m_parlist <- as.parlist(foreach::foreach(i = 1:fits,
+                                           .packages = loaded_packages,
+                                           .inorder = TRUE,
+                                           .options.multicore = list(preschedule = FALSE)
+  ) %mydo% {
+
+    suppressMessages(loadDLL(objfun))
+
+    if(is.parframe(center)) {
+      argstrust$parinit <- as.parvec(center, i)
+    } else {
+      if (i == 1 & start1stfromCenter) {
+        # First fit always starts from center
+        argstrust$parinit <- center
+      } else {
+        # All other fits start from random positions
+        argstrust$parinit <- center + do.call(samplefun, argssample)
+      }
+    }
+
+    argstrust$objfun <- .mstrust_sensitivity_wrapper(objfun, i)
+
+    # Check if traceFile is requested. In that case combine tracefile, with logfolder and fit number
+    if (!is.null(argstrust[["traceFile"]])) {
+      digits <- floor(log10(fits))
+      argstrust[["traceFile"]] <- file.path(resultFolder, paste0(formatC(i, digits = digits, flag = "0"), "_", argslist[["traceFile"]]))
+    }
+
+    # Each fit must rediscover its own condition-specific steady-state roots.
+    # A stale Pequil/Pimpl warm-start root would seed this fit's equilibration
+    # and short-circuit the parfn-internal multistart, silently pinning the
+    # wrong basin in multistable models. This body runs once per fit in BOTH
+    # backends, so flushing here covers both leak paths:
+    #   - cores = 1 (%do%): all fits share one objfun closure; clear the root
+    #     left by the previous fit.
+    #   - cores > 1 (%dopar%): the body runs inside the fork, so this clears the
+    #     fork's copy-on-write inheritance of whatever the parent cache held at
+    #     fork time (non-empty e.g. if objfun was evaluated before mstrust_fim),
+    #     which would otherwise be the SAME stale root in every fork.
+    try(resetWarmStarts(objfun, verbose = FALSE), silent = TRUE)
+
+    # Retry loop: a try-error or fit$error triggers re-sampling parinit and
+    # re-running optmethod, up to nTries times. parframe-supplied centers
+    # are skipped (rows are taken as given). Warm-start caches in
+    # Pequil/Pimpl are flushed between attempts via resetWarmStarts() so
+    # the retry does not inherit the dead basin.
+    max_tries <- if (isTRUE(retry) && !is.parframe(center)) as.integer(nTries) else 1L
+    fit <- NULL
+    for (try_i in seq_len(max_tries)) {
+      fit <- try(do.call(optmethod, c(argstrust, argsobj)), silent = !output)
+      ok  <- !inherits(fit, "try-error") && is.list(fit) && !any(names(fit) == "error")
+      if (ok || try_i == max_tries) break
+      argstrust$parinit <- center + do.call(samplefun, argssample)
+      try(resetWarmStarts(objfun, verbose = FALSE), silent = TRUE)
+    }
+
+    # Keep only numeric attributes of object returned by trust()
+    attr.fit <- attributes(fit)
+    keep.attr <- sapply(attr.fit, is.numeric)
+    fit <- fit[1:length(fit)] # deletes attributes
+    if (any(keep.attr)) attributes(fit) <- c(attributes(fit), attr.fit[keep.attr]) # attach numeric attributes
+
+
+    # In some crashes a try-error object is returned which is not a list. Since
+    # each element in the parlist is assumed to be a list, we wrap these cases.
+    if (!is.list(fit)) {
+      f <- list()
+      f$error <- fit
+      fit <- f
+    }
+
+    fit$parinit <- argstrust$parinit
+
+    # Write current fit to disk
+    if (output) {
+      saveRDS(fit, file = file.path(interResultFolder, paste0("fit-", i, ".Rda")))
+      if (cautiousMode) dput(fit[c("value", "argument", "iterations", "converged")], file = file.path(interResultFolder, paste0("fit-", i, ".R")))
+      # Reporting
+      # With concurent jobs and everyone reporting, this is a classic race
+      # condition. Assembling the message beforhand lowers the risk of interleaved
+      # output to the log.
+      msgSep <- "-------"
+      if (any(names(fit) == "error")) {
+        msg <- paste0(msgSep, "\n",
+                      "Fit ", i, " failed after ", fit$iterations, " iterations with error\n",
+                      "--> ", fit$error,
+                      msgSep, "\n")
+
+        writeLines(msg, logfile)
+        flush(logfile)
+      } else {
+        msg <- paste0(msgSep, "\n",
+                      "Fit ", i, " completed\n",
+                      "--> iterations : ", fit$iterations, "\n",
+                      "-->  converged : ", fit$converged, "\n",
+                      "--> obj. value : ", round(fit$value, digits = 2), "\n",
+                      msgSep)
+
+        writeLines(msg, logfile)
+        flush(logfile)
+      }
+    }
+    return(fit)
+  })
+
+  close(logfile)
+
+  if (Sys.info()[['sysname']] == "Windows" & cores > 1) {
+
+    parallel::stopCluster(cluster)
+    doParallel::stopImplicitCluster()
+
+  }
+
+
+
+  # Cull failed and completed fits Two kinds of errors occure. The first returns
+  # an object of class "try-error". The reason for these failures are unknown to
+  # me. The second returns a list of results from trust(), where one name of the
+  # list is error holding an object of class "try-error". These abortions are
+  # due to errors which are captured within trust(). Completed fits return with
+  # a valid result list from trust(), with "error" not part of its names. These
+  # fits, can still be unconverged, if the maximim number of iterations was the
+  # reason for the return of trust(). Be also aware of fits which converge due
+  # to the trust radius hitting rmin. Such fits are reported as converged but
+  # are not in truth.
+  m_trustFlags.converged = 0
+  m_trustFlags.unconverged = 1
+  m_trustFlags.error = 2
+  m_trustFlags.fatal = 3
+  idxStatus <- sapply(m_parlist, function(fit) {
+    if (inherits(fit, "try-error") || any(names(fit) == "error")) {
+      return(m_trustFlags.error)
+    } else if (!any(names(fit) == "converged")) {
+      return(m_trustFlags.fatal)
+    } else if (fit$converged) {
+      return(m_trustFlags.converged)
+    } else {
+      return(m_trustFlags.unconverged)
+    }
+  })
+
+
+  # Wrap up
+  # Write out results
+  if (output) saveRDS(m_parlist, file = fileParList)
+
+  # Remove temporary files
+  if (!cautiousMode) {
+    unlink(interResultFolder, recursive = TRUE)
+  } else {
+    for (f in list.files(interResultFolder, "Rda$")) unlink(f)
+  }
+
+  # Show summary
+  sum.error <- sum(idxStatus == m_trustFlags.error)
+  sum.fatal <- sum(idxStatus == m_trustFlags.fatal)
+  sum.unconverged <- sum(idxStatus == m_trustFlags.unconverged)
+  sum.converged <- sum(idxStatus == m_trustFlags.converged)
+  msg <- paste0("Multi start trust summary\n",
+                "Outcome     : Occurrence\n",
+                "Error       : ", sum.error, "\n",
+                "Fatal       : ", sum.fatal, " must be 0\n",
+                "Unconverged : ", sum.unconverged, "\n",
+                "Converged   : ", sum.converged, "\n",
+                "           -----------\n",
+                "Total       : ", sum.error + sum.fatal + sum.unconverged + sum.converged, paste0("[", fits, "]"), "\n")
+  logfile <- file(fileLog, open = "a")
+  writeLines(msg, logfile)
+  flush(logfile)
+  close(logfile)
+
+  if (stats) {
+    cat(msg)
+  }
+
   return(m_parlist)
 }
 
