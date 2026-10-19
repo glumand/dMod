@@ -26,24 +26,24 @@
 ## handful of big plateaus.
 ##
 ## The result (verified interactively, see fit statistics printed in Part 6)
-## is two things at once, both requested explicitly for this script:
-##   (a) around a hundred distinct plateaus in the waterfall, most hit by
-##       only a handful (1-5) of the 500 multistart runs -- one for nearly
-##       every combination of which blocks locked onto their true frequency
-##       and which locked onto an aliased one;
-##   (b) a MUCH larger best-to-worst objective gap than a single oscillator
-##       block could ever produce: most fits (roughly 490 of 500) land in a
-##       dense cluster of near-optimal combinations, but a rarer tail of
-##       fits gets one or more blocks stuck in a genuinely bad local
-##       optimum (not just "the other" clean alias, but a poorly converged
-##       fit for that block), producing objective values dramatically worse
-##       than the best fit -- hundreds of units worse, vs. a best-fit
-##       neighborhood barely 2 units wide. Because that dense cluster and
-##       that dramatic tail live on such different scales, Part 7 plots the
-##       waterfall twice: once over the full range (shows the tail) and once
-##       zoomed into the dense cluster (shows the ~hundred-plateau
-##       staircase) -- both come from the exact same fits/tol, only the
-##       y-axis window differs.
+## is a waterfall where the large best-to-worst objective gap is not carried
+## by a rare handful of outliers but by MOST of the 500 multistart runs:
+## each block can converge to its true frequency, an aliased frequency (both
+## comparably good), or -- for a sizeable fraction of starts, not just a rare
+## corner case -- a genuinely poorly-fit local optimum for that block (one
+## rate saturates near a box bound while the others collapse near zero,
+## a real, fully-converged local minimum, just a bad one). Because starts
+## are spread wide enough (Part 6) to reach that bad optimum's basin
+## routinely, and M = 7 blocks fail independently and to varying degrees,
+## the 500 runs populate a near-continuous staircase from the best fit
+## (all/most blocks true-or-aliased) out to several thousand objective units
+## worse (multiple blocks badly converged at once) -- only a modest fraction
+## of runs (roughly a third) sit in the tight near-optimal cluster; the rest
+## are spread across the full range. Because the near-optimal cluster and
+## the graded climb above it are still very different scales locally, Part 7
+## plots the waterfall twice: once over the full range and once zoomed into
+## the dense cluster at the bottom -- both come from the exact same
+## fits/tol, only the y-axis window differs.
 ##
 ## Compare scripts/example_toy_sloppy_fit.R (Part C), which uses a single
 ## such oscillator block for the same true/aliased-frequency idiom but only
@@ -180,8 +180,8 @@ p <- P(trafo, condition = "sim", compile = TRUE, modelname = "multiOscillatorTra
 ## sigma_m grows mildly across blocks (0.05, 0.055, ..., ~0.09) so blocks
 ## are not interchangeable but stay comparably informative -- see the header
 ## comment on why this, combined with a wide start spread (Part 6), produces
-## BOTH a hundred-plateau dense cluster near the optimum AND a long,
-## dramatically worse tail from fits where a block's optimizer lands badly.
+## a near-continuous staircase spanning from a dense near-optimal cluster
+## out to a long, graded climb where more and more blocks land badly.
 true_pars_inner <- setNames(rep(1, 3 * M),
                              as.vector(outer(c("w1_", "w2_", "w3_"), seq_len(M), paste0)))
 pouter_true <- log(true_pars_inner)
@@ -201,20 +201,28 @@ obj <- normL2(data, g * x * p)
 outerpars <- getParameters(P(trafo))
 
 ## --- 6. Multistart fit -- NO regularization, wide start spread -------------
-## A wide sd (relative to the ~O(1) basin width of a single block) is what
-## lets different starts fall into different true-vs-aliased basins
-## independently across the M blocks, AND occasionally strands a block far
-## enough from either basin that its own local optimization does badly --
-## the source of the dramatic tail described in the header. Box constraints
-## (+-6 in log-space) only guard against numerically pathological ODEs (a
-## rate many orders of magnitude off 1); they are wide enough to not
-## otherwise interfere with the true/aliased/bad-tail story.
+## sd = 20 (log-space) and a wide +-10 box together are what turn the bad
+## local optimum from a rare corner case into a routine outcome: with sd
+## this wide relative to the box, a large fraction of starts land at or near
+## a box edge for at least one of a block's 3 rates, which is exactly where
+## that block's bad-but-genuine local optimum (one rate saturating high,
+## the other two collapsing near zero) lives. Since this happens to each of
+## the M blocks independently and gets more likely per block the wider the
+## box/sd are relative to the ~O(1) true-vs-aliased basin, MOST of the 500
+## fits end up with at least one -- often several -- blocks landing there,
+## which is what spreads the bulk of the fits (not just a rare tail) across
+## the full objective range. (Empirically: a tighter box/sd, e.g. the +-6/5
+## used previously, keeps ~98% of fits in the near-optimal cluster and only
+## ~2% in a bad-optimum tail; +-10/20 flips that to only about a third
+## staying in the cluster.) All local optima here are genuine (trust()
+## converges, gradient ~ 0) -- the spread reflects real basin sizes in the
+## objective landscape, not truncated/unconverged optimization.
 n_fits <- 500
-parupper <- setNames(rep(6, length(pouter_true)), names(pouter_true))
-parlower <- setNames(rep(-6, length(pouter_true)), names(pouter_true))
+parupper <- setNames(rep(10, length(pouter_true)), names(pouter_true))
+parlower <- setNames(rep(-10, length(pouter_true)), names(pouter_true))
 
 fits <- mstrust(obj, pouter_true, studyname = "multiOscillatorFit", rinit = 1, rmax = 10,
-                 fits = n_fits, cores = min(10, parallel::detectCores()), iterlim = 400, sd = 5,
+                 fits = n_fits, cores = min(10, parallel::detectCores()), iterlim = 400, sd = 20,
                  parupper = parupper, parlower = parlower)
 
 pf <- as.parframe(fits)
@@ -231,10 +239,11 @@ cat(length(vals), "distinct rounded objective values;",
 
 ## --- 7. The waterfall plot: ~2^M genuine local optima, no regularization --
 ## Same underlying step-detected jumps (tol = 0.1) plotted twice: once over
-## the full range, which makes the dramatic worst-vs-best gap visible but
-## squashes the dense cluster into an unreadable line at the bottom; once
-## zoomed via coord_cartesian() into just that cluster, which resolves the
-## hundred-ish individual plateaus the full view can't show at this scale.
+## the full range, where most fits now form a graded staircase climbing
+## continuously from best to worst (not just a dense cluster plus a rare
+## tail); once zoomed via coord_cartesian() into just the near-optimal
+## sub-cluster at the bottom, which resolves the individual plateaus the
+## full view compresses at this scale.
 waterfall_full <- plotValues(pf, tol = 0.1) + ggplot2::ggtitle("full range")
 waterfall_full
 full_plot_path <- file.path(out_dir, "oscillator_fit_waterfall_full.png")
@@ -249,7 +258,7 @@ cluster_end <- if (length(big_gaps)) big_gaps[1] else length(sorted_vals)
 zoom_ylim <- c(sorted_vals[1], sorted_vals[cluster_end])
 waterfall_zoom <- plotValues(pf, tol = 0.1) +
   ggplot2::coord_cartesian(ylim = zoom_ylim) +
-  ggplot2::ggtitle("zoomed into the dense cluster (~hundred plateaus)")
+  ggplot2::ggtitle("zoomed into the near-optimal sub-cluster")
 waterfall_zoom
 zoom_plot_path <- file.path(out_dir, "oscillator_fit_waterfall_zoom.png")
 ggplot2::ggsave(zoom_plot_path, waterfall_zoom, width = 9, height = 5, dpi = 120)

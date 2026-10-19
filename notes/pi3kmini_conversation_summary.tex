@@ -1,0 +1,485 @@
+\documentclass[11pt]{article}
+\usepackage[margin=2.7cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{parskip}
+\usepackage{xcolor}
+\usepackage{listings}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  columns=fullflexible,
+  breaklines=true,
+  frame=single,
+  language=R
+}
+
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\file}[1]{\textcolor{black!60}{\texttt{#1}}}
+
+\title{PI3K-mini: A Positive and a Negative Result for FIM Null-Space
+Regularization\\[2pt]
+\large What a small, fully-controlled toy model taught us, and what it
+predicts for the real HGF model}
+\author{}
+\date{Companion to \file{scripts/example\_toy\_pi3kmini\_fim\_fit.R},
+\file{scripts/example\_toy\_pi3kmini\_fim\_plots.R}, and
+\file{scripts/example\_toy\_pi3kmini\_fim\_eigenvalue\_report.R}}
+
+\begin{document}
+\maketitle
+\vspace{-1.5em}
+
+\section{Purpose}
+
+This note records the reasoning, experiments, and conclusions of an extended
+investigation into whether the \code{groupL2()} / \code{nullSpaceProjector()}
+FIM null-space regularization (\file{fim-portugal/functions-portugal.R}) can
+be made to work reliably, using a small, fully-transparent toy model built
+specifically to test the method's own precondition under full control. The
+model, ``PI3K-mini'', is a deliberate mechanistic miniature of the PI3K
+structural non-identifiability already documented for the real HGF/HepG2
+model in \file{HGF\_HepG2/04-Results/M-22.0-comparison/05-Writeup/
+Technical-Notes\_PI3K-Symmetry-and-Regularization-Diagnostics.pdf}. The
+investigation produced both a clean positive result (Section~\ref{sec:clean})
+and, on pushing the same model toward more realistic data, a clean negative
+one (Section~\ref{sec:sweep}) --- together with a precise, verified
+mechanistic explanation for the transition between the two
+(Sections~\ref{sec:eigendecomp}--\ref{sec:practical}), a proposed hybrid
+regularizer that keeps the positive part without inheriting the negative part
+(Section~\ref{sec:hybrid}), and an assessment of what this predicts for the
+real, 96-parameter HGF model (Section~\ref{sec:real-model}).
+
+\section{The model}
+
+\subsection{Topology}
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Reaction & Role \\
+\midrule
+$A \to B$, rate $k_1 A$ & control block; directly observed; unrelated to the symmetry \\
+$\varnothing \to U$, rate $k_{\text{gen}} A$ & generates hidden $U$ catalytically ($A$ not consumed) \\
+$U \to \varnothing$, rate $k_{\text{degU}} U$ & $U$'s own decay; \emph{not} part of the symmetry \\
+$M_p \to M_{pp}$, rate $k_{\text{use}} M_p U$ & only readout of $U$'s activity, via $\mathrm{obs}M_{pp}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Three conditions (\code{cond1/cond2/cond3}) differ only in $U$'s initial
+value ($U_{\text{cond1}}=1,\,U_{\text{cond2}}=3,\,U_{\text{cond3}}=6$),
+mirroring \code{PI3K\_5/PI3K\_250/PI3K\_350} in the real model. $A_0=1$ and
+$M_{p,0}=1$ are fixed (not fitted) to avoid two \emph{unrelated} accidental
+scale symmetries ($A_0 \leftrightarrow \mathrm{scale}_A/\mathrm{scale}_B$ and
+$M_{p,0} \leftrightarrow \mathrm{scale}_{Mpp}$) that this design would
+otherwise introduce.
+
+\subsection{The exact symmetry}
+
+For any $c>0$:
+\[
+U_{\text{cond}i} \to c\,U_{\text{cond}i}\ (i=1,2,3), \qquad
+k_{\text{gen}} \to c\,k_{\text{gen}}, \qquad
+k_{\text{use}} \to k_{\text{use}}/c
+\]
+leaves $U(t)$ scaling exactly by $c$ (linear, homogeneous ODE in $U$) and
+leaves $k_{\text{use}}U(t)$ --- the only combination $M_p/M_{pp}$ ever see ---
+exactly invariant. Every observable trajectory is therefore exactly invariant
+under this one-parameter family, verified numerically to solver precision
+($\sim 10^{-7}$, Section~\ref{sec:clean}). $k_{\text{degU}}$ does \emph{not}
+load on this symmetry (linear decay of $U$ needs no compensation), mirroring
+why the real model's \code{k\_degrade\_PI3K} does not load on the real PI3K
+symmetry either.
+
+The 5-parameter group ($U_{\text{cond1}},U_{\text{cond2}},U_{\text{cond3}},
+k_{\text{gen}},k_{\text{use}}$) spans a rank-1 null space (one non-identifiable
+direction) and a rank-4 identifiable complement, spanned by the four
+combinations $k_{\text{use}}U_{\text{cond1}}$, $k_{\text{use}}U_{\text{cond2}}$,
+$k_{\text{use}}U_{\text{cond3}}$, $k_{\text{gen}}k_{\text{use}}$ --- the same
+1-null-in-5 structure as the real PI3K group. This was a deliberate design
+choice: the minimal 2-parameter AB-model ($k\cdot q$, \S5.2 of the thesis
+draft) has \emph{no} identifiable complement at all (rank-1 null space inside
+a 2-dimensional group exhausts the space), so it cannot show the distinction
+between ``the non-identifiable direction'' and ``a raw parameter that happens
+to participate in it'' that turns out to be central to this whole
+investigation (Section~\ref{sec:practical}).
+
+\subsection{An implementation pitfall}
+\label{sec:pitfall}
+
+\code{Y(..., attach.input = TRUE)} attaches \emph{all} raw states, including
+the hidden $U$, to the prediction output. Building the simulated dataset from
+that attached output without filtering down to the actual observables first
+silently fits against $U$'s own (non-invariant) trajectory too, which
+destroys the intended symmetry with no error or warning --- the Hessian's
+eigenvalue spectrum simply looks like an ordinary sloppy spread, no gap
+anywhere. \code{attach.input = FALSE} is required. (This cost real debugging
+time: the first version of the fit showed no spectral gap at all, which
+briefly looked like the toy model design itself was wrong before the true
+cause was found by directly comparing predicted trajectories under a
+hand-applied symmetry shift against what \code{normL2()} was actually being
+handed as ``data''.)
+
+\section{Result 1: a clean win, on dense/precise data}
+\label{sec:clean}
+
+With $\sigma=0.03$, 31 time points per condition (dense, precise data), 200
+multistart fits per objective (\code{obj\_data}, \code{obj\_l2 =
+obj\_data + constraintL2(\ldots)}, \code{obj\_fim = obj\_data +
+groupL2(P\_null,\ldots)}), all three centered at the \emph{same} reference
+point $\mu=-1$ in every log-parameter (a fair-comparison fix --- see
+Section~\ref{sec:same-center}):
+
+\begin{center}
+\begin{tabular}{lrrr}
+\toprule
+ & no regularization & FIM (group) & L2 (uniform) \\
+\midrule
+raw data $\chi^2$ at best fit & $-1186.38$ & $-1186.38$ & $-1186.28$ \\
+identified-block RMSE & $0.099$ & $0.099$ & $0.159$ \\
+invariant-combo RMSE & $0.061$ & $0.061$ & $0.081$ \\
+SD of raw $U_{\text{cond1}}$, near-optimal fits & $2.06$--$7.6$ & $\approx 10^{-4}$ & $\approx 10^{-4}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+FIM matches the unregularized fit's accuracy exactly (unbiased) while
+matching L2's reproducibility exactly (bounded) --- strictly better than
+either alternative on its own, in the regime where the method's own
+precondition (one isolated exact symmetry, everything else genuinely sharp)
+holds by construction. Eigenvalue spectrum (log10) at this data quality:
+$5.26,\,5.16,\,4.51,\,3.90,\,3.58,\,2.94,\,2.68,\,2.04,\,0.56,\,-11.6$ --- one
+clean $\sim\!12$-order-of-magnitude gap, nothing else close to it.
+
+\section{Same regularization center for both methods}
+\label{sec:same-center}
+
+An earlier version anchored \code{groupL2()} at \code{best\_unreg} (the
+single best unregularized fit). Along the exactly flat direction this anchor
+is itself an arbitrary draw from the unregularized multistart's own spread
+--- in one run it landed at $\log U_{\text{cond1}} = 2.84$ (true value $0$),
+so all FIM-regularized fits collapsed to that arbitrary point instead of
+anywhere near truth, while L2 (anchored at $\mu=0$, coincidentally close to
+$U_{\text{cond1}}$'s true value $1$) looked ``better'' for a reason that had
+nothing to do with either method's merit. Fix: anchor both penalties at the
+\emph{same} $\mu_{\text{center}}=-1$ for every parameter. This is mathematically
+required for a fair comparison and also exposed a useful fact: with a shared
+center, L2 and FIM land at (numerically) the \emph{same} point along the null
+direction, because L2's cost on the stiff/identified directions is constant
+along that valley --- so minimizing L2 restricted to the valley reduces to
+the identical 1-D problem FIM's rank-1 penalty solves directly.
+
+Caveat worth remembering: the individual raw value a regularizer settles on
+along a truly non-identifiable direction is not itself a meaningful quantity
+--- it is set entirely by the chosen anchor, not by data. Comparing raw
+per-parameter estimates between two differently-anchored regularizers is not
+a fair test of anything.
+
+\section{Two outlier local optima under FIM}
+\label{sec:outliers}
+
+At the dense-data setting, dMod's own \code{plotPars()} (step-detected via
+\code{stepDetect()}) flags 2 of 200 FIM fits as genuinely worse: raw
+(unpenalized) $\chi^2 = -1086.1$ and $-729.4$ vs. $-1186.4$ for the rest ---
+$100$ and $457$ worse, both reported \code{converged=TRUE}, 29--38
+iterations, not truncated runs. The FIM penalty contributes $\approx 0$ at
+all three points, confirming these are genuine alternative local optima of
+the raw likelihood, not penalty artifacts. Predicted curves
+(\file{pi3kmini\_fim\_outliers.png}) show $\mathrm{obs}M_{pp}$ in
+\code{cond2}/\code{cond3} saturating almost instantly instead of following
+the data's gradual early rise --- a classic ``which rate governs the fast vs.
+slow phase'' ambiguity in fitting a hidden-species-driven rise, unrelated to
+the exact symmetry (parameter shifts from the best fit are \emph{not}
+consistent with a pure $c$-rescaling: $U_{\text{cond3}}$ moves independently
+of $U_{\text{cond1}}/U_{\text{cond2}}/k_{\text{gen}}$). Neither unregularized
+nor L2 hit this basin in the same 200-start sample (0/200 each); most simply
+attributed to a small ($\sim\!1\%$) basin and ordinary multistart sampling
+luck, not confirmed to be FIM-specific.
+
+\section{Result 2: sparser/noisier data reverses the result}
+\label{sec:sweep}
+
+Reducing to 14 time points and raising $\sigma$ (later swept from $0.05$ to
+$1.7$ at fixed data density) reverses the earlier ranking:
+
+\begin{center}
+\begin{tabular}{lrrr}
+\toprule
+ & no regularization & FIM (group) & L2 (uniform) \\
+\midrule
+identified-block RMSE & $1.19$ & $1.19$ & $0.38$ \\
+invariant-combo RMSE & $6.36$ & $5.89$ & $0.33$ \\
+raw $\chi^2$ at best fit & $-191.6$ & $-191.6$ & $-190.9$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+L2 is now clearly \emph{better} than FIM on exactly the quantities FIM was
+supposed to protect. The eigenvalue spectrum at 14 points shows a new,
+second gap that did not exist at 31 points: $\ldots,0.36,\,{-1.25},\,{-2.44},
+\,{-13.3}$ (log10) --- the true symmetry gap is untouched (still
+$\sim\!11$ orders), but ranks 8--9 are new, genuinely emergent near-degenerate
+directions.
+
+\section{Diagnosing the new directions}
+\label{sec:eigendecomp}
+
+The rank-8 eigenvector ($\lambda\approx 10^{-1.25}$) is \emph{not} the true
+symmetry: it loads heavily on $k_{\text{gen}}$ ($0.84$) and
+$U_{\text{cond1/2/3}}$ ($-0.28$ each) with essentially \emph{no}
+$k_{\text{use}}$ component ($-0.003$) --- a $k_{\text{gen}}$-vs-$U_{\text{cond}i}$
+trade-off distinct from the true symmetry, which requires $k_{\text{use}}$ to
+move oppositely. Projecting the near-optimal fits onto this new direction
+vs. onto the true null direction (both computed from the data's own $H$)
+gives a definitive result:
+
+\begin{center}
+\begin{tabular}{lrr}
+\toprule
+projection onto & unreg SD & FIM SD \\
+\midrule
+true exact symmetry (rank 10) & $2.32$ & $1.5\times 10^{-13}$ \\
+new emergent direction (rank 8) & $2.51$ & $2.19$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+FIM controls the direction it was built from essentially perfectly, and
+provides \emph{zero} protection for the new one --- confirmed across every
+saved $\sigma$: the true-symmetry-projection SD stays at
+$10^{-13}$--$10^{-15}$ at \emph{every} $\sigma$ tested, unconditionally
+(Section~\ref{sec:noise-scaling} explains why this holds exactly, not just
+approximately).
+
+\subsection{Correction: uniform noise does not reshape the spectrum}
+
+A uniform $\sigma$ applied identically to every data point gives $H = S'S/
+\sigma^2$ --- an exact positive scalar multiple of the same matrix at every
+$\sigma$. Eigenvectors of a scalar-multiplied matrix are unchanged; only
+eigenvalues scale. Checked directly (\file{pi3kmini\_eigenvalue\_report.csv},
+\file{pi3kmini\_eigenvalues\_vs\_sigma.pdf}): consecutive-rank log10-gaps are
+identical to 2 decimal places across every saved $\sigma$ (0.05--1.7) except
+the last (true-symmetry) one, which is pure numerical noise around the exact
+zero. \emph{The ``second gap'' found in Section~\ref{sec:sweep} came from
+reducing the number of time points (which changes $S$ itself), not from
+raising $\sigma$ (which only rescales $H$ uniformly and provably cannot
+reshape relative gaps).} $P_{\text{null}}$ itself was verified numerically
+identical (max abs.\ difference $6\times 10^{-13}$) between $\sigma=0.05$ and
+$\sigma=1.7$.
+
+\section{Why noise-driven curvature loss still hurts FIM}
+\label{sec:noise-scaling}
+
+Even with $P_{\text{null}}$ and the gap structure fixed, raising a uniform
+$\sigma$ still shrinks \emph{every} data-only curvature entry as $1/\sigma^2$
+--- including the four identifiable combinations inside the same 5-parameter
+group. \code{constraintL2} adds a curvature of exactly $2/\sigma_{L2}^2$ to
+\emph{every} coordinate, independent of $\sigma$; as data curvature shrinks
+below this fixed floor, L2 increasingly (and correctly, in the sense of
+``it always would'') dominates every coordinate, including the ones that
+were never part of the symmetry. \code{groupL2} adds curvature only along
+$P_{\text{null}}$'s span --- exactly zero elsewhere, at every $\sigma$ ---
+so the identified complement's precision degrades with $\sigma$ exactly as
+it would under no regularization at all. This is not a flaw specific to the
+implementation; it is the necessary consequence of a penalty that is
+deliberately inert outside one, exactly-known direction.
+
+\section{Does pinning the null direction give unique parameter values?}
+\label{sec:practical}
+
+A natural expectation: if the null direction is regularized, doesn't the
+whole 5-parameter block become uniquely (hence tightly) estimable? The
+answer requires separating two different claims.
+
+\textbf{True:} once $P_{\text{null}}$ is regularized, the full block has a
+mathematically unique minimizer for a fixed dataset, because the other four
+directions have real (if possibly small) curvature --- there is no longer an
+infinite flat family.
+
+\textbf{Not automatically true:} that this unique minimizer is found
+\emph{precisely} by any real optimizer, or corresponds to a
+\emph{practically} tight estimate. When curvature on those other directions
+is small, the objective is nearly flat over a wide region around the unique
+minimum: a small gradient (near any optimizer's stopping tolerance)
+corresponds to a \emph{large} parameter displacement, since displacement
+$\approx$ gradient / curvature. Different multistart runs land at genuinely
+different points satisfying the same loose tolerance; even the exact
+minimizer, if found, would carry a wide, honest confidence interval on that
+direction.
+
+This is exactly the \textbf{structural vs.\ practical identifiability}
+distinction of Raue et al.\ (2009, already cited in the thesis bib). FIM's
+projector removes only \emph{structural} non-identifiability (an exact,
+dataset-independent symmetry). It has no mechanism against \emph{practical}
+non-identifiability (a technically-unique but data-quality-dependent flat
+region) --- and that is precisely what grows in the other four directions as
+$\sigma$ increases. No method that targets only a fixed, precomputed exact
+symmetry can fix that, because it is not a symmetry, only weak information.
+
+\subsection{This is not special to PI3K-mini's 5-parameter group}
+
+The identical logic applies to the AB-model's $k,q$: its ``identified''
+direction ($k\cdot q$) has data-driven curvature that would also shrink under
+worse data, and $k,q$ would show the same growing, \emph{correlated} scatter
+(moving together along the weakening product direction, while staying locked
+along the still-perfectly-regularized $k/q$ direction) that
+\code{ab\_fit.R}'s own dense/precise dataset simply never demonstrated. The
+2-parameter AB-model cannot show the richer phenomenon of Section~\ref{sec:eigendecomp}
+(a raw parameter mixing a protected direction with unprotected ones), because
+with only 2 parameters and 1 null direction there is no room for a third,
+independent direction to emerge --- but the core mechanism (a fixed penalty
+vs.\ a shrinking data curvature) is identical in both models.
+
+\subsection{Summary statement for the chapter}
+
+With sparser and noisier data, the model gets more \emph{sloppy}
+(Gutenkunst et al., 2007): every direction's curvature shrinks, and
+previously-comfortable directions sink below whatever curvature is needed to
+be practically useful --- not because the model's algebra changed, but
+because the ability to resolve it with this data did. Sparser sampling
+(design) can additionally reshape the spectrum, introducing genuinely new
+near-degenerate combinations; uniform noise alone only rescales the existing
+spectrum, but that alone is enough to push previously-fine directions below
+the practical threshold. FIM's projector encodes only the first, permanent
+kind of fact (a proven exact symmetry); it has no mechanism for the second
+(data-quality-dependent weakness on directions that are structurally fine).
+
+\section{Generalization: how many groups is not the point}
+\label{sec:generalization}
+
+A model with two (or more) independent, exactly-isolated symmetry groups,
+with a genuinely sharp complement, would be handled by FIM exactly as
+well as one group: \code{nullSpaceBasis()}'s threshold classification and
+\code{nullSpaceProjector()}'s construction are entirely general in the rank
+of the null space, and nothing in the mechanism cares how many dimensions
+are exactly zero, only whether they are cleanly separated from everything
+else. \emph{The number of exact-symmetry groups is not what breaks the
+method; a gapless, sloppy complement is.} This reframes the difference
+between PI3K-mini's clean case and the real M-22.0 model precisely: M-22.0
+does not fail because it has ``more'' non-identifiability than a toy model
+--- it fails because, beyond the one clean PI3K degeneracy, the remaining
+$\sim\!91$ parameters show no gap at all (a smooth decline over many orders
+of magnitude). A model with three clean PI3K-like degeneracies and an
+otherwise sharp, gapped spectrum would likely see FIM succeed just as
+cleanly as it did here.
+
+\section{A hybrid regularizer}
+\label{sec:hybrid}
+
+Since \code{groupL2()} and \code{constraintL2()} act on orthogonal pieces of
+parameter space, they can be summed:
+\[
+\text{obj\_hybrid} = \text{obj\_data} + \code{groupL2}(P_{\text{null}}, \mu, \lambda_2)
++ \code{constraintL2}(\mu, \sigma_{L2}),\qquad \sigma_{L2}=1/\sqrt{2\lambda_1}.
+\]
+Equivalently, using $P_{\text{stiff}} := I - P_{\text{null}}$ and two
+\code{groupL2} calls with strengths $\lambda_1,\lambda_2$:
+\[
+\lambda_1 P_{\text{stiff}} + \lambda_2 P_{\text{null}}
+= \lambda_1 (I - P_{\text{null}}) + \lambda_2 P_{\text{null}}
+= \lambda_1 I + (\lambda_2-\lambda_1) P_{\text{null}}.
+\]
+This is \emph{always} ``plain isotropic L2 at strength $\lambda_1$, plus a
+correction confined to the null direction of size $\lambda_2-\lambda_1$'' ---
+the $\lambda_1 I$ term is not conditional on $\lambda_1=\lambda_2$; it falls
+directly out of $P_{\text{stiff}}$'s definition as $I-P_{\text{null}}$, for
+any $\lambda_1$. Setting $\lambda_1=\lambda_2$ collapses the whole
+construction to plain L2 (isotropic penalties are rotation-invariant: equal
+weight across \emph{any} complete orthogonal partition of the space
+reproduces $\lambda I$, whether that partition is the raw parameter axes or
+a null/stiff eigenbasis split). Only $\lambda_1\neq\lambda_2$ produces
+something genuinely different from plain L2.
+
+Predicted behavior, following directly from Sections~\ref{sec:clean}--\ref{sec:practical}:
+matches FIM's unbiasedness on the one proven-exact direction (strong
+$\lambda_2$ dominates there); provides L2's boundedness/crash-resistance
+floor everywhere else (weak $\lambda_1$, instead of FIM's exactly-zero
+protection there), at the cost of the same small, honest L2-style bias on
+those other directions, scaled down by how small $\lambda_1$ is set. This is
+not a fix for genuine sloppiness --- the ``everything else'' term still pays
+exactly the same data-blind L2 tax plain L2 always has --- it is a more
+careful \emph{allocation} of where that tax is paid: never on the one
+direction provable to be exact, always (lightly) elsewhere. A three-or-more-
+tier version (extra protection specifically for ``moderately sloppy but not
+exactly null'' directions, based on their eigenvalue) would re-inherit the
+\emph{no-free-lunch} problem already documented in
+\file{Technical-Notes\_PI3K-Symmetry-and-Regularization-Diagnostics.pdf}
+(\S3--4): there is no principled threshold separating ``weak but real'' from
+``weak and worthless'' in a genuinely gapless spectrum. The two-tier version
+above is defensible specifically because its boundary sits at an
+algebraically \emph{proven} zero, not an arbitrary cutoff.
+
+Not yet implemented/tested as of this note; a natural next step
+(\code{obj\_hybrid} as a fourth objective in the fitting script, rerun across
+the same $\sigma$ sweep).
+
+\section{Implications for the real HGF model, and chapter strategy}
+\label{sec:real-model}
+
+The existing M-22.0 analysis (\file{Chapter-Outline\_FIM-vs-L2-regularization.pdf})
+already shows exactly the signature this toy model predicts: one clean,
+reproducible, mechanistically-explicable exact degeneracy (PI3K) found
+cleanly by the same method, embedded in an otherwise gapless, $\sim\!90/96$-
+direction sloppy spectrum. The toy model does not predict a \emph{different}
+outcome for the real model; it explains the outcome the real model already
+gave, and demonstrates the same transition (clean win $\to$ failure)
+happening to one direction at a time, on demand, in a system small enough to
+eigendecompose and inspect by hand.
+
+A separate, larger, more biologically comprehensive version of the HGF model
+was also discussed as a candidate addition to the chapter (the version
+originally requested by the biology collaborators, which needed heavy
+hand-tuned priors, converged poorly, and crashed frequently before being cut
+down to M-22.0). Two considerations argue against expecting FIM to rescue it,
+and against attempting a full three-way multistart comparison on it without
+first addressing its numerical robustness separately:
+
+\begin{enumerate}
+\item ``Needs heavy priors, converges badly, crashes'' is the signature of
+  \emph{many} weakly-constrained directions (the sloppy regime this note
+  shows FIM cannot help with), not one isolated exact symmetry.
+\item Crashes specifically implicate directions left \emph{completely}
+  unconstrained during optimization --- exactly where L2's indiscriminate,
+  every-coordinate floor is structurally better suited than FIM's
+  single/few-direction-targeted one. Diagnosing which of possibly several
+  overlapping near-symmetries a larger model's Hessian encodes, reliably
+  enough to trust a projector built from it, is also a substantially harder
+  version of the \code{tol}-sensitivity problem already documented for
+  M-22.0.
+\end{enumerate}
+
+The more defensible use of that model in the chapter is as a motivating,
+real-stakes case reported qualitatively (why a smarter regularizer was
+wanted in the first place), rather than as a second full quantitative
+comparison --- unless its numerical stability is addressed as separate,
+scoped work first.
+
+\section{Artifact inventory}
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+File & Purpose \\
+\midrule
+\file{scripts/example\_toy\_pi3kmini\_fim\_fit.R} & model, one multistart per objective, saves \code{.rds} \\
+\file{scripts/example\_toy\_pi3kmini\_fim\_plots.R} & waterfall, group scatter, fit-vs-data, \code{plotPars} panels, scatter clouds \\
+\file{scripts/example\_toy\_pi3kmini\_fim\_eigenvalue\_report.R} & CSV + plot of initial eigenvalue spectrum vs.\ $\sigma$ \\
+\file{scripts/plots/pi3kmini\_fim\_fit/pi3kmini\_results*.rds} & saved parframes/best fits/Hessians, one per $\sigma$/data setting \\
+\file{scripts/plots/pi3kmini\_fim\_fit/pi3kmini\_eigenvalue\_report.csv} & eigenvalues at initial point, all ranks, all $\sigma$ \\
+\file{2026\_PhdTex/Plots\_fim/pi3kmini\_cartoon.tex/.pdf} & model topology diagram \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Open items}
+
+\begin{itemize}
+\item Implement and test the hybrid regularizer (Section~\ref{sec:hybrid}) across the $\sigma$ sweep.
+\item Optional: extend PI3K-mini to two independent symmetry groups to confirm Section~\ref{sec:generalization} directly (not yet run).
+\item Optional: a sparser/noisier variant of \code{ab\_fit.R} to confirm Section~\ref{sec:practical}'s AB-model prediction directly (not yet run).
+\item Decide, with the above considerations in mind, whether/how to scope any use of the larger biological model in the chapter.
+\end{itemize}
+
+\end{document}

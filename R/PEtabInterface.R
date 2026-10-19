@@ -1765,12 +1765,26 @@ importPEtab <- function(yamlPath, solver,
 
   # Bake `fixed` into the objective so users only pass the estimated bestfit
   # vector. `fixed = NULL` (the default) lets the closure inject the PEtab
-  # fixed values; an explicit `fixed = ...` overrides per call.
+  # fixed values. An explicit `fixed = ...` (e.g. from profile(), which
+  # always passes one to move the profiled parameter out of `pars`) is
+  # MERGED on top of the baked values by name, not substituted for them --
+  # a caller fixing one extra parameter still needs ratio/cyt/nuc/specC17
+  # (or whatever else PEtab declared fixed) to remain available, or
+  # evaluation fails deep in the prediction pipeline with "Missing
+  # parameters: ...". Only names the caller does not already fix fall back
+  # to the baked value; an explicit override of a baked name still wins.
   baked_fixed <- fixed
   obj <- function(pars, fixed = NULL, ...) {
-    if (is.null(fixed)) fixed <- baked_fixed
+    fixed <- c(fixed, baked_fixed[setdiff(names(baked_fixed), names(fixed))])
     raw_obj(pars, fixed = fixed, ...)
   }
+  # Baking `fixed` in via a plain closure would otherwise drop raw_obj's
+  # class/attributes ("objfn"/"fn", "modelname", "conditions", ...) that
+  # mstrust()/loadDLL()/mname() etc. dispatch on -- same copy pattern as
+  # .petab_build_objective() above.
+  for (a in setdiff(names(attributes(raw_obj)), "class"))
+    attr(obj, a) <- attr(raw_obj, a)
+  class(obj) <- class(raw_obj)
 
   bestfit <- param_meta$pouter
   attr(bestfit, "petab_scales") <- param_meta$scales[names(bestfit)]
