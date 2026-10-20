@@ -3,56 +3,25 @@
 .Rhistory
 .RData
 
-# Local library built by scripts/example_toy_fit.R (isolates it from
-# whatever dMod is installed in the default R library)
-/.Rlib/
-
 # Editor and OS
 *.swp
 .DS_Store
 Thumbs.db
 
-# Build and check artefacts
-*.tar.gz
-*.Rcheck/
-.Rcheck/
-check/
-inst/doc/
-/doc/
-/Meta/
+# Compiled model code that dMod2 may write next to the scripts
+*.o
+*.so
+*.dll
+*.log
+*.tmp
 
-# knitr and R Markdown
-README.html
-README_files/
+# knitr / R Markdown
 *.knit.md
 *.utf8.md
 *_cache/
 *_files/
-.cache/
 
-# Compiled objects and scratch
-*.o
-*.so
-*.dll
-.f*
-*.log
-*.tmp
-deriv2Tests/wd/
-
-# Codegen and solver outputs written by tests under tests/testthat
-tests/testthat/*.c
-tests/testthat/*.cpp
-tests/testthat/*.o
-tests/testthat/*.so
-tests/testthat/*.dll
-tests/testthat/reactions_for_Alyssa*
-tests/testthat/_snaps/
-
-# bench baselines are transient, except the tracked pre-rewrite baseline
-bench/baselines/*
-!bench/baselines/focei_theoph_pre_rewrite.rds
-
-# Python caches from the reticulate helpers under inst/code
+# Python caches
 __pycache__/
 *.pyc
 

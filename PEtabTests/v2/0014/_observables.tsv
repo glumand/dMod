@@ -1,2 +1,0 @@
-observableId	observableFormula	noiseFormula	noisePlaceholders
-obs_a	A	noise_placeholder1 + noise_placeholder2	noise_placeholder1;noise_placeholder2

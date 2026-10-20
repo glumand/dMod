@@ -42,64 +42,17 @@
 ## for a detailed explanation of the fallback chain below.
 ## ---------------------------------------------------------------------------
 
-.dmod_find_repo_root <- function(start) {
-  here <- normalizePath(start, mustWork = FALSE, winslash = "/")
-  for (i in seq_len(8)) {
-    desc <- file.path(here, "DESCRIPTION")
-    if (file.exists(desc)) {
-      pkg <- tryCatch(unname(read.dcf(desc, "Package")[1, 1]), error = function(e) NA_character_)
-      if (identical(pkg, "dMod")) return(here)
-    }
-    parent <- dirname(here)
-    if (parent == here) break
-    here <- parent
-  }
-  NA_character_
-}
-
-KNOWN_REPO_ROOT <- "/home/mio/Phd/dMod"
-
-repo_root <- local({
-  full <- commandArgs(trailingOnly = FALSE)
-  hit  <- grep("^--file=", full, value = TRUE)
-  ofile <- if (!is.null(sys.frames()) && length(sys.frames()) >= 1L) sys.frame(1)$ofile else NULL
-  candidates <- c(
-    if (length(hit)) dirname(sub("^--file=", "", hit[1])),
-    if (!is.null(ofile)) dirname(ofile),
-    getwd(),
-    KNOWN_REPO_ROOT
-  )
-  for (cand in candidates) {
-    if (is.null(cand) || is.na(cand)) next
-    found <- .dmod_find_repo_root(cand)
-    if (!is.na(found)) return(found)
-  }
-  stop("Could not locate the dMod repo root (no DESCRIPTION with Package: dMod found ",
-       "walking up from any of: ", paste(candidates, collapse = ", "), "). ",
-       "Run this script from inside the dMod checkout, or edit KNOWN_REPO_ROOT above.")
+# Locate this script's folder (Rscript or source()); pasting the code into
+# a console leaves no file-based signal, so fall back to the fixed path.
+# Edit it if this checkout ever moves.
+script_dir <- local({
+  hit   <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
+  ofile <- if (length(sys.frames())) sys.frame(1)$ofile else NULL
+  if (length(hit)) dirname(normalizePath(sub("^--file=", "", hit[1])))
+  else if (!is.null(ofile)) dirname(normalizePath(ofile))
+  else "/home/mio/Phd/2026_dMod_fim-regularization/scripts"
 })
-
-repo_lib <- file.path(repo_root, ".Rlib")
-dir.create(repo_lib, showWarnings = FALSE, recursive = TRUE)
-
-desc_version <- unname(read.dcf(file.path(repo_root, "DESCRIPTION"), "Version")[1, 1])
-installed_version <- tryCatch(as.character(packageVersion("dMod", lib.loc = repo_lib)),
-                               error = function(e) NA_character_)
-if (!identical(installed_version, desc_version)) {
-  cat("Building dMod", desc_version, "from", repo_root, "into", repo_lib, "...\n")
-  status <- system2(file.path(R.home("bin"), "R"),
-                     c("CMD", "INSTALL", "--no-multiarch", "--with-keep.source",
-                       "-l", shQuote(repo_lib), shQuote(repo_root)))
-  if (status != 0)
-    stop("R CMD INSTALL failed -- install dependencies first (see DESCRIPTION Imports/Remotes).")
-}
-
-if ("package:dMod" %in% search()) detach("package:dMod", unload = TRUE)
-
-library(dMod, lib.loc = repo_lib)
-stopifnot(identical(find.package("dMod"), file.path(repo_lib, "dMod")))
-cat("Using dMod", as.character(packageVersion("dMod")),
-    "from", find.package("dMod"), "\n\n")
+source(file.path(script_dir, "setup.R"))
 
 set.seed(11)
 setwd(tempdir())
@@ -139,7 +92,7 @@ sensitivityConditionNumber <- function(objfun, pars) {
 ## stepDetect() isn't exported; reached via ::: to reuse the exact plateau
 ## logic plotValues() itself uses rather than duplicating it.
 plotWaterfallColored <- function(pf, color_by, color_label, tol = 1) {
-  jumps <- dMod:::stepDetect(pf$value, tol)
+  jumps <- stepDetect(pf$value, tol)
   y.range <- c(min(pf$value), max(max(pf$value), min(pf$value) + tol))
   y.jumps <- seq(y.range[2], y.range[1], length.out = length(jumps))
 
@@ -182,14 +135,14 @@ f_true <- addReaction(f_true, from = "A", to = "B", rate = "k1*A", description =
 f_true <- addReaction(f_true, from = "B", to = "C", rate = "k2*B", description = "B to C (rate-limiting)")
 f_true <- addReaction(f_true, from = "C", to = "",  rate = "k3*C", description = "C degrades")
 
-model_true <- odemodel(f_true, modelname = "toySlideTrueModel", solver = "CppODE")
+model_true <- odemodel(f_true, modelname = "toySlideTrueModel")
 x_true <- Xs(model_true)
-g_true <- Y(eqnvec(obsC = "C"), x_true, compile = TRUE, modelname = "toySlideTrueObs", attach.input = FALSE)
+g_true <- Y(eqnvec(obsC = "C"), x_true, compile = TRUE, modelname = "toySlideTrueObs", attachInput = FALSE)
 
 ip_true <- getParameters(g_true * x_true)
-trafo_true <- repar("x~x", x = ip_true)
-trafo_true <- repar("x~0", x = c("B", "C"), trafo_true)   # B(0) = C(0) = 0
-trafo_true <- repar("x~exp(x)", x = ip_true, trafo_true)
+trafo_true <- repar(expr = "x~x", x = ip_true)
+trafo_true <- repar(trafo_true, "x~0", x = c("B", "C"))   # B(0) = C(0) = 0
+trafo_true <- repar(trafo_true, "x~exp(x)", x = ip_true)
 p_true <- P(trafo_true, condition = "sim", compile = TRUE, modelname = "toySlideTrueTrafo")
 
 ## --- 2. WRONG (fitted) model: A -> C -> (degraded), B skipped entirely -----
@@ -197,14 +150,14 @@ f_wrong <- NULL
 f_wrong <- addReaction(f_wrong, from = "A", to = "C", rate = "kAC*A", description = "A to C (direct, wrong)")
 f_wrong <- addReaction(f_wrong, from = "C", to = "",  rate = "k3*C", description = "C degrades")
 
-model_wrong <- odemodel(f_wrong, modelname = "toySlideWrongModel", solver = "CppODE")
+model_wrong <- odemodel(f_wrong, modelname = "toySlideWrongModel")
 x_wrong <- Xs(model_wrong)
-g_wrong <- Y(eqnvec(obsC = "C"), x_wrong, compile = TRUE, modelname = "toySlideWrongObs", attach.input = FALSE)
+g_wrong <- Y(eqnvec(obsC = "C"), x_wrong, compile = TRUE, modelname = "toySlideWrongObs", attachInput = FALSE)
 
 ip_wrong <- getParameters(g_wrong * x_wrong)
-trafo_wrong <- repar("x~x", x = ip_wrong)
-trafo_wrong <- repar("x~0", x = "C", trafo_wrong)          # C(0) = 0
-trafo_wrong <- repar("x~exp(x)", x = ip_wrong, trafo_wrong)
+trafo_wrong <- repar(expr = "x~x", x = ip_wrong)
+trafo_wrong <- repar(trafo_wrong, "x~0", x = "C")          # C(0) = 0
+trafo_wrong <- repar(trafo_wrong, "x~exp(x)", x = ip_wrong)
 p_wrong <- P(trafo_wrong, condition = "sim", compile = TRUE, modelname = "toySlideWrongTrafo")
 
 ## --- 3. "True" parameters (timescale-separated: k1 >> k2) and simulated data
@@ -237,7 +190,7 @@ starts_wrong <- msParframe(init_wrong, n = n_fits_wrong, seed = 21, sd = 0.3)
 cond_start_wrong <- vapply(seq_len(n_fits_wrong), function(i)
   sensitivityConditionNumber(obj_wrong, as.parvec(starts_wrong, i)), numeric(1))
 
-fits_wrong <- mstrust_fim(obj_wrong, starts_wrong, studyname = "toySlideWrongFit", rinit = 1, rmax = 10,
+fits_wrong <- mstrust_fim(obj_wrong, starts_wrong, name = "toySlideWrongFit", rinit = 1, rmax = 10,
                        cores = 1, iterlim = 300)
 pf_wrong <- as.parframe(fits_wrong)
 best_wrong <- as.parvec(pf_wrong, 1)
@@ -282,7 +235,7 @@ init_true <- pouter_true + rnorm(4, sd = 0.3)
 parupper <- c(k1 = 6, k2 = 4, k3 = 4, A = 4)
 parlower <- c(k1 = -4, k2 = -4, k3 = -4, A = -4)
 
-fits_true <- mstrust_fim(obj_true, init_true, studyname = "toySlideTrueFit", rinit = 1, rmax = 10,
+fits_true <- mstrust_fim(obj_true, init_true, name = "toySlideTrueFit", rinit = 1, rmax = 10,
                       fits = 20, cores = 1, iterlim = 300,
                       parupper = parupper, parlower = parlower)
 pf_true <- as.parframe(fits_true)
@@ -360,9 +313,9 @@ data_d <- as.datalist(sim_d, split.by = "condition")
 obj_wrong_d <- normL2(data_d, g_wrong * x_wrong * p_wrong)
 obj_true_d  <- normL2(data_d, g_true * x_true * p_true)
 
-fits_wrong_d <- mstrust_fim(obj_wrong_d, init_wrong, studyname = "toySlideWrongFitD", rinit = 1, rmax = 10,
+fits_wrong_d <- mstrust_fim(obj_wrong_d, init_wrong, name = "toySlideWrongFitD", rinit = 1, rmax = 10,
                          fits = 20, cores = 1, iterlim = 300)
-fits_true_d  <- mstrust_fim(obj_true_d, log(true_pars_d) + rnorm(4, sd = 0.3), studyname = "toySlideTrueFitD",
+fits_true_d  <- mstrust_fim(obj_true_d, log(true_pars_d) + rnorm(4, sd = 0.3), name = "toySlideTrueFitD",
                          rinit = 1, rmax = 10, fits = 20, cores = 1, iterlim = 300)
 pf_wrong_d <- as.parframe(fits_wrong_d)
 pf_true_d  <- as.parframe(fits_true_d)

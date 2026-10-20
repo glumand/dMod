@@ -35,64 +35,17 @@
 ## covers the two constructions Part 10 there compares (FIM vs. plain L2).
 ## ---------------------------------------------------------------------------
 
-.dmod_find_repo_root <- function(start) {
-  here <- normalizePath(start, mustWork = FALSE, winslash = "/")
-  for (i in seq_len(8)) {
-    desc <- file.path(here, "DESCRIPTION")
-    if (file.exists(desc)) {
-      pkg <- tryCatch(unname(read.dcf(desc, "Package")[1, 1]), error = function(e) NA_character_)
-      if (identical(pkg, "dMod")) return(here)
-    }
-    parent <- dirname(here)
-    if (parent == here) break
-    here <- parent
-  }
-  NA_character_
-}
-
-KNOWN_REPO_ROOT <- "/home/mio/Phd/dMod"
-
-repo_root <- local({
-  full <- commandArgs(trailingOnly = FALSE)
-  hit  <- grep("^--file=", full, value = TRUE)
-  ofile <- if (!is.null(sys.frames()) && length(sys.frames()) >= 1L) sys.frame(1)$ofile else NULL
-  candidates <- c(
-    if (length(hit)) dirname(sub("^--file=", "", hit[1])),
-    if (!is.null(ofile)) dirname(ofile),
-    getwd(),
-    KNOWN_REPO_ROOT
-  )
-  for (cand in candidates) {
-    if (is.null(cand) || is.na(cand)) next
-    found <- .dmod_find_repo_root(cand)
-    if (!is.na(found)) return(found)
-  }
-  stop("Could not locate the dMod repo root (no DESCRIPTION with Package: dMod found ",
-       "walking up from any of: ", paste(candidates, collapse = ", "), "). ",
-       "Run this script from inside the dMod checkout, or edit KNOWN_REPO_ROOT above.")
+# Locate this script's folder (Rscript or source()); pasting the code into
+# a console leaves no file-based signal, so fall back to the fixed path.
+# Edit it if this checkout ever moves.
+script_dir <- local({
+  hit   <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
+  ofile <- if (length(sys.frames())) sys.frame(1)$ofile else NULL
+  if (length(hit)) dirname(normalizePath(sub("^--file=", "", hit[1])))
+  else if (!is.null(ofile)) dirname(normalizePath(ofile))
+  else "/home/mio/Phd/2026_dMod_fim-regularization/scripts"
 })
-
-repo_lib <- file.path(repo_root, ".Rlib")
-dir.create(repo_lib, showWarnings = FALSE, recursive = TRUE)
-
-desc_version <- unname(read.dcf(file.path(repo_root, "DESCRIPTION"), "Version")[1, 1])
-installed_version <- tryCatch(as.character(packageVersion("dMod", lib.loc = repo_lib)),
-                               error = function(e) NA_character_)
-if (!identical(installed_version, desc_version)) {
-  cat("Building dMod", desc_version, "from", repo_root, "into", repo_lib, "...\n")
-  status <- system2(file.path(R.home("bin"), "R"),
-                     c("CMD", "INSTALL", "--no-multiarch", "--with-keep.source",
-                       "-l", shQuote(repo_lib), shQuote(repo_root)))
-  if (status != 0)
-    stop("R CMD INSTALL failed -- install dependencies first (see DESCRIPTION Imports/Remotes).")
-}
-
-if ("package:dMod" %in% search()) detach("package:dMod", unload = TRUE)
-
-library(dMod, lib.loc = repo_lib)
-stopifnot(identical(find.package("dMod"), file.path(repo_lib, "dMod")))
-cat("Using dMod", as.character(packageVersion("dMod")),
-    "from", find.package("dMod"), "\n\n")
+source(file.path(script_dir, "setup.R"))
 
 set.seed(5)
 
@@ -100,7 +53,7 @@ set.seed(5)
 ## model/data/baseline are identical -- keeps the constraintL2-based
 ## regularization plots from overwriting (or being confused with) that
 ## script's quadraticPenalty()-based ones.
-plot_dir <- file.path(repo_root, "scripts", "plots", "mapk_fim_fit_constraintL2")
+plot_dir <- file.path(script_dir, "plots", "mapk_fim_fit_constraintL2")
 dir.create(plot_dir, showWarnings = FALSE, recursive = TRUE)
 
 setwd(tempdir())
@@ -149,7 +102,7 @@ topByValue <- function(pf, n = 400) {
 }
 
 plotWaterfallColored <- function(pf, color_by, color_label, tol = 1, reverse = FALSE) {
-  jumps <- dMod:::stepDetect(pf$value, tol)
+  jumps <- stepDetect(pf$value, tol)
   y.range <- c(min(pf$value), max(max(pf$value), min(pf$value) + tol))
   y.jumps <- seq(y.range[2], y.range[1], length.out = length(jumps))
 
@@ -211,26 +164,26 @@ f <- addReaction(f, "TFP",    "TF",     "Vmax_dTF*TFP/(Km_dTF+TFP)", "TF dephosp
 f <- addReaction(f, "TFP",    "TFPnuc", "ktrans*TFP", "TF nuclear translocation")
 f <- addReaction(f, "TFPnuc", "TF",     "kdeg_nuc*TFPnuc", "nuclear TF turnover")
 
-model <- odemodel(f, modelname = "toyMapkModel", solver = "CppODE")
+model <- odemodel(f, modelname = "toyMapkModel")
 x <- Xs(model)
 
 ## --- 2. Observation: two arbitrary-unit readouts ---------------------------
 observables <- eqnvec(obsERK = "scale_ERK*ERKPP", obsTF = "scale_TF*TFPnuc")
-g <- Y(observables, x, compile = TRUE, modelname = "toyMapkObs", attach.input = FALSE)
+g <- Y(observables, x, compile = TRUE, modelname = "toyMapkObs", attachInput = FALSE)
 
 innerpars <- getParameters(g, x)
 
 ## --- 3. Parameter transformation: log-parametrization ----------------------
 states <- f$states
-trafo <- repar("x~x", x = innerpars)
-trafo <- repar("x~0", x = c("RafP", "MEKP", "MEKPP", "ERKP", "ERKPP", "InhP", "TFP", "TFPnuc"), trafo)
-trafo <- repar("x~1", x = c("Raf", "MEK", "ERK", "Inh", "TF"), trafo)
-trafo <- repar("x~dose", x = "RecA", trafo)
-trafo <- repar("x~1-dose", x = "Rec", trafo)
+trafo <- repar(expr = "x~x", x = innerpars)
+trafo <- repar(trafo, "x~0", x = c("RafP", "MEKP", "MEKPP", "ERKP", "ERKPP", "InhP", "TFP", "TFPnuc"))
+trafo <- repar(trafo, "x~1", x = c("Raf", "MEK", "ERK", "Inh", "TF"))
+trafo <- repar(trafo, "x~dose", x = "RecA")
+trafo <- repar(trafo, "x~1-dose", x = "Rec")
 ratepars <- setdiff(innerpars, c(states, "Etot_dRaf"))
-trafo <- repar("x~exp(x)", x = c(ratepars, "dose"), trafo)
+trafo <- repar(trafo, "x~exp(x)", x = c(ratepars, "dose"))
 
-trafo <- repar("x~0.5", x = "Etot_dRaf", trafo)
+trafo <- repar(trafo, "x~0.5", x = "Etot_dRaf")
 
 p <- P(trafo, condition = "sim", compile = TRUE, modelname = "toyMapkTrafo")
 
@@ -292,7 +245,7 @@ sv_start <- lapply(seq_len(n_fits), function(i)
 cond_start <- vapply(sv_start, function(sv) max(sv) / min(sv), numeric(1))
 min_sv_start <- vapply(sv_start, min, numeric(1))
 
-fits <- mstrust_fim(obj, starts, studyname = "toyMapkFitCL2", rinit = 1, rmax = 10,
+fits <- mstrust_fim(obj, starts, name = "toyMapkFitCL2", rinit = 1, rmax = 10,
                  cores = n_cores, iterlim = 600)
 pf <- as.parframe(fits)
 best_ms <- as.parvec(pf, 1)
@@ -355,7 +308,7 @@ obj_l2  <- obj + constraintL2(mu = best, sigma = sigma_l2)
 ## Identical to example_toy_mapk_fim_fit.R's fitAndPlotRegularized().
 fitAndPlotRegularized <- function(obj_reg, label, file_stub) {
   cat("=== ", label, ": multistart run (", n_cores, "cores ) ===\n")
-  fits_reg <- mstrust_fim(obj_reg, starts, studyname = paste0("toyMapkFitCL2_", file_stub),
+  fits_reg <- mstrust_fim(obj_reg, starts, name = paste0("toyMapkFitCL2_", file_stub),
                        rinit = 1, rmax = 10, cores = n_cores, iterlim = 600)
   pf_reg <- as.parframe(fits_reg)
 

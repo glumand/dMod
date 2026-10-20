@@ -20,7 +20,17 @@
 ## (this file write happens regardless of stdout redirection).
 ## ---------------------------------------------------------------------------
 
-out_dir <- "/home/mio/Phd/dMod/scripts/plots/pi3kmini_fim_fit"
+# Locate this script's folder (Rscript or source()); pasting the code into
+# a console leaves no file-based signal, so fall back to the fixed path.
+# Edit it if this checkout ever moves.
+script_dir <- local({
+  hit   <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
+  ofile <- if (length(sys.frames())) sys.frame(1)$ofile else NULL
+  if (length(hit)) dirname(normalizePath(sub("^--file=", "", hit[1])))
+  else if (!is.null(ofile)) dirname(normalizePath(ofile))
+  else "/home/mio/Phd/2026_dMod_fim-regularization/scripts"
+})
+out_dir <- file.path(script_dir, "plots", "pi3kmini_fim_fit")
 rds_files <- list.files(out_dir, pattern = "^pi3kmini_results.*\\.rds$", full.names = TRUE)
 
 cat("file,sigma,n_timepoints,rank,eigenvalue_initial,log10_eigenvalue_initial\n", sep = "")

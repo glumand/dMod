@@ -21,34 +21,22 @@
 ##                                          saved parframe
 ## ---------------------------------------------------------------------------
 
-KNOWN_REPO_ROOT <- "/home/mio/Phd/dMod"
-repo_root <- local({
-  full <- commandArgs(trailingOnly = FALSE)
-  hit  <- grep("^--file=", full, value = TRUE)
-  ofile <- if (!is.null(sys.frames()) && length(sys.frames()) >= 1L) sys.frame(1)$ofile else NULL
-  candidates <- c(if (length(hit)) dirname(sub("^--file=", "", hit[1])),
-                   if (!is.null(ofile)) dirname(ofile), getwd(), KNOWN_REPO_ROOT)
-  for (cand in candidates) {
-    if (is.null(cand) || is.na(cand)) next
-    here <- normalizePath(cand, mustWork = FALSE, winslash = "/")
-    for (i in seq_len(8)) {
-      if (file.exists(file.path(here, "DESCRIPTION"))) return(here)
-      parent <- dirname(here); if (parent == here) break; here <- parent
-    }
-  }
-  KNOWN_REPO_ROOT
+# Locate this script's folder (Rscript or source()); pasting the code into
+# a console leaves no file-based signal, so fall back to the fixed path.
+# Edit it if this checkout ever moves.
+script_dir <- local({
+  hit   <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
+  ofile <- if (length(sys.frames())) sys.frame(1)$ofile else NULL
+  if (length(hit)) dirname(normalizePath(sub("^--file=", "", hit[1])))
+  else if (!is.null(ofile)) dirname(normalizePath(ofile))
+  else "/home/mio/Phd/2026_dMod_fim-regularization/scripts"
 })
-repo_lib <- file.path(repo_root, ".Rlib")
-
-## plotPars()/theme_dMod() need the dMod namespace (S3 dispatch on the saved
-## parframe objects) -- this is package-level R code only, no compiled model
-## is touched (no odemodel()/compile()/mstrust() call here).
-library(dMod, lib.loc = repo_lib)
+source(file.path(script_dir, "setup.R"))
 suppressMessages(library(ggplot2))
 
 
 sigma <- 0.05
-out_dir <- file.path(repo_root, "scripts", "plots", "pi3kmini_fim_fit")
+out_dir <- file.path(script_dir, "plots", "pi3kmini_fim_fit")
 res <- readRDS(file.path(out_dir, paste0("pi3kmini_results_sigma", sigma, ".rds")))
 
 method_levels <- c("no regularization", "FIM null-space projector", "L2 (uniform)")
@@ -67,7 +55,7 @@ wf$method <- factor(wf$method, levels = method_levels)
 ## y-axis in units of 1e-3: the shared exponent goes once into the axis
 ## title (expression(...~(10^-3))) and the tick labels stay plain numbers,
 ## rather than repeating "1e-03" etc. on every tick.
-# wf_scale <- 1e-1
+wf_scale <- 1  # 1 = unscaled; set to 1e-3 together with the (10^-3) label below
 p_wf <- ggplot(wf, aes(index, value / wf_scale, color = method)) +
  # scale_y_continuous(limits = c(0, 5), breaks = seq(0, 1, 10)) +
   ylim(0, 0.01) +

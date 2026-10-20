@@ -1,7 +1,7 @@
 ## ---------------------------------------------------------------------------
 ## Toy example #6 ("PI3K-mini"): a small model deliberately built so the FIM
-## null-space projector (groupL2()/nullSpaceProjector(), fim-portugal/
-## functions-portugal.R) actually WINS against both no regularization and a
+## null-space projector (groupL2()/nullSpaceProjector(), scripts/
+## fim_functions.R) actually WINS against both no regularization and a
 ## plain L2 prior -- the positive counterpart to example_toy_mapk_fim_fit.R
 ## (where the same method fails once genuine sloppiness, not just one exact
 ## symmetry, is present).
@@ -53,14 +53,14 @@
 ##   free and finding TWO extra unwanted near-zero eigenvalues, not one.
 ##
 ## IMPORTANT implementation pitfall (cost real debugging time -- see
-## conversation record): Y(..., attach.input = TRUE) attaches ALL raw states
+## conversation record): Y(..., attachInput = TRUE) attaches ALL raw states
 ## (including the hidden U!) to the prediction output. If the simulated
 ## "data" data.frame is built from that attached output without filtering
 ## down to the actual observables first, U's own (non-invariant) trajectory
 ## silently becomes part of what normL2() fits against, which completely
 ## destroys the intended symmetry without any error or warning -- the
 ## Hessian's eigenvalue spectrum just looks like an ordinary sloppy spread,
-## no gap anywhere. Use attach.input = FALSE here for exactly this reason.
+## no gap anywhere. Use attachInput = FALSE here for exactly this reason.
 ##
 ## --- Fair comparison: SAME regularization center for both penalties -------
 ##
@@ -89,65 +89,20 @@
 ## Same repo-root/build bootstrap as scripts/example_toy_fit.R.
 ## ---------------------------------------------------------------------------
 
-.dmod_find_repo_root <- function(start) {
-  here <- normalizePath(start, mustWork = FALSE, winslash = "/")
-  for (i in seq_len(8)) {
-    desc <- file.path(here, "DESCRIPTION")
-    if (file.exists(desc)) {
-      pkg <- tryCatch(unname(read.dcf(desc, "Package")[1, 1]), error = function(e) NA_character_)
-      if (identical(pkg, "dMod")) return(here)
-    }
-    parent <- dirname(here)
-    if (parent == here) break
-    here <- parent
-  }
-  NA_character_
-}
-
-KNOWN_REPO_ROOT <- "/home/mio/Phd/dMod"
-
-repo_root <- local({
-  full <- commandArgs(trailingOnly = FALSE)
-  hit  <- grep("^--file=", full, value = TRUE)
-  ofile <- if (!is.null(sys.frames()) && length(sys.frames()) >= 1L) sys.frame(1)$ofile else NULL
-  candidates <- c(
-    if (length(hit)) dirname(sub("^--file=", "", hit[1])),
-    if (!is.null(ofile)) dirname(ofile),
-    getwd(),
-    KNOWN_REPO_ROOT
-  )
-  for (cand in candidates) {
-    if (is.null(cand) || is.na(cand)) next
-    found <- .dmod_find_repo_root(cand)
-    if (!is.na(found)) return(found)
-  }
-  stop("Could not locate the dMod repo root (no DESCRIPTION with Package: dMod found ",
-       "walking up from any of: ", paste(candidates, collapse = ", "), "). ",
-       "Run this script from inside the dMod checkout, or edit KNOWN_REPO_ROOT above.")
+# Locate this script's folder (Rscript or source()); pasting the code into
+# a console leaves no file-based signal, so fall back to the fixed path.
+# Edit it if this checkout ever moves.
+script_dir <- local({
+  hit   <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
+  ofile <- if (length(sys.frames())) sys.frame(1)$ofile else NULL
+  if (length(hit)) dirname(normalizePath(sub("^--file=", "", hit[1])))
+  else if (!is.null(ofile)) dirname(normalizePath(ofile))
+  else "/home/mio/Phd/2026_dMod_fim-regularization/scripts"
 })
-
-repo_lib <- file.path(repo_root, ".Rlib")
-dir.create(repo_lib, showWarnings = FALSE, recursive = TRUE)
-
-desc_version <- unname(read.dcf(file.path(repo_root, "DESCRIPTION"), "Version")[1, 1])
-installed_version <- tryCatch(as.character(packageVersion("dMod", lib.loc = repo_lib)),
-                               error = function(e) NA_character_)
-if (!identical(installed_version, desc_version)) {
-  cat("Building dMod", desc_version, "from", repo_root, "into", repo_lib, "...\n")
-  status <- system2(file.path(R.home("bin"), "R"),
-                     c("CMD", "INSTALL", "--no-multiarch", "--with-keep.source",
-                       "-l", shQuote(repo_lib), shQuote(repo_root)))
-  if (status != 0)
-    stop("R CMD INSTALL failed -- install dependencies first (see DESCRIPTION Imports/Remotes).")
-}
-
-if ("package:dMod" %in% search()) detach("package:dMod", unload = TRUE)
-library(dMod, lib.loc = repo_lib)
-stopifnot(identical(find.package("dMod"), file.path(repo_lib, "dMod")))
-cat("Using dMod", as.character(packageVersion("dMod")), "from", find.package("dMod"), "\n\n")
+source(file.path(script_dir, "setup.R"))
 
 set.seed(1)
-out_dir <- file.path(repo_root, "scripts", "plots", "pi3kmini_fim_fit")
+out_dir <- file.path(script_dir, "plots", "pi3kmini_fim_fit")
 dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 setwd(tempdir())
 suppressMessages(library(dplyr))
@@ -158,22 +113,22 @@ f <- addReaction(f, from = "A", to = "B", rate = "k1*A", description = "A to B")
 f <- addReaction(f, from = "", to = "U", rate = "k_gen*A", description = "generate U from A (A not consumed)")
 f <- addReaction(f, from = "U", to = "", rate = "k_degU*U", description = "degrade U")
 f <- addReaction(f, from = "Mp", to = "Mpp", rate = "k_use*Mp*U", description = "U-catalyzed conversion")
-model <- odemodel(f, modelname = "pi3kMiniModel", solver = "CppODE")
+model <- odemodel(f, modelname = "pi3kMiniModel")
 x <- Xs(model)
 
 ## Only 3 observables -- U (hidden), A, B, Mp, Mpp states are NOT attached;
-## see the header note above on why attach.input = TRUE would silently break
+## see the header note above on why attachInput = TRUE would silently break
 ## the intended symmetry here.
 observables <- eqnvec(obsA = "scale_A*A", obsB = "scale_B*B", obsMpp = "scale_Mpp*Mpp")
-g <- Y(observables, x, compile = TRUE, modelname = "pi3kMiniObs", attach.input = FALSE)
+g <- Y(observables, x, compile = TRUE, modelname = "pi3kMiniObs", attachInput = FALSE)
 
 ## --- 2. Parameter transformation: 3 conditions differing only in U(0) ------
 innerpars <- unique(c(getParameters(g * x), getParameters(observables)))
-trafo <- repar("x~x", x = innerpars)
-trafo <- repar("x~1", x = "A", trafo)    # A(0) = 1 (fixed reference, avoids A0<->scale_A/B symmetry)
-trafo <- repar("x~0", x = "B", trafo)    # B(0) = 0
-trafo <- repar("x~1", x = "Mp", trafo)   # Mp(0) = 1 (fixed reference, avoids Mp0<->scale_Mpp symmetry)
-trafo <- repar("x~0", x = "Mpp", trafo)  # Mpp(0) = 0
+trafo <- repar(expr = "x~x", x = innerpars)
+trafo <- repar(trafo, "x~1", x = "A")    # A(0) = 1 (fixed reference, avoids A0<->scale_A/B symmetry)
+trafo <- repar(trafo, "x~0", x = "B")    # B(0) = 0
+trafo <- repar(trafo, "x~1", x = "Mp")   # Mp(0) = 1 (fixed reference, avoids Mp0<->scale_Mpp symmetry)
+trafo <- repar(trafo, "x~0", x = "Mpp")  # Mpp(0) = 0
 
 conditions <- c("cond1", "cond2", "cond3")
 trafoList <- branch(trafo, conditions = conditions)
@@ -206,7 +161,7 @@ ident_pars <- c("k1", "k_degU", "scale_A", "scale_B", "scale_Mpp")
 ## --- 4. Unregularized multistart (ONE run) ---------------------------------
 pouter_center <- setNames(rep(-1, length(outerpars)), outerpars)
 N_FITS <- 200
-fits_unreg <- mstrust(obj_data, pouter_center, studyname = "pi3kmini_unreg",
+fits_unreg <- mstrust(obj_data, pouter_center, name = "pi3kmini_unreg",
                        rinit = 1, rmax = 10, fits = N_FITS, cores = 4, iterlim = 200, sd = 1)
 pf_unreg <- as.parframe(fits_unreg)
 best_unreg <- as.parvec(pf_unreg, 1)
@@ -225,7 +180,7 @@ cat("\nEigenvalues (log10):\n"); print(round(log10(abs(eig$values) + 1e-300), 2)
 v_null <- eig$vectors[, which.min(eig$values)]; names(v_null) <- outerpars
 cat("\nSmallest eigenvector loadings:\n"); print(round(v_null, 4))
 
-source(file.path(repo_root, "fim-portugal", "functions-portugal.R"))
+source(file.path(script_dir, "fim_functions.R"))
 P_null <- nullSpaceProjector(H, tol = 1e-6)
 
 ## --- 6. L2 and FIM(group) regularized objectives, SAME center -------------
@@ -235,7 +190,7 @@ obj_l2  <- obj_data + constraintL2(mu = mu_center, sigma = 1 / sqrt(2 * lambda))
 obj_fim <- obj_data + groupL2(P_null, mu_center, lambda = lambda)
 
 ## --- 7. L2 multistart (ONE run) --------------------------------------------
-fits_l2 <- mstrust(obj_l2, pouter_center, studyname = "pi3kmini_l2",
+fits_l2 <- mstrust(obj_l2, pouter_center, name = "pi3kmini_l2",
                     rinit = 1, rmax = 10, fits = N_FITS, cores = 4, iterlim = 200, sd = 1)
 pf_l2 <- as.parframe(fits_l2)
 best_l2 <- as.parvec(pf_l2, 1)
@@ -244,7 +199,7 @@ cat("n within 0.1 of best (penalized objective):",
     sum(pf_l2$value < min(pf_l2$value) + 0.1), "/", nrow(pf_l2), "\n")
 
 ## --- 8. FIM(group) multistart (ONE run) ------------------------------------
-fits_fim <- mstrust(obj_fim, pouter_center, studyname = "pi3kmini_fim",
+fits_fim <- mstrust(obj_fim, pouter_center, name = "pi3kmini_fim",
                      rinit = 1, rmax = 10, fits = N_FITS, cores = 4, iterlim = 200, sd = 1)
 pf_fim <- as.parframe(fits_fim)
 best_fim <- as.parvec(pf_fim, 1)

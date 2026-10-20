@@ -43,64 +43,17 @@
 ## for a detailed explanation of the fallback chain below.
 ## ---------------------------------------------------------------------------
 
-.dmod_find_repo_root <- function(start) {
-  here <- normalizePath(start, mustWork = FALSE, winslash = "/")
-  for (i in seq_len(8)) {
-    desc <- file.path(here, "DESCRIPTION")
-    if (file.exists(desc)) {
-      pkg <- tryCatch(unname(read.dcf(desc, "Package")[1, 1]), error = function(e) NA_character_)
-      if (identical(pkg, "dMod")) return(here)
-    }
-    parent <- dirname(here)
-    if (parent == here) break
-    here <- parent
-  }
-  NA_character_
-}
-
-KNOWN_REPO_ROOT <- "/home/mio/Phd/dMod"
-
-repo_root <- local({
-  full <- commandArgs(trailingOnly = FALSE)
-  hit  <- grep("^--file=", full, value = TRUE)
-  ofile <- if (!is.null(sys.frames()) && length(sys.frames()) >= 1L) sys.frame(1)$ofile else NULL
-  candidates <- c(
-    if (length(hit)) dirname(sub("^--file=", "", hit[1])),
-    if (!is.null(ofile)) dirname(ofile),
-    getwd(),
-    KNOWN_REPO_ROOT
-  )
-  for (cand in candidates) {
-    if (is.null(cand) || is.na(cand)) next
-    found <- .dmod_find_repo_root(cand)
-    if (!is.na(found)) return(found)
-  }
-  stop("Could not locate the dMod repo root (no DESCRIPTION with Package: dMod found ",
-       "walking up from any of: ", paste(candidates, collapse = ", "), "). ",
-       "Run this script from inside the dMod checkout, or edit KNOWN_REPO_ROOT above.")
+# Locate this script's folder (Rscript or source()); pasting the code into
+# a console leaves no file-based signal, so fall back to the fixed path.
+# Edit it if this checkout ever moves.
+script_dir <- local({
+  hit   <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
+  ofile <- if (length(sys.frames())) sys.frame(1)$ofile else NULL
+  if (length(hit)) dirname(normalizePath(sub("^--file=", "", hit[1])))
+  else if (!is.null(ofile)) dirname(normalizePath(ofile))
+  else "/home/mio/Phd/2026_dMod_fim-regularization/scripts"
 })
-
-repo_lib <- file.path(repo_root, ".Rlib")
-dir.create(repo_lib, showWarnings = FALSE, recursive = TRUE)
-
-desc_version <- unname(read.dcf(file.path(repo_root, "DESCRIPTION"), "Version")[1, 1])
-installed_version <- tryCatch(as.character(packageVersion("dMod", lib.loc = repo_lib)),
-                               error = function(e) NA_character_)
-if (!identical(installed_version, desc_version)) {
-  cat("Building dMod", desc_version, "from", repo_root, "into", repo_lib, "...\n")
-  status <- system2(file.path(R.home("bin"), "R"),
-                     c("CMD", "INSTALL", "--no-multiarch", "--with-keep.source",
-                       "-l", shQuote(repo_lib), shQuote(repo_root)))
-  if (status != 0)
-    stop("R CMD INSTALL failed -- install dependencies first (see DESCRIPTION Imports/Remotes).")
-}
-
-if ("package:dMod" %in% search()) detach("package:dMod", unload = TRUE)
-
-library(dMod, lib.loc = repo_lib)
-stopifnot(identical(find.package("dMod"), file.path(repo_lib, "dMod")))
-cat("Using dMod", as.character(packageVersion("dMod")),
-    "from", find.package("dMod"), "\n\n")
+source(file.path(script_dir, "setup.R"))
 
 set.seed(42)
 setwd(tempdir())
@@ -138,11 +91,11 @@ f <- addReaction(f, from = "E", to = "F", rate = "w1*E", description = "E to F")
 f <- addReaction(f, from = "F", to = "G", rate = "w2*F", description = "F to G")
 f <- addReaction(f, from = "G", to = "E", rate = "w3*G", description = "G to E (closes the loop)")
 
-model <- odemodel(f, modelname = "sloppyChain", solver = "CppODE")
+model <- odemodel(f, modelname = "sloppyChain")
 x <- Xs(model)
 
 observables <- eqnvec(obsD = "scale*D", obsE = "E")
-g <- Y(observables, x, compile = TRUE, modelname = "sloppyObs", attach.input = TRUE)
+g <- Y(observables, x, compile = TRUE, modelname = "sloppyObs", attachInput = TRUE)
 
 ## --- 2. Parameter transformation: log-parametrization, single condition ---
 ## getParameters(g, x) (union form), not getParameters(g * x): the composed
@@ -150,10 +103,10 @@ g <- Y(observables, x, compile = TRUE, modelname = "sloppyObs", attach.input = T
 ## prdfn" in R/classes.R), so it misses parameters that only g introduces,
 ## like the observation gain "scale" here.
 innerpars <- getParameters(g, x)
-trafo <- repar("x~x", x = innerpars)
-trafo <- repar("x~0", x = c("B", "C", "D", "F", "G"), trafo)  # B=C=D=F=G = 0 at t=0
-trafo <- repar("x~1", x = "E", trafo)                          # E(0) = 1, fixed dose
-trafo <- repar("x~exp(x)", x = innerpars, trafo)                # log-transform the rest
+trafo <- repar(expr = "x~x", x = innerpars)
+trafo <- repar(trafo, "x~0", x = c("B", "C", "D", "F", "G"))  # B=C=D=F=G = 0 at t=0
+trafo <- repar(trafo, "x~1", x = "E")                          # E(0) = 1, fixed dose
+trafo <- repar(trafo, "x~exp(x)", x = innerpars)                # log-transform the rest
 
 p <- P(trafo, condition = "sim", compile = TRUE, modelname = "sloppyTrafo")
 
@@ -205,8 +158,7 @@ pouter_init <- pouter_true + rnorm(length(pouter_true), sd = 0.5)
 ## fitted model (trafo pins both to 0). Restricting to f_chain avoids that
 ## noise and keeps the one symmetry that actually matters for the fit.)
 cat("=== Part A: structural non-identifiability (symmetryDetection) ===\n")
-sym_out <- symmetryDetection(f_chain, eqnvec(obsD = "scale*D"),
-                             method = "observability", reconstruct = TRUE)
+sym_out <- symmetryDetection(f_chain, eqnvec(obsD = "scale*D"), reconstruct = TRUE)
 
 ## --- 6. Fit via trust()/mstrust() -------------------------------------------
 myfit <- trust(obj, pouter_init, rinit = 1, rmax = 10)
@@ -217,7 +169,7 @@ cat("Objective : truth =", obj(pouter_true)$value, " fit =", myfit$value, "\n\n"
 ## A wide start spread (sd) matters here: it's what lets some mstrust() runs
 ## fall into the oscillator's aliased-frequency local optimum in Part C
 ## instead of only ever finding the true one.
-fits <- mstrust(obj, pouter_init, studyname = "sloppyFit", rinit = 1, rmax = 10,
+fits <- mstrust(obj, pouter_init, name = "sloppyFit", rinit = 1, rmax = 10,
                  fits = 600, cores = 1, iterlim = 300, sd = 1.5)
 pf <- as.parframe(fits)
 best <- as.parvec(pf, 1)
